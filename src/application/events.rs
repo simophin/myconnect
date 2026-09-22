@@ -1,0 +1,186 @@
+use std::{
+    sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use tokio::sync::broadcast;
+
+use super::{ClipboardSnapshot, PairingSnapshot, TransferSnapshot};
+use crate::device::DeviceSnapshot;
+
+/// Data carried by an application event.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum EventData {
+    #[serde(rename = "device.discovered")]
+    DeviceDiscovered(DeviceSnapshot),
+    #[serde(rename = "device.connected")]
+    DeviceConnected(DeviceSnapshot),
+    #[serde(rename = "device.updated")]
+    DeviceUpdated(DeviceSnapshot),
+    #[serde(rename = "device.disconnected")]
+    DeviceDisconnected(DeviceSnapshot),
+    #[serde(rename = "pairing.requested")]
+    PairingRequested(PairingSnapshot),
+    #[serde(rename = "pairing.updated")]
+    PairingUpdated(PairingSnapshot),
+    #[serde(rename = "transfer.started")]
+    TransferStarted(TransferSnapshot),
+    #[serde(rename = "transfer.progress")]
+    TransferProgress(TransferSnapshot),
+    #[serde(rename = "transfer.completed")]
+    TransferCompleted(TransferSnapshot),
+    #[serde(rename = "transfer.failed")]
+    TransferFailed(TransferSnapshot),
+    #[serde(rename = "clipboard.changed")]
+    ClipboardChanged(ClipboardSnapshot),
+}
+
+/// Sequenced event sent to API and other application clients.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationEvent {
+    pub sequence: u64,
+    pub timestamp: u64,
+    #[serde(flatten)]
+    pub event: EventData,
+}
+
+#[derive(Debug)]
+struct EventBusState {
+    next_sequence: u64,
+}
+
+#[derive(Debug)]
+struct EventBusInner {
+    sender: broadcast::Sender<ApplicationEvent>,
+    state: Mutex<EventBusState>,
+}
+
+/// Bounded fan-out bus. Lagging subscribers receive Tokio's typed `Lagged`
+/// error rather than causing producers to wait or the queue to grow.
+#[derive(Clone, Debug)]
+pub struct EventBus {
+    inner: Arc<EventBusInner>,
+}
+
+impl EventBus {
+    pub fn new(capacity: usize) -> Result<Self, EventBusError> {
+        if capacity == 0 {
+            return Err(EventBusError::InvalidCapacity);
+        }
+        let (sender, _) = broadcast::channel(capacity);
+        Ok(Self {
+            inner: Arc::new(EventBusInner {
+                sender,
+                state: Mutex::new(EventBusState { next_sequence: 1 }),
+            }),
+        })
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<ApplicationEvent> {
+        self.inner.sender.subscribe()
+    }
+
+    pub fn publish(&self, event: EventData) -> Result<ApplicationEvent, EventBusError> {
+        // Sequence assignment and send share a lock so concurrent publishers are
+        // observed in monotonically increasing order.
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| EventBusError::Unavailable)?;
+        let sequence = state.next_sequence;
+        state.next_sequence = sequence
+            .checked_add(1)
+            .ok_or(EventBusError::SequenceExhausted)?;
+        let event = ApplicationEvent {
+            sequence,
+            timestamp: unix_millis(),
+            event,
+        };
+        // Having no active subscribers is normal; state snapshots remain the
+        // source of truth, so notification delivery is best-effort.
+        let _ = self.inner.sender.send(event.clone());
+        Ok(event)
+    }
+}
+
+fn unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum EventBusError {
+    #[error("event bus capacity must be greater than zero")]
+    InvalidCapacity,
+    #[error("event sequence was exhausted")]
+    SequenceExhausted,
+    #[error("event bus is unavailable")]
+    Unavailable,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn clipboard(text: &str) -> EventData {
+        EventData::ClipboardChanged(ClipboardSnapshot {
+            text: text.into(),
+            updated_at: 10,
+            source_device_id: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn sequence_is_monotonic() {
+        let bus = EventBus::new(4).unwrap();
+        let mut receiver = bus.subscribe();
+        assert_eq!(bus.publish(clipboard("one")).unwrap().sequence, 1);
+        assert_eq!(bus.publish(clipboard("two")).unwrap().sequence, 2);
+        assert_eq!(receiver.recv().await.unwrap().sequence, 1);
+        assert_eq!(receiver.recv().await.unwrap().sequence, 2);
+    }
+
+    #[tokio::test]
+    async fn slow_subscribers_lag_on_a_bounded_queue_without_blocking_publishers() {
+        let bus = EventBus::new(2).unwrap();
+        let mut receiver = bus.subscribe();
+        for value in 0..10 {
+            bus.publish(clipboard(&value.to_string())).unwrap();
+        }
+
+        assert!(matches!(
+            receiver.recv().await,
+            Err(broadcast::error::RecvError::Lagged(skipped)) if skipped > 0
+        ));
+        assert_eq!(receiver.recv().await.unwrap().sequence, 9);
+        assert_eq!(receiver.recv().await.unwrap().sequence, 10);
+    }
+
+    #[test]
+    fn event_json_has_flat_type_and_data_fields() {
+        let bus = EventBus::new(1).unwrap();
+        let value = serde_json::to_value(bus.publish(clipboard("hello")).unwrap()).unwrap();
+        assert_eq!(value["sequence"], 1);
+        assert!(value["timestamp"].is_u64());
+        assert_eq!(value["type"], "clipboard.changed");
+        assert_eq!(value["data"]["text"], "hello");
+        assert!(value.get("event").is_none());
+    }
+
+    #[test]
+    fn zero_capacity_is_rejected_without_panicking() {
+        assert_eq!(
+            EventBus::new(0).unwrap_err(),
+            EventBusError::InvalidCapacity
+        );
+    }
+}

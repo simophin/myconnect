@@ -271,6 +271,8 @@ Acceptance criteria:
 
 ### Phase 3: Application state and event model
 
+**Status: complete (2026-09-22).**
+
 Deliverables:
 
 1. Define immutable API-facing snapshots for status, device, pairing, transfer,

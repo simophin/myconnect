@@ -3,6 +3,17 @@ use std::path::PathBuf;
 use anyhow::Result;
 use tracing::warn;
 
+mod events;
+mod state;
+
+pub use events::{ApplicationEvent, EventBus, EventBusError, EventData};
+pub use state::{
+    ClipboardSnapshot, Command, LocalDeviceSnapshot, OperationErrorCode, Pairing, PairingDirection,
+    PairingSnapshot, PairingStatus, PairingTransitionError, Query, QueryResult, StatusSnapshot,
+    Transfer, TransferDirection, TransferProgressError, TransferSnapshot, TransferStatus,
+    TransferTransitionError,
+};
+
 /// A request from any MyConnect frontend.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Request {
