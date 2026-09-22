@@ -1,0 +1,676 @@
+use std::{
+    collections::{BTreeMap, HashSet},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    ops::RangeInclusive,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use serde_json::{Map, Value, json};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use thiserror::Error;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream, UdpSocket},
+    sync::{OwnedSemaphorePermit, Semaphore, mpsc},
+    task::{JoinHandle, JoinSet},
+    time::{MissedTickBehavior, interval, sleep, timeout},
+};
+use tokio_util::sync::CancellationToken;
+use tracing::debug;
+
+use crate::{
+    application::{ApplicationHandle, Command},
+    protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
+};
+
+pub const DISCOVERY_PORT: u16 = 1716;
+pub const TCP_PORT_RANGE: RangeInclusive<u16> = 1716..=1764;
+pub const MAX_DISCOVERY_DATAGRAM: usize = 8 * 1024;
+const MAX_IDENTITY_LINE: usize = 8 * 1024;
+const MAX_PENDING_CONNECTIONS: usize = 32;
+
+#[derive(Clone, Debug)]
+pub struct LanConfig {
+    discovery_bind: SocketAddr,
+    announcement_targets: Vec<SocketAddr>,
+    tcp_bind_ip: Ipv4Addr,
+    tcp_ports: RangeInclusive<u16>,
+    announce_interval: Duration,
+    connect_timeout: Duration,
+    identity_timeout: Duration,
+    shutdown_timeout: Duration,
+}
+
+impl Default for LanConfig {
+    fn default() -> Self {
+        Self {
+            discovery_bind: SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::UNSPECIFIED,
+                DISCOVERY_PORT,
+            )),
+            announcement_targets: vec![SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::BROADCAST,
+                DISCOVERY_PORT,
+            ))],
+            tcp_bind_ip: Ipv4Addr::UNSPECIFIED,
+            tcp_ports: TCP_PORT_RANGE,
+            announce_interval: Duration::from_secs(30),
+            connect_timeout: Duration::from_secs(5),
+            identity_timeout: Duration::from_secs(5),
+            shutdown_timeout: Duration::from_secs(5),
+        }
+    }
+}
+
+impl LanConfig {
+    pub fn with_discovery_bind(mut self, address: SocketAddr) -> Self {
+        self.discovery_bind = address;
+        self
+    }
+
+    pub fn with_announcement_targets(mut self, targets: Vec<SocketAddr>) -> Self {
+        self.announcement_targets = targets;
+        self
+    }
+
+    pub fn with_tcp_bind(mut self, ip: Ipv4Addr, ports: RangeInclusive<u16>) -> Self {
+        self.tcp_bind_ip = ip;
+        self.tcp_ports = ports;
+        self
+    }
+
+    pub fn with_announce_interval(mut self, value: Duration) -> Self {
+        self.announce_interval = value;
+        self
+    }
+
+    pub fn with_timeouts(
+        mut self,
+        connect: Duration,
+        identity: Duration,
+        shutdown: Duration,
+    ) -> Self {
+        self.connect_timeout = connect;
+        self.identity_timeout = identity;
+        self.shutdown_timeout = shutdown;
+        self
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LocalDeviceInfo {
+    pub device_id: String,
+    pub device_name: String,
+    pub device_type: DeviceType,
+    pub incoming_capabilities: Vec<String>,
+    pub outgoing_capabilities: Vec<String>,
+}
+
+pub struct LanService {
+    discovery_addr: SocketAddr,
+    tcp_addr: SocketAddr,
+    cancellation: CancellationToken,
+    shutdown_timeout: Duration,
+    task: Option<JoinHandle<()>>,
+}
+
+impl LanService {
+    pub async fn start(
+        config: LanConfig,
+        local: LocalDeviceInfo,
+        application: ApplicationHandle,
+        commands: mpsc::Receiver<Command>,
+        trusted_device_ids: HashSet<String>,
+        cancellation: CancellationToken,
+    ) -> Result<Self, LanError> {
+        validate_local(&local)?;
+        let udp = Arc::new(bind_udp(config.discovery_bind)?);
+        let discovery_addr = udp.local_addr().map_err(LanError::Socket)?;
+        let tcp = bind_tcp(config.tcp_bind_ip, config.tcp_ports.clone()).await?;
+        let tcp_addr = tcp.local_addr().map_err(LanError::Socket)?;
+        let announcement = Arc::new(encode_identity(&local, tcp_addr.port())?);
+        let registry = Arc::new(ConnectionRegistry::default());
+        let trusted_device_ids = Arc::new(trusted_device_ids);
+        let task_cancellation = cancellation.clone();
+        let shutdown_timeout = config.shutdown_timeout;
+        let task = tokio::spawn(run(
+            config,
+            local,
+            application,
+            commands,
+            trusted_device_ids,
+            udp,
+            tcp,
+            announcement,
+            registry,
+            task_cancellation,
+        ));
+
+        Ok(Self {
+            discovery_addr,
+            tcp_addr,
+            cancellation,
+            shutdown_timeout,
+            task: Some(task),
+        })
+    }
+
+    pub fn discovery_addr(&self) -> SocketAddr {
+        self.discovery_addr
+    }
+
+    pub fn tcp_addr(&self) -> SocketAddr {
+        self.tcp_addr
+    }
+
+    pub async fn shutdown(mut self) -> Result<(), LanError> {
+        self.cancellation.cancel();
+        let mut task = self.task.take().expect("LAN task is present");
+        match timeout(self.shutdown_timeout, &mut task).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(LanError::Task(error)),
+            Err(_) => {
+                task.abort();
+                let _ = task.await;
+                Err(LanError::ShutdownDeadline)
+            }
+        }
+    }
+}
+
+impl Drop for LanService {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run(
+    config: LanConfig,
+    local: LocalDeviceInfo,
+    application: ApplicationHandle,
+    mut commands: mpsc::Receiver<Command>,
+    trusted_device_ids: Arc<HashSet<String>>,
+    udp: Arc<UdpSocket>,
+    tcp: TcpListener,
+    announcement: Arc<Vec<u8>>,
+    registry: Arc<ConnectionRegistry>,
+    cancellation: CancellationToken,
+) {
+    let mut connections = JoinSet::new();
+    let connection_limit = Arc::new(Semaphore::new(MAX_PENDING_CONNECTIONS));
+    let mut announcements = interval(config.announce_interval);
+    announcements.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut commands_open = true;
+    let mut datagram = [0_u8; MAX_DISCOVERY_DATAGRAM + 1];
+
+    loop {
+        tokio::select! {
+            _ = cancellation.cancelled() => break,
+            _ = announcements.tick() => {
+                announce(&udp, &config.announcement_targets, &announcement).await;
+            }
+            command = commands.recv(), if commands_open => match command {
+                Some(Command::AnnounceDiscovery) => {
+                    announce(&udp, &config.announcement_targets, &announcement).await;
+                }
+                Some(_) => {}
+                None => commands_open = false,
+            },
+            received = udp.recv_from(&mut datagram) => match received {
+                Ok((length, source)) => {
+                    if length <= MAX_DISCOVERY_DATAGRAM
+                        && let Some(identity) = decode_identity(&datagram[..length])
+                        && identity.device_id != local.device_id
+                    {
+                        let paired = trusted_device_ids.contains(&identity.device_id);
+                        let _ = application.discover_device(&identity, paired, unix_millis());
+                        if let Some(port) = tcp_port(&identity)
+                            && let Ok(permit) = connection_limit.clone().try_acquire_owned()
+                            && let Some(reservation) = registry.reserve_outgoing(&local.device_id, &identity.device_id)
+                        {
+                            let address = SocketAddr::new(source.ip(), port);
+                            spawn_outgoing(
+                                &mut connections, address, identity.device_id.clone(), reservation,
+                                permit, local.clone(), application.clone(), trusted_device_ids.clone(),
+                                announcement.clone(), registry.clone(), cancellation.clone(),
+                                config.connect_timeout, config.identity_timeout,
+                            );
+                        }
+                    }
+                }
+                Err(error) => {
+                    debug!(%error, "LAN discovery receive failed");
+                    sleep(Duration::from_millis(100)).await;
+                }
+            },
+            accepted = tcp.accept() => match accepted {
+                Ok((stream, _)) => {
+                    if let Ok(permit) = connection_limit.clone().try_acquire_owned() {
+                        spawn_incoming(
+                            &mut connections, stream, permit, local.clone(), application.clone(),
+                            trusted_device_ids.clone(), announcement.clone(), registry.clone(),
+                            cancellation.clone(), config.identity_timeout,
+                        );
+                    }
+                }
+                Err(error) => {
+                    debug!(%error, "LAN TCP accept failed");
+                    sleep(Duration::from_millis(100)).await;
+                }
+            },
+            Some(_) = connections.join_next(), if !connections.is_empty() => {}
+        }
+    }
+
+    registry.cancel_all();
+    connections.shutdown().await;
+}
+
+async fn announce(socket: &UdpSocket, targets: &[SocketAddr], announcement: &[u8]) {
+    for target in targets {
+        if let Err(error) = socket.send_to(announcement, target).await {
+            debug!(%target, %error, "LAN identity announcement failed");
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_outgoing(
+    connections: &mut JoinSet<()>,
+    address: SocketAddr,
+    expected_device_id: String,
+    reservation: Reservation,
+    permit: OwnedSemaphorePermit,
+    local: LocalDeviceInfo,
+    application: ApplicationHandle,
+    trusted_device_ids: Arc<HashSet<String>>,
+    announcement: Arc<Vec<u8>>,
+    registry: Arc<ConnectionRegistry>,
+    shutdown: CancellationToken,
+    connect_deadline: Duration,
+    identity_deadline: Duration,
+) {
+    connections.spawn(async move {
+        let _permit = permit;
+        let result = timeout(connect_deadline, TcpStream::connect(address)).await;
+        if let Ok(Ok(stream)) = result {
+            handle_connection(
+                stream,
+                Some(expected_device_id.clone()),
+                reservation,
+                local,
+                application.clone(),
+                trusted_device_ids,
+                announcement,
+                registry.clone(),
+                shutdown,
+                identity_deadline,
+            )
+            .await;
+        } else if registry.release(&expected_device_id, reservation.id) {
+            let _ = application.mark_device_disconnected(&expected_device_id);
+        }
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_incoming(
+    connections: &mut JoinSet<()>,
+    stream: TcpStream,
+    permit: OwnedSemaphorePermit,
+    local: LocalDeviceInfo,
+    application: ApplicationHandle,
+    trusted_device_ids: Arc<HashSet<String>>,
+    announcement: Arc<Vec<u8>>,
+    registry: Arc<ConnectionRegistry>,
+    shutdown: CancellationToken,
+    identity_deadline: Duration,
+) {
+    connections.spawn(async move {
+        let _permit = permit;
+        let Ok((stream, identity)) =
+            exchange_identity(stream, &announcement, identity_deadline).await
+        else {
+            return;
+        };
+        if identity.device_id == local.device_id {
+            return;
+        }
+        let Some(reservation) = registry.reserve_incoming(&local.device_id, &identity.device_id)
+        else {
+            return;
+        };
+        finish_connection(
+            stream,
+            identity,
+            reservation,
+            application,
+            trusted_device_ids,
+            registry,
+            shutdown,
+        )
+        .await;
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_connection(
+    stream: TcpStream,
+    expected_device_id: Option<String>,
+    reservation: Reservation,
+    _local: LocalDeviceInfo,
+    application: ApplicationHandle,
+    trusted_device_ids: Arc<HashSet<String>>,
+    announcement: Arc<Vec<u8>>,
+    registry: Arc<ConnectionRegistry>,
+    shutdown: CancellationToken,
+    identity_deadline: Duration,
+) {
+    let peer_key = expected_device_id.clone().unwrap_or_default();
+    let exchanged = exchange_identity(stream, &announcement, identity_deadline).await;
+    let Ok((stream, identity)) = exchanged else {
+        if !peer_key.is_empty() {
+            registry.release(&peer_key, reservation.id);
+        }
+        return;
+    };
+    if expected_device_id.as_deref() != Some(identity.device_id.as_str()) {
+        registry.release(&peer_key, reservation.id);
+        return;
+    }
+    finish_connection(
+        stream,
+        identity,
+        reservation,
+        application,
+        trusted_device_ids,
+        registry,
+        shutdown,
+    )
+    .await;
+}
+
+async fn finish_connection(
+    mut stream: TcpStream,
+    identity: IdentityBody,
+    reservation: Reservation,
+    application: ApplicationHandle,
+    trusted_device_ids: Arc<HashSet<String>>,
+    registry: Arc<ConnectionRegistry>,
+    shutdown: CancellationToken,
+) {
+    let device_id = identity.device_id.clone();
+    if reservation.cancellation.is_cancelled() {
+        registry.release(&device_id, reservation.id);
+        return;
+    }
+    let paired = trusted_device_ids.contains(&device_id);
+    if application
+        .discover_device(&identity, paired, unix_millis())
+        .and_then(|_| application.mark_device_connected(&device_id, unix_millis()))
+        .is_err()
+    {
+        registry.release(&device_id, reservation.id);
+        return;
+    }
+
+    let mut byte = [0_u8; 1];
+    tokio::select! {
+        _ = shutdown.cancelled() => {}
+        _ = reservation.cancellation.cancelled() => {}
+        _ = stream.read(&mut byte) => {}
+    }
+    if registry.release(&device_id, reservation.id) {
+        let _ = application.mark_device_disconnected(&device_id);
+    }
+}
+
+async fn exchange_identity(
+    mut stream: TcpStream,
+    announcement: &[u8],
+    deadline: Duration,
+) -> Result<(TcpStream, IdentityBody), LanError> {
+    timeout(deadline, async {
+        stream
+            .write_all(announcement)
+            .await
+            .map_err(LanError::Socket)?;
+        let mut codec = PacketCodec::new(MAX_IDENTITY_LINE);
+        let mut buffer = [0_u8; 2048];
+        loop {
+            let length = stream.read(&mut buffer).await.map_err(LanError::Socket)?;
+            if length == 0 {
+                return Err(LanError::ConnectionClosed);
+            }
+            let packets = codec
+                .decode(&buffer[..length])
+                .map_err(|_| LanError::InvalidIdentity)?;
+            if packets.is_empty() {
+                continue;
+            }
+            if packets.len() != 1 || codec.buffered_len() != 0 {
+                return Err(LanError::InvalidIdentity);
+            }
+            let identity = packet_identity(packets.into_iter().next().expect("one packet"))?;
+            return Ok((stream, identity));
+        }
+    })
+    .await
+    .map_err(|_| LanError::IdentityTimeout)?
+}
+
+fn decode_identity(datagram: &[u8]) -> Option<IdentityBody> {
+    let mut codec = PacketCodec::new(MAX_DISCOVERY_DATAGRAM);
+    let packets = codec.decode(datagram).ok()?;
+    if packets.len() != 1 || codec.buffered_len() != 0 {
+        return None;
+    }
+    packet_identity(packets.into_iter().next()?).ok()
+}
+
+fn packet_identity(packet: Packet) -> Result<IdentityBody, LanError> {
+    if packet.packet_type != "kdeconnect.identity" {
+        return Err(LanError::InvalidIdentity);
+    }
+    let identity: IdentityBody = packet.body_as().map_err(|_| LanError::InvalidIdentity)?;
+    identity.validate().map_err(|_| LanError::InvalidIdentity)?;
+    if identity.protocol_version != 8 || tcp_port(&identity).is_none() {
+        return Err(LanError::InvalidIdentity);
+    }
+    Ok(identity)
+}
+
+fn tcp_port(identity: &IdentityBody) -> Option<u16> {
+    identity
+        .extra
+        .get("tcpPort")?
+        .as_u64()?
+        .try_into()
+        .ok()
+        .filter(|port| TCP_PORT_RANGE.contains(port))
+}
+
+fn encode_identity(local: &LocalDeviceInfo, tcp_port: u16) -> Result<Vec<u8>, LanError> {
+    let mut extra = Map::new();
+    extra.insert("tcpPort".into(), json!(tcp_port));
+    let identity = IdentityBody {
+        device_id: local.device_id.clone(),
+        device_name: local.device_name.clone(),
+        device_type: local.device_type,
+        incoming_capabilities: local.incoming_capabilities.clone(),
+        outgoing_capabilities: local.outgoing_capabilities.clone(),
+        protocol_version: 8,
+        extra,
+    };
+    identity
+        .validate()
+        .map_err(|_| LanError::InvalidLocalIdentity)?;
+    let packet = Packet::from_body(timestamp_number(), "kdeconnect.identity", &identity)
+        .map_err(|_| LanError::InvalidLocalIdentity)?;
+    PacketCodec::new(MAX_IDENTITY_LINE)
+        .encode(&packet)
+        .map_err(|_| LanError::InvalidLocalIdentity)
+}
+
+fn timestamp_number() -> serde_json::Number {
+    serde_json::Number::from(unix_millis())
+}
+
+fn unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn validate_local(local: &LocalDeviceInfo) -> Result<(), LanError> {
+    let identity = IdentityBody {
+        device_id: local.device_id.clone(),
+        device_name: local.device_name.clone(),
+        device_type: local.device_type,
+        incoming_capabilities: local.incoming_capabilities.clone(),
+        outgoing_capabilities: local.outgoing_capabilities.clone(),
+        protocol_version: 8,
+        extra: Map::from_iter([("tcpPort".into(), Value::from(1))]),
+    };
+    identity
+        .validate()
+        .map_err(|_| LanError::InvalidLocalIdentity)
+}
+
+fn bind_udp(address: SocketAddr) -> Result<UdpSocket, LanError> {
+    let domain = if address.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP)).map_err(LanError::Socket)?;
+    socket.set_reuse_address(true).map_err(LanError::Socket)?;
+    socket.set_broadcast(true).map_err(LanError::Socket)?;
+    socket
+        .bind(&SockAddr::from(address))
+        .map_err(LanError::Socket)?;
+    socket.set_nonblocking(true).map_err(LanError::Socket)?;
+    UdpSocket::from_std(socket.into()).map_err(LanError::Socket)
+}
+
+async fn bind_tcp(ip: Ipv4Addr, ports: RangeInclusive<u16>) -> Result<TcpListener, LanError> {
+    for port in ports {
+        match TcpListener::bind(SocketAddrV4::new(ip, port)).await {
+            Ok(listener) => return Ok(listener),
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
+            Err(error) => return Err(LanError::Socket(error)),
+        }
+    }
+    Err(LanError::NoTcpPort)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Direction {
+    Incoming,
+    Outgoing,
+}
+
+struct ConnectionEntry {
+    id: u64,
+    direction: Direction,
+    cancellation: CancellationToken,
+}
+
+#[derive(Clone)]
+struct Reservation {
+    id: u64,
+    cancellation: CancellationToken,
+}
+
+#[derive(Default)]
+struct ConnectionRegistry {
+    next_id: AtomicU64,
+    entries: Mutex<BTreeMap<String, ConnectionEntry>>,
+}
+
+impl ConnectionRegistry {
+    fn reserve_outgoing(&self, local_id: &str, peer_id: &str) -> Option<Reservation> {
+        self.reserve(local_id, peer_id, Direction::Outgoing)
+    }
+
+    fn reserve_incoming(&self, local_id: &str, peer_id: &str) -> Option<Reservation> {
+        self.reserve(local_id, peer_id, Direction::Incoming)
+    }
+
+    fn reserve(&self, local_id: &str, peer_id: &str, direction: Direction) -> Option<Reservation> {
+        let preferred = if local_id < peer_id {
+            Direction::Outgoing
+        } else {
+            Direction::Incoming
+        };
+        let mut entries = self.entries.lock().ok()?;
+        if let Some(existing) = entries.get(peer_id) {
+            if existing.direction == preferred || direction != preferred {
+                return None;
+            }
+            existing.cancellation.cancel();
+        }
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let cancellation = CancellationToken::new();
+        entries.insert(
+            peer_id.to_owned(),
+            ConnectionEntry {
+                id,
+                direction,
+                cancellation: cancellation.clone(),
+            },
+        );
+        Some(Reservation { id, cancellation })
+    }
+
+    fn release(&self, peer_id: &str, id: u64) -> bool {
+        let Ok(mut entries) = self.entries.lock() else {
+            return false;
+        };
+        if entries.get(peer_id).is_some_and(|entry| entry.id == id) {
+            entries.remove(peer_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn cancel_all(&self) {
+        if let Ok(entries) = self.entries.lock() {
+            for entry in entries.values() {
+                entry.cancellation.cancel();
+            }
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum LanError {
+    #[error("LAN socket operation failed")]
+    Socket(#[source] std::io::Error),
+    #[error("no KDE Connect TCP port is available")]
+    NoTcpPort,
+    #[error("local identity is invalid")]
+    InvalidLocalIdentity,
+    #[error("peer identity is invalid")]
+    InvalidIdentity,
+    #[error("peer closed before sending its identity")]
+    ConnectionClosed,
+    #[error("peer identity exchange timed out")]
+    IdentityTimeout,
+    #[error("LAN service task failed")]
+    Task(#[source] tokio::task::JoinError),
+    #[error("LAN service did not shut down before its deadline")]
+    ShutdownDeadline,
+}

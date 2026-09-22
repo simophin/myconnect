@@ -64,10 +64,12 @@ impl DeviceRegistry {
         outgoing_capabilities.sort();
         outgoing_capabilities.dedup();
 
-        let pairing = self
-            .devices
-            .get(&identity.device_id)
-            .is_some_and(|record| record.snapshot.pairing);
+        let existing = self.devices.get(&identity.device_id);
+        let pairing = existing.is_some_and(|record| record.snapshot.pairing);
+        let reachability = match existing.map(|record| record.snapshot.reachability) {
+            Some(DeviceReachability::Connected) => DeviceReachability::Connected,
+            _ => DeviceReachability::Discovered,
+        };
         let snapshot = DeviceSnapshot {
             device_id: identity.device_id.clone(),
             device_name: identity.device_name.clone(),
@@ -75,7 +77,7 @@ impl DeviceRegistry {
             protocol_version: identity.protocol_version,
             incoming_capabilities,
             outgoing_capabilities,
-            reachability: DeviceReachability::Discovered,
+            reachability,
             paired,
             pairing,
             last_seen_at: observed_at,

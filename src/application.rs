@@ -1,13 +1,14 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
-use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
     api::{ApiServer, ApiServerConfig, DEFAULT_API_PORT},
-    config::{ApiToken, LocalIdentity, default_config_dir},
+    config::{ApiToken, FilesystemTrustStore, LocalIdentity, TrustStore, default_config_dir},
+    protocol::DeviceType,
+    transport::lan::{LanConfig, LanService, LocalDeviceInfo},
 };
 
 mod events;
@@ -45,7 +46,7 @@ pub async fn run_service(request: RunRequest) -> Result<()> {
     let config_dir = default_config_dir().context("could not determine configuration directory")?;
     let identity = LocalIdentity::load_or_create(&config_dir)?;
     let token = ApiToken::load_or_create(&config_dir)?;
-    let (application, mut commands) = ApplicationHandle::new(
+    let (application, commands) = ApplicationHandle::new(
         LocalDeviceSnapshot {
             device_id: identity.device_id().to_owned(),
             device_name: "MyConnect".to_owned(),
@@ -55,22 +56,27 @@ pub async fn run_service(request: RunRequest) -> Result<()> {
         256,
     )?;
     let shutdown = CancellationToken::new();
-    let command_shutdown = shutdown.clone();
-    let command_task = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _ = command_shutdown.cancelled() => break,
-                command = commands.recv() => match command {
-                    Some(Command::AnnounceDiscovery) => {
-                        // LAN announcement is connected in Phase 6.
-                        info!("discovery announcement requested");
-                    }
-                    Some(_) => {}
-                    None => break,
-                }
-            }
-        }
-    });
+    let trusted_device_ids = FilesystemTrustStore::new(&config_dir)
+        .list()?
+        .into_iter()
+        .map(|device| device.device_id)
+        .collect();
+    let lan = LanService::start(
+        LanConfig::default(),
+        LocalDeviceInfo {
+            device_id: identity.device_id().to_owned(),
+            device_name: "MyConnect".to_owned(),
+            device_type: DeviceType::Desktop,
+            incoming_capabilities: Vec::new(),
+            outgoing_capabilities: Vec::new(),
+        },
+        application.clone(),
+        commands,
+        trusted_device_ids,
+        shutdown.clone(),
+    )
+    .await?;
+    info!(tcp_address = %lan.tcp_addr(), "LAN transport listening");
 
     let server = ApiServer::start(
         ApiServerConfig::new(request.api_port)?,
@@ -85,8 +91,6 @@ pub async fn run_service(request: RunRequest) -> Result<()> {
         .await
         .context("failed to listen for shutdown signal")?;
     server.shutdown().await?;
-    timeout(Duration::from_secs(5), command_task)
-        .await
-        .context("application command task did not stop before its deadline")??;
+    lan.shutdown().await?;
     Ok(())
 }

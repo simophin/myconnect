@@ -13,6 +13,7 @@ use super::{
     PairingSnapshot, Query, QueryResult, StatusSnapshot, TransferSnapshot,
 };
 use crate::device::DeviceRegistry;
+use crate::{device::DeviceSnapshot, protocol::IdentityBody};
 
 /// Core interface consumed by the local API and future frontends.
 pub trait ApplicationService: Send + Sync {
@@ -83,6 +84,66 @@ impl ApplicationHandle {
 
     pub fn event_bus(&self) -> &EventBus {
         &self.events
+    }
+
+    pub fn discover_device(
+        &self,
+        identity: &IdentityBody,
+        paired: bool,
+        observed_at: u64,
+    ) -> Result<DeviceSnapshot, ApplicationError> {
+        let (previous, snapshot) = {
+            let mut state = self
+                .state
+                .write()
+                .map_err(|_| ApplicationError::StateUnavailable)?;
+            let previous = state.devices.get(&identity.device_id);
+            let snapshot = state
+                .devices
+                .discover(identity, paired, observed_at)
+                .map_err(|_| ApplicationError::StateUnavailable)?;
+            (previous, snapshot)
+        };
+        let event = if previous.is_none() {
+            super::EventData::DeviceDiscovered(snapshot.clone())
+        } else {
+            super::EventData::DeviceUpdated(snapshot.clone())
+        };
+        self.events.publish(event)?;
+        Ok(snapshot)
+    }
+
+    pub fn mark_device_connected(
+        &self,
+        device_id: &str,
+        observed_at: u64,
+    ) -> Result<DeviceSnapshot, ApplicationError> {
+        let snapshot = self
+            .state
+            .write()
+            .map_err(|_| ApplicationError::StateUnavailable)?
+            .devices
+            .mark_connected(device_id, observed_at)
+            .map_err(|_| ApplicationError::StateUnavailable)?;
+        self.events
+            .publish(super::EventData::DeviceConnected(snapshot.clone()))?;
+        Ok(snapshot)
+    }
+
+    pub fn mark_device_disconnected(
+        &self,
+        device_id: &str,
+    ) -> Result<DeviceSnapshot, ApplicationError> {
+        let snapshot = self
+            .state
+            .write()
+            .map_err(|_| ApplicationError::StateUnavailable)?
+            .devices
+            .mark_disconnected(device_id)
+            .map_err(|_| ApplicationError::StateUnavailable)?;
+        self.events
+            .publish(super::EventData::DeviceDisconnected(snapshot.clone()))?;
+        Ok(snapshot)
     }
 
     fn status(&self) -> StatusSnapshot {

@@ -356,6 +356,8 @@ Acceptance criteria:
 
 ### Phase 6: LAN discovery and connection lifecycle
 
+**Status: complete (2026-09-22).**
+
 Deliverables:
 
 1. Add Tokio UDP broadcast/listen on port 1716 and TCP listen selection in
