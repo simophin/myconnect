@@ -8,7 +8,10 @@ use crate::{
     api::{ApiServer, ApiServerConfig, DEFAULT_API_PORT},
     config::{ApiToken, FilesystemTrustStore, LocalIdentity, TrustStore, default_config_dir},
     protocol::DeviceType,
-    transport::lan::{LanConfig, LanService, LocalDeviceInfo},
+    transport::{
+        lan::{LanConfig, LanService, LocalDeviceInfo},
+        tls::subject_public_key_info,
+    },
 };
 
 mod events;
@@ -44,23 +47,24 @@ impl Default for RunRequest {
 
 pub async fn run_service(request: RunRequest) -> Result<()> {
     let config_dir = default_config_dir().context("could not determine configuration directory")?;
-    let identity = LocalIdentity::load_or_create(&config_dir)?;
+    let identity = Arc::new(LocalIdentity::load_or_create(&config_dir)?);
     let token = ApiToken::load_or_create(&config_dir)?;
+    let trust_store: Arc<dyn TrustStore + Send + Sync> =
+        Arc::new(FilesystemTrustStore::new(&config_dir));
+    let local_public_key_der = subject_public_key_info(identity.certificate_der())
+        .context("local identity certificate could not be parsed")?;
     let (application, commands) = ApplicationHandle::new(
         LocalDeviceSnapshot {
             device_id: identity.device_id().to_owned(),
             device_name: "MyConnect".to_owned(),
         },
         8,
+        local_public_key_der,
+        trust_store.clone(),
         32,
         256,
     )?;
     let shutdown = CancellationToken::new();
-    let trusted_device_ids = FilesystemTrustStore::new(&config_dir)
-        .list()?
-        .into_iter()
-        .map(|device| device.device_id)
-        .collect();
     let lan = LanService::start(
         LanConfig::default(),
         LocalDeviceInfo {
@@ -72,7 +76,8 @@ pub async fn run_service(request: RunRequest) -> Result<()> {
         },
         application.clone(),
         commands,
-        trusted_device_ids,
+        identity,
+        trust_store,
         shutdown.clone(),
     )
     .await?;

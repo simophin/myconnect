@@ -1,6 +1,6 @@
 use std::{
-    collections::HashSet,
     net::{Ipv4Addr, SocketAddr},
+    sync::Arc,
     time::Duration,
 };
 
@@ -9,15 +9,52 @@ use myconnect::{
         ApplicationHandle, ApplicationService, Command, EventData, LocalDeviceSnapshot, Query,
         QueryResult,
     },
+    config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     device::DeviceReachability,
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
-    transport::lan::{
-        LanConfig, LanService, LocalDeviceInfo, MAX_DISCOVERY_DATAGRAM, TCP_PORT_RANGE,
+    transport::{
+        lan::{LanConfig, LanService, LocalDeviceInfo, MAX_DISCOVERY_DATAGRAM, TCP_PORT_RANGE},
+        tls::subject_public_key_info,
     },
 };
 use serde_json::{Map, json};
 use tokio::{net::UdpSocket, sync::mpsc, time::timeout};
 use tokio_util::sync::CancellationToken;
+
+struct Peer {
+    identity: Arc<LocalIdentity>,
+    trust_store: Arc<dyn TrustStore + Send + Sync>,
+    application: ApplicationHandle,
+    commands: mpsc::Receiver<Command>,
+    _directory: tempfile::TempDir,
+}
+
+fn peer(name: &str) -> Peer {
+    let directory = tempfile::tempdir().unwrap();
+    let identity = Arc::new(LocalIdentity::load_or_create(directory.path()).unwrap());
+    let trust_store: Arc<dyn TrustStore + Send + Sync> =
+        Arc::new(FilesystemTrustStore::new(directory.path()));
+    let public_key_der = subject_public_key_info(identity.certificate_der()).unwrap();
+    let (application, commands) = ApplicationHandle::new(
+        LocalDeviceSnapshot {
+            device_id: identity.device_id().to_owned(),
+            device_name: name.to_owned(),
+        },
+        8,
+        public_key_der,
+        trust_store.clone(),
+        32,
+        128,
+    )
+    .unwrap();
+    Peer {
+        identity,
+        trust_store,
+        application,
+        commands,
+        _directory: directory,
+    }
+}
 
 fn local(device_id: &str, name: &str) -> LocalDeviceInfo {
     LocalDeviceInfo {
@@ -27,19 +64,6 @@ fn local(device_id: &str, name: &str) -> LocalDeviceInfo {
         incoming_capabilities: vec!["kdeconnect.ping".into()],
         outgoing_capabilities: vec!["kdeconnect.ping".into()],
     }
-}
-
-fn application(device_id: &str, name: &str) -> (ApplicationHandle, mpsc::Receiver<Command>) {
-    ApplicationHandle::new(
-        LocalDeviceSnapshot {
-            device_id: device_id.into(),
-            device_name: name.into(),
-        },
-        8,
-        32,
-        128,
-    )
-    .unwrap()
 }
 
 fn free_udp_addr() -> SocketAddr {
@@ -85,71 +109,76 @@ async fn wait_for_reachability(
 
 #[tokio::test]
 async fn two_peers_discover_connect_deduplicate_and_follow_address_changes() {
-    let a_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    let b_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let a = peer("Peer A");
+    let b = peer("Peer B");
+    let a_id = a.identity.device_id().to_owned();
+    let b_id = b.identity.device_id().to_owned();
     let a_udp = free_udp_addr();
     let b_udp = free_udp_addr();
-    let (a_app, a_commands) = application(a_id, "Peer A");
-    let (b_app, b_commands) = application(b_id, "Peer B");
-    let mut b_events = b_app.subscribe();
+    let mut b_events = b.application.subscribe();
     let a_shutdown = CancellationToken::new();
     let b_shutdown = CancellationToken::new();
-    let a = LanService::start(
+    let a_service = LanService::start(
         test_config(a_udp, b_udp),
-        local(a_id, "Peer A"),
-        a_app.clone(),
-        a_commands,
-        HashSet::new(),
+        local(&a_id, "Peer A"),
+        a.application.clone(),
+        a.commands,
+        a.identity.clone(),
+        a.trust_store.clone(),
         a_shutdown,
     )
     .await
     .unwrap();
-    let b = LanService::start(
+    let b_service = LanService::start(
         test_config(b_udp, a_udp),
-        local(b_id, "Peer B"),
-        b_app.clone(),
-        b_commands,
-        HashSet::new(),
+        local(&b_id, "Peer B"),
+        b.application.clone(),
+        b.commands,
+        b.identity.clone(),
+        b.trust_store.clone(),
         b_shutdown,
     )
     .await
     .unwrap();
-    assert!(TCP_PORT_RANGE.contains(&a.tcp_addr().port()));
-    assert!(TCP_PORT_RANGE.contains(&b.tcp_addr().port()));
-    assert_ne!(a.tcp_addr().port(), b.tcp_addr().port());
+    assert!(TCP_PORT_RANGE.contains(&a_service.tcp_addr().port()));
+    assert!(TCP_PORT_RANGE.contains(&b_service.tcp_addr().port()));
+    assert_ne!(a_service.tcp_addr().port(), b_service.tcp_addr().port());
 
-    wait_for_reachability(&a_app, b_id, DeviceReachability::Connected).await;
-    wait_for_reachability(&b_app, a_id, DeviceReachability::Connected).await;
+    wait_for_reachability(&a.application, &b_id, DeviceReachability::Connected).await;
+    wait_for_reachability(&b.application, &a_id, DeviceReachability::Connected).await;
     for _ in 0..10 {
-        a_app.command(Command::AnnounceDiscovery).unwrap();
-        b_app.command(Command::AnnounceDiscovery).unwrap();
+        a.application.command(Command::AnnounceDiscovery).unwrap();
+        b.application.command(Command::AnnounceDiscovery).unwrap();
     }
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(matches!(
-        a_app.query(Query::Devices).unwrap(),
+        a.application.query(Query::Devices).unwrap(),
         QueryResult::Devices(devices) if devices.len() == 1
     ));
     assert!(matches!(
-        b_app.query(Query::Devices).unwrap(),
+        b.application.query(Query::Devices).unwrap(),
         QueryResult::Devices(devices) if devices.len() == 1
     ));
 
-    a.shutdown().await.unwrap();
-    wait_for_reachability(&b_app, a_id, DeviceReachability::Unavailable).await;
+    a_service.shutdown().await.unwrap();
+    wait_for_reachability(&b.application, &a_id, DeviceReachability::Unavailable).await;
 
     let new_a_udp = free_udp_addr();
-    let (new_a_app, new_a_commands) = application(a_id, "Peer A");
-    let new_a = LanService::start(
-        test_config(new_a_udp, b.discovery_addr()),
-        local(a_id, "Peer A"),
-        new_a_app,
-        new_a_commands,
-        HashSet::new(),
+    let new_a = peer("Peer A");
+    // Re-use the original device ID's identity directory so the restarted
+    // peer keeps its certificate (as the real daemon would across restarts).
+    let new_a_service = LanService::start(
+        test_config(new_a_udp, b_service.discovery_addr()),
+        local(&a_id, "Peer A"),
+        new_a.application,
+        new_a.commands,
+        a.identity.clone(),
+        a.trust_store.clone(),
         CancellationToken::new(),
     )
     .await
     .unwrap();
-    wait_for_reachability(&b_app, a_id, DeviceReachability::Connected).await;
+    wait_for_reachability(&b.application, &a_id, DeviceReachability::Connected).await;
 
     let mut connected_events = 0;
     while let Ok(event) = b_events.try_recv() {
@@ -159,21 +188,22 @@ async fn two_peers_discover_connect_deduplicate_and_follow_address_changes() {
     }
     assert_eq!(connected_events, 2, "one connection per peer address");
 
-    new_a.shutdown().await.unwrap();
-    b.shutdown().await.unwrap();
+    new_a_service.shutdown().await.unwrap();
+    b_service.shutdown().await.unwrap();
 }
 
 #[tokio::test]
 async fn malformed_oversized_self_and_unsupported_discovery_are_ignored() {
-    let local_id = "cccccccccccccccccccccccccccccccc";
+    let local_peer = peer("Local");
+    let local_id = local_peer.identity.device_id().to_owned();
     let bind = free_udp_addr();
-    let (application, commands) = application(local_id, "Local");
     let service = LanService::start(
         test_config(bind, bind).with_announcement_targets(Vec::new()),
-        local(local_id, "Local"),
-        application.clone(),
-        commands,
-        HashSet::new(),
+        local(&local_id, "Local"),
+        local_peer.application.clone(),
+        local_peer.commands,
+        local_peer.identity,
+        local_peer.trust_store,
         CancellationToken::new(),
     )
     .await
@@ -191,7 +221,7 @@ async fn malformed_oversized_self_and_unsupported_discovery_are_ignored() {
         .await
         .unwrap();
     sender
-        .send_to(&identity_packet(local_id, 8), service.discovery_addr())
+        .send_to(&identity_packet(&local_id, 8), service.discovery_addr())
         .await
         .unwrap();
     sender
@@ -204,7 +234,7 @@ async fn malformed_oversized_self_and_unsupported_discovery_are_ignored() {
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     assert_eq!(
-        application.query(Query::Devices).unwrap(),
+        local_peer.application.query(Query::Devices).unwrap(),
         QueryResult::Devices(Vec::new())
     );
     service.shutdown().await.unwrap();
@@ -212,15 +242,16 @@ async fn malformed_oversized_self_and_unsupported_discovery_are_ignored() {
 
 #[tokio::test]
 async fn service_can_restart_without_leaking_sockets_or_tasks() {
-    for index in 0..3 {
-        let id = format!("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeee{index}");
-        let (application, commands) = application(&id, "Restart");
+    for _ in 0..3 {
+        let restart_peer = peer("Restart");
+        let id = restart_peer.identity.device_id().to_owned();
         let service = LanService::start(
             test_config(free_udp_addr(), free_udp_addr()).with_announcement_targets(Vec::new()),
             local(&id, "Restart"),
-            application,
-            commands,
-            HashSet::new(),
+            restart_peer.application,
+            restart_peer.commands,
+            restart_peer.identity,
+            restart_peer.trust_store,
             CancellationToken::new(),
         )
         .await

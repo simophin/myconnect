@@ -22,7 +22,7 @@ use axum::{
     },
     routing::{get, post},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{net::TcpListener, task::JoinHandle, time::timeout};
 use tokio_util::sync::CancellationToken;
@@ -31,11 +31,12 @@ use tower_http::{
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
 };
+use uuid::Uuid;
 
 use crate::{
     application::{
-        ApplicationError, ApplicationEvent, ApplicationService, Command, Query, QueryResult,
-        StatusSnapshot,
+        ApplicationError, ApplicationEvent, ApplicationService, Command, PairingSnapshot, Query,
+        QueryResult, StatusSnapshot,
     },
     config::ApiToken,
     device::DeviceSnapshot,
@@ -187,7 +188,16 @@ fn router(state: ApiState, token: ApiToken, config: &ApiServerConfig) -> Router 
         .route("/status", get(get_status))
         .route("/discovery", post(post_discovery))
         .route("/devices", get(get_devices))
-        .route("/devices/{device_id}", get(get_device))
+        .route(
+            "/devices/{device_id}",
+            get(get_device).delete(delete_device),
+        )
+        .route("/pairings", post(post_pairing))
+        .route(
+            "/pairings/{pairing_id}",
+            get(get_pairing).delete(delete_pairing),
+        )
+        .route("/pairings/{pairing_id}/accept", post(post_pairing_accept))
         .route("/events", get(get_events))
         .fallback(api_not_found)
         .method_not_allowed_fallback(method_not_allowed)
@@ -314,6 +324,71 @@ async fn post_discovery(State(state): State<ApiState>) -> Result<StatusCode, Api
     Ok(StatusCode::ACCEPTED)
 }
 
+async fn delete_device(
+    State(state): State<ApiState>,
+    Path(device_id): Path<String>,
+) -> Result<StatusCode, ApiProblem> {
+    state
+        .application
+        .forget_device(&device_id)
+        .map_err(map_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StartPairingRequest {
+    device_id: String,
+}
+
+async fn post_pairing(
+    State(state): State<ApiState>,
+    Json(request): Json<StartPairingRequest>,
+) -> Result<(StatusCode, Json<PairingSnapshot>), ApiProblem> {
+    let pairing = state
+        .application
+        .start_outgoing_pairing(&request.device_id)
+        .map_err(map_error)?;
+    Ok((StatusCode::ACCEPTED, Json(pairing)))
+}
+
+async fn get_pairing(
+    State(state): State<ApiState>,
+    Path(pairing_id): Path<Uuid>,
+) -> Result<Json<PairingSnapshot>, ApiProblem> {
+    match state
+        .application
+        .query(Query::Pairing { pairing_id })
+        .map_err(map_error)?
+    {
+        QueryResult::Pairing(Some(pairing)) => Ok(Json(pairing)),
+        QueryResult::Pairing(None) => Err(ApiProblem::not_found("pairing_not_found")),
+        _ => Err(ApiProblem::internal()),
+    }
+}
+
+async fn post_pairing_accept(
+    State(state): State<ApiState>,
+    Path(pairing_id): Path<Uuid>,
+) -> Result<Json<PairingSnapshot>, ApiProblem> {
+    let pairing = state
+        .application
+        .accept_pairing(pairing_id)
+        .map_err(map_error)?;
+    Ok(Json(pairing))
+}
+
+async fn delete_pairing(
+    State(state): State<ApiState>,
+    Path(pairing_id): Path<Uuid>,
+) -> Result<Json<PairingSnapshot>, ApiProblem> {
+    let pairing = state
+        .application
+        .cancel_pairing(pairing_id)
+        .map_err(map_error)?;
+    Ok(Json(pairing))
+}
+
 async fn get_events(
     State(state): State<ApiState>,
 ) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
@@ -382,6 +457,25 @@ fn map_error(error: ApplicationError) -> ApiProblem {
             "Service unavailable",
             "application_unavailable",
         ),
+        ApplicationError::UnknownDevice => ApiProblem::not_found("device_not_found"),
+        ApplicationError::UnknownPairing => ApiProblem::not_found("pairing_not_found"),
+        ApplicationError::AlreadyPaired => {
+            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "already_paired")
+        }
+        ApplicationError::PairingInProgress => {
+            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "pairing_in_progress")
+        }
+        ApplicationError::DeviceNotConnected => {
+            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "device_not_connected")
+        }
+        ApplicationError::InvalidPairingDirection => ApiProblem::new(
+            StatusCode::CONFLICT,
+            "Conflict",
+            "invalid_pairing_direction",
+        ),
+        ApplicationError::InvalidPairingState | ApplicationError::InvalidTransition(_) => {
+            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "invalid_pairing_state")
+        }
         _ => ApiProblem::internal(),
     }
 }

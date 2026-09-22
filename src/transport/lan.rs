@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::BTreeMap,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     ops::RangeInclusive,
     sync::{
@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use thiserror::Error;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream, UdpSocket},
     sync::{OwnedSemaphorePermit, Semaphore, mpsc},
     task::{JoinHandle, JoinSet},
@@ -24,14 +24,18 @@ use tracing::debug;
 
 use crate::{
     application::{ApplicationHandle, Command},
+    config::{LocalIdentity, TrustStore},
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
+    transport::tls::{self, PeerPin, TlsMaterial},
 };
 
 pub const DISCOVERY_PORT: u16 = 1716;
 pub const TCP_PORT_RANGE: RangeInclusive<u16> = 1716..=1764;
 pub const MAX_DISCOVERY_DATAGRAM: usize = 8 * 1024;
 const MAX_IDENTITY_LINE: usize = 8 * 1024;
+const MAX_PACKET_LINE: usize = 64 * 1024;
 const MAX_PENDING_CONNECTIONS: usize = 32;
+const PACKET_QUEUE_CAPACITY: usize = 32;
 
 #[derive(Clone, Debug)]
 pub struct LanConfig {
@@ -119,12 +123,14 @@ pub struct LanService {
 }
 
 impl LanService {
+    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         config: LanConfig,
         local: LocalDeviceInfo,
         application: ApplicationHandle,
         commands: mpsc::Receiver<Command>,
-        trusted_device_ids: HashSet<String>,
+        identity: Arc<LocalIdentity>,
+        trust_store: Arc<dyn TrustStore + Send + Sync>,
         cancellation: CancellationToken,
     ) -> Result<Self, LanError> {
         validate_local(&local)?;
@@ -134,7 +140,6 @@ impl LanService {
         let tcp_addr = tcp.local_addr().map_err(LanError::Socket)?;
         let announcement = Arc::new(encode_identity(&local, tcp_addr.port())?);
         let registry = Arc::new(ConnectionRegistry::default());
-        let trusted_device_ids = Arc::new(trusted_device_ids);
         let task_cancellation = cancellation.clone();
         let shutdown_timeout = config.shutdown_timeout;
         let task = tokio::spawn(run(
@@ -142,7 +147,8 @@ impl LanService {
             local,
             application,
             commands,
-            trusted_device_ids,
+            identity,
+            trust_store,
             udp,
             tcp,
             announcement,
@@ -197,7 +203,8 @@ async fn run(
     local: LocalDeviceInfo,
     application: ApplicationHandle,
     mut commands: mpsc::Receiver<Command>,
-    trusted_device_ids: Arc<HashSet<String>>,
+    identity: Arc<LocalIdentity>,
+    trust_store: Arc<dyn TrustStore + Send + Sync>,
     udp: Arc<UdpSocket>,
     tcp: TcpListener,
     announcement: Arc<Vec<u8>>,
@@ -227,19 +234,19 @@ async fn run(
             received = udp.recv_from(&mut datagram) => match received {
                 Ok((length, source)) => {
                     if length <= MAX_DISCOVERY_DATAGRAM
-                        && let Some(identity) = decode_identity(&datagram[..length])
-                        && identity.device_id != local.device_id
+                        && let Some(identity_body) = decode_identity(&datagram[..length])
+                        && identity_body.device_id != local.device_id
                     {
-                        let paired = trusted_device_ids.contains(&identity.device_id);
-                        let _ = application.discover_device(&identity, paired, unix_millis());
-                        if let Some(port) = tcp_port(&identity)
+                        let paired = is_trusted(&trust_store, &identity_body.device_id);
+                        let _ = application.discover_device(&identity_body, paired, unix_millis());
+                        if let Some(port) = tcp_port(&identity_body)
                             && let Ok(permit) = connection_limit.clone().try_acquire_owned()
-                            && let Some(reservation) = registry.reserve_outgoing(&local.device_id, &identity.device_id)
+                            && let Some(reservation) = registry.reserve_outgoing(&local.device_id, &identity_body.device_id)
                         {
                             let address = SocketAddr::new(source.ip(), port);
                             spawn_outgoing(
-                                &mut connections, address, identity.device_id.clone(), reservation,
-                                permit, local.clone(), application.clone(), trusted_device_ids.clone(),
+                                &mut connections, address, identity_body.device_id.clone(), reservation,
+                                permit, local.clone(), application.clone(), identity.clone(), trust_store.clone(),
                                 announcement.clone(), registry.clone(), cancellation.clone(),
                                 config.connect_timeout, config.identity_timeout,
                             );
@@ -256,7 +263,7 @@ async fn run(
                     if let Ok(permit) = connection_limit.clone().try_acquire_owned() {
                         spawn_incoming(
                             &mut connections, stream, permit, local.clone(), application.clone(),
-                            trusted_device_ids.clone(), announcement.clone(), registry.clone(),
+                            identity.clone(), trust_store.clone(), announcement.clone(), registry.clone(),
                             cancellation.clone(), config.identity_timeout,
                         );
                     }
@@ -272,6 +279,10 @@ async fn run(
 
     registry.cancel_all();
     connections.shutdown().await;
+}
+
+fn is_trusted(trust_store: &Arc<dyn TrustStore + Send + Sync>, device_id: &str) -> bool {
+    matches!(trust_store.get(device_id), Ok(Some(_)))
 }
 
 async fn announce(socket: &UdpSocket, targets: &[SocketAddr], announcement: &[u8]) {
@@ -291,7 +302,8 @@ fn spawn_outgoing(
     permit: OwnedSemaphorePermit,
     local: LocalDeviceInfo,
     application: ApplicationHandle,
-    trusted_device_ids: Arc<HashSet<String>>,
+    identity: Arc<LocalIdentity>,
+    trust_store: Arc<dyn TrustStore + Send + Sync>,
     announcement: Arc<Vec<u8>>,
     registry: Arc<ConnectionRegistry>,
     shutdown: CancellationToken,
@@ -300,15 +312,18 @@ fn spawn_outgoing(
 ) {
     connections.spawn(async move {
         let _permit = permit;
+        debug!(local_id = %local.device_id, %address, %expected_device_id, "dialing outgoing connection");
         let result = timeout(connect_deadline, TcpStream::connect(address)).await;
         if let Ok(Ok(stream)) = result {
             handle_connection(
                 stream,
+                Role::Client,
                 Some(expected_device_id.clone()),
                 reservation,
                 local,
                 application.clone(),
-                trusted_device_ids,
+                identity,
+                trust_store,
                 announcement,
                 registry.clone(),
                 shutdown,
@@ -328,7 +343,8 @@ fn spawn_incoming(
     permit: OwnedSemaphorePermit,
     local: LocalDeviceInfo,
     application: ApplicationHandle,
-    trusted_device_ids: Arc<HashSet<String>>,
+    identity: Arc<LocalIdentity>,
+    trust_store: Arc<dyn TrustStore + Send + Sync>,
     announcement: Arc<Vec<u8>>,
     registry: Arc<ConnectionRegistry>,
     shutdown: CancellationToken,
@@ -336,39 +352,47 @@ fn spawn_incoming(
 ) {
     connections.spawn(async move {
         let _permit = permit;
-        let Ok((stream, identity)) =
-            exchange_identity(stream, &announcement, identity_deadline).await
-        else {
-            return;
-        };
-        if identity.device_id == local.device_id {
-            return;
-        }
-        let Some(reservation) = registry.reserve_incoming(&local.device_id, &identity.device_id)
-        else {
-            return;
-        };
-        finish_connection(
+        handle_connection(
             stream,
-            identity,
-            reservation,
+            Role::Server,
+            None,
+            // A placeholder reservation; handle_connection re-reserves once
+            // the peer's pre-TLS device ID is known for incoming links.
+            Reservation {
+                id: 0,
+                cancellation: CancellationToken::new(),
+            },
+            local,
             application,
-            trusted_device_ids,
+            identity,
+            trust_store,
+            announcement,
             registry,
             shutdown,
+            identity_deadline,
         )
         .await;
     });
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Role {
+    /// This side dialed the TCP connection and acts as the TLS client.
+    Client,
+    /// This side accepted the TCP connection and acts as the TLS server.
+    Server,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_connection(
     stream: TcpStream,
+    role: Role,
     expected_device_id: Option<String>,
     reservation: Reservation,
-    _local: LocalDeviceInfo,
+    local: LocalDeviceInfo,
     application: ApplicationHandle,
-    trusted_device_ids: Arc<HashSet<String>>,
+    identity: Arc<LocalIdentity>,
+    trust_store: Arc<dyn TrustStore + Send + Sync>,
     announcement: Arc<Vec<u8>>,
     registry: Arc<ConnectionRegistry>,
     shutdown: CancellationToken,
@@ -376,61 +400,215 @@ async fn handle_connection(
 ) {
     let peer_key = expected_device_id.clone().unwrap_or_default();
     let exchanged = exchange_identity(stream, &announcement, identity_deadline).await;
-    let Ok((stream, identity)) = exchanged else {
+    let Ok((stream, pre_tls_identity)) = exchanged else {
         if !peer_key.is_empty() {
             registry.release(&peer_key, reservation.id);
         }
         return;
     };
-    if expected_device_id.as_deref() != Some(identity.device_id.as_str()) {
+    if pre_tls_identity.device_id == local.device_id {
+        if !peer_key.is_empty() {
+            registry.release(&peer_key, reservation.id);
+        }
+        return;
+    }
+    if let Some(expected) = &expected_device_id
+        && expected.as_str() != pre_tls_identity.device_id
+    {
         registry.release(&peer_key, reservation.id);
         return;
     }
-    finish_connection(
-        stream,
-        identity,
-        reservation,
-        application,
-        trusted_device_ids,
-        registry,
-        shutdown,
-    )
-    .await;
-}
 
-async fn finish_connection(
-    mut stream: TcpStream,
-    identity: IdentityBody,
-    reservation: Reservation,
-    application: ApplicationHandle,
-    trusted_device_ids: Arc<HashSet<String>>,
-    registry: Arc<ConnectionRegistry>,
-    shutdown: CancellationToken,
-) {
-    let device_id = identity.device_id.clone();
+    // Incoming connections only learn the peer's device ID from the
+    // plaintext identity exchange, so the connection slot is reserved here
+    // instead of before dialing.
+    let reservation = if role == Role::Server {
+        match registry.reserve_incoming(&local.device_id, &pre_tls_identity.device_id) {
+            Some(reservation) => reservation,
+            None => return,
+        }
+    } else {
+        reservation
+    };
+    let device_id = pre_tls_identity.device_id.clone();
+
+    let trusted = trust_store.get(&device_id).ok().flatten();
+    let pin = match &trusted {
+        Some(trusted_device) => PeerPin::Pinned(trusted_device.certificate_der.clone()),
+        None => PeerPin::Unpinned,
+    };
+    let material = TlsMaterial::new(identity.certificate_der(), identity.private_key_der());
+
+    let result = match role {
+        Role::Client => {
+            establish_client_session(
+                stream,
+                &material,
+                &device_id,
+                pin,
+                &announcement,
+                identity_deadline,
+            )
+            .await
+        }
+        Role::Server => {
+            establish_server_session(
+                stream,
+                &material,
+                &device_id,
+                pin,
+                &announcement,
+                identity_deadline,
+            )
+            .await
+        }
+    };
+    let (mut reader, mut writer, peer_certificate_der, inner_identity) = match result {
+        Ok(value) => value,
+        Err(error) => {
+            debug!(local_id = %local.device_id, %device_id, %error, "TLS session establishment failed");
+            registry.release(&device_id, reservation.id);
+            return;
+        }
+    };
+
+    // The device ID and protocol version must be identical before and
+    // after the TLS upgrade, or a person-in-the-middle could swap identity
+    // mid-handshake or force a protocol downgrade.
+    if inner_identity.device_id != pre_tls_identity.device_id
+        || inner_identity.protocol_version != pre_tls_identity.protocol_version
+    {
+        registry.release(&device_id, reservation.id);
+        return;
+    }
+    if let Some(trusted_device) = &trusted
+        && inner_identity.protocol_version < trusted_device.last_trusted_protocol_version
+    {
+        registry.release(&device_id, reservation.id);
+        return;
+    }
+
     if reservation.cancellation.is_cancelled() {
         registry.release(&device_id, reservation.id);
         return;
     }
-    let paired = trusted_device_ids.contains(&device_id);
+
+    // The peer may not have been independently discovered through a UDP
+    // announcement yet (for example, an incoming connection can race ahead
+    // of the discovery broadcast in the same process), so ensure the device
+    // registry has an entry before registering the connection against it.
+    let paired = trusted.is_some();
     if application
-        .discover_device(&identity, paired, unix_millis())
-        .and_then(|_| application.mark_device_connected(&device_id, unix_millis()))
+        .discover_device(&pre_tls_identity, paired, unix_millis())
         .is_err()
     {
         registry.release(&device_id, reservation.id);
         return;
     }
 
-    let mut byte = [0_u8; 1];
-    tokio::select! {
-        _ = shutdown.cancelled() => {}
-        _ = reservation.cancellation.cancelled() => {}
-        _ = stream.read(&mut byte) => {}
+    let (packet_tx, mut packet_rx) = mpsc::channel::<Packet>(PACKET_QUEUE_CAPACITY);
+    // Keep one sender alive for the lifetime of this task so the receiver
+    // never observes a spurious `None` while the connection is registered.
+    let _keep_alive = packet_tx.clone();
+    if let Err(error) = application.register_connection(
+        &device_id,
+        peer_certificate_der,
+        inner_identity.protocol_version,
+        packet_tx,
+        reservation.cancellation.clone(),
+        unix_millis(),
+    ) {
+        debug!(local_id = %local.device_id, %device_id, ?role, %error, "register_connection failed");
+        registry.release(&device_id, reservation.id);
+        return;
     }
-    if registry.release(&device_id, reservation.id) {
-        let _ = application.mark_device_disconnected(&device_id);
+    debug!(local_id = %local.device_id, %device_id, ?role, "session registered");
+
+    let mut codec = PacketCodec::new(MAX_PACKET_LINE);
+    let mut buffer = [0_u8; 4096];
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => { debug!(local_id = %local.device_id, %device_id, "loop end: shutdown"); break },
+            _ = reservation.cancellation.cancelled() => { debug!(local_id = %local.device_id, %device_id, "loop end: cancelled"); break },
+            outgoing = packet_rx.recv() => {
+                let Some(packet) = outgoing else { debug!(local_id = %local.device_id, %device_id, "loop end: packet_rx none"); break };
+                match codec.encode(&packet) {
+                    Ok(bytes) => {
+                        if writer.write_all(&bytes).await.is_err() {
+                            debug!(local_id = %local.device_id, %device_id, "loop end: write error");
+                            break;
+                        }
+                    }
+                    Err(error) => debug!(%error, "failed to encode outgoing packet"),
+                }
+            }
+            read = reader.read(&mut buffer) => match read {
+                Ok(0) => { debug!(local_id = %local.device_id, %device_id, "loop end: read eof"); break }
+                Err(error) => { debug!(local_id = %local.device_id, %device_id, %error, "loop end: read error"); break }
+                Ok(length) => match codec.decode(&buffer[..length]) {
+                    Ok(packets) => {
+                        for packet in packets {
+                            application.handle_peer_packet(&device_id, packet);
+                        }
+                    }
+                    Err(error) => { debug!(local_id = %local.device_id, %device_id, %error, "loop end: decode error"); break }
+                },
+            },
+        }
     }
+
+    debug!(local_id = %local.device_id, %device_id, "session ended, unregistering");
+    application.unregister_connection(&device_id);
+    registry.release(&device_id, reservation.id);
+}
+
+type BoxedReader = Box<dyn AsyncRead + Send + Unpin>;
+type BoxedWriter = Box<dyn AsyncWrite + Send + Unpin>;
+
+async fn establish_client_session(
+    stream: TcpStream,
+    material: &TlsMaterial,
+    expected_device_id: &str,
+    pin: PeerPin,
+    announcement: &[u8],
+    identity_deadline: Duration,
+) -> Result<(BoxedReader, BoxedWriter, Vec<u8>, IdentityBody), LanError> {
+    let mut tls_stream = tls::connect(stream, material, expected_device_id, pin)
+        .await
+        .map_err(LanError::Tls)?;
+    let peer_certificate_der = tls::client_peer_certificate(&tls_stream).map_err(LanError::Tls)?;
+    let inner_identity =
+        exchange_identity_over(&mut tls_stream, announcement, identity_deadline).await?;
+    let (read_half, write_half) = tokio::io::split(tls_stream);
+    Ok((
+        Box::new(read_half),
+        Box::new(write_half),
+        peer_certificate_der,
+        inner_identity,
+    ))
+}
+
+async fn establish_server_session(
+    stream: TcpStream,
+    material: &TlsMaterial,
+    expected_device_id: &str,
+    pin: PeerPin,
+    announcement: &[u8],
+    identity_deadline: Duration,
+) -> Result<(BoxedReader, BoxedWriter, Vec<u8>, IdentityBody), LanError> {
+    let mut tls_stream = tls::accept(stream, material, expected_device_id, pin)
+        .await
+        .map_err(LanError::Tls)?;
+    let peer_certificate_der = tls::server_peer_certificate(&tls_stream).map_err(LanError::Tls)?;
+    let inner_identity =
+        exchange_identity_over(&mut tls_stream, announcement, identity_deadline).await?;
+    let (read_half, write_half) = tokio::io::split(tls_stream);
+    Ok((
+        Box::new(read_half),
+        Box::new(write_half),
+        peer_certificate_der,
+        inner_identity,
+    ))
 }
 
 async fn exchange_identity(
@@ -438,6 +616,18 @@ async fn exchange_identity(
     announcement: &[u8],
     deadline: Duration,
 ) -> Result<(TcpStream, IdentityBody), LanError> {
+    let identity = exchange_identity_over(&mut stream, announcement, deadline).await?;
+    Ok((stream, identity))
+}
+
+async fn exchange_identity_over<S>(
+    stream: &mut S,
+    announcement: &[u8],
+    deadline: Duration,
+) -> Result<IdentityBody, LanError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     timeout(deadline, async {
         stream
             .write_all(announcement)
@@ -460,7 +650,7 @@ async fn exchange_identity(
                 return Err(LanError::InvalidIdentity);
             }
             let identity = packet_identity(packets.into_iter().next().expect("one packet"))?;
-            return Ok((stream, identity));
+            return Ok(identity);
         }
     })
     .await
@@ -669,6 +859,8 @@ pub enum LanError {
     ConnectionClosed,
     #[error("peer identity exchange timed out")]
     IdentityTimeout,
+    #[error("TLS handshake or certificate verification failed")]
+    Tls(#[source] tls::TlsError),
     #[error("LAN service task failed")]
     Task(#[source] tokio::task::JoinError),
     #[error("LAN service did not shut down before its deadline")]

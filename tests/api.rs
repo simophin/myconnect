@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use myconnect::{
     api::{ApiServer, ApiServerConfig},
     application::{ApplicationHandle, ClipboardSnapshot, Command, EventData, LocalDeviceSnapshot},
-    config::ApiToken,
+    config::{ApiToken, FilesystemTrustStore},
     device::DeviceRegistry,
     protocol::{DeviceType, IdentityBody},
 };
@@ -33,6 +33,8 @@ impl TestServer {
                 device_name: "Test Device".into(),
             },
             8,
+            b"test-local-pubkey".to_vec(),
+            Arc::new(FilesystemTrustStore::new(directory.path())),
             4,
             4,
         )

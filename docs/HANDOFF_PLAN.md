@@ -381,6 +381,8 @@ Acceptance criteria:
 
 ### Phase 7: Protocol-v8 TLS and pairing
 
+**Status: complete (2026-09-22).**
+
 Deliverables:
 
 1. Add `rustls` and `tokio-rustls` with actual TLS 1.2/1.3 handshake-signature
