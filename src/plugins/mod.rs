@@ -10,6 +10,7 @@
 
 pub mod clipboard;
 pub mod ping;
+pub mod share;
 
 use thiserror::Error;
 
@@ -31,11 +32,13 @@ pub fn capabilities() -> PluginCapabilities {
             ping::PACKET_TYPE.to_owned(),
             clipboard::PACKET_TYPE.to_owned(),
             clipboard::CONNECT_PACKET_TYPE.to_owned(),
+            share::PACKET_TYPE.to_owned(),
         ],
         outgoing: vec![
             ping::PACKET_TYPE.to_owned(),
             clipboard::PACKET_TYPE.to_owned(),
             clipboard::CONNECT_PACKET_TYPE.to_owned(),
+            share::PACKET_TYPE.to_owned(),
         ],
     }
 }
@@ -46,6 +49,8 @@ pub enum IncomingPluginPacket {
     Ping(ping::PingBody),
     Clipboard(clipboard::ClipboardBody),
     ClipboardConnect(clipboard::ClipboardConnectBody),
+    ShareRequest(share::ShareRequestBody),
+    ShareRequestUpdate(share::ShareRequestUpdateBody),
 }
 
 #[derive(Debug, Error)]
@@ -69,6 +74,10 @@ pub fn dispatch_incoming(packet: &Packet) -> Result<IncomingPluginPacket, Plugin
         clipboard::CONNECT_PACKET_TYPE => {
             Ok(IncomingPluginPacket::ClipboardConnect(packet.body_as()?))
         }
+        share::PACKET_TYPE => Ok(IncomingPluginPacket::ShareRequest(packet.body_as()?)),
+        share::UPDATE_PACKET_TYPE => {
+            Ok(IncomingPluginPacket::ShareRequestUpdate(packet.body_as()?))
+        }
         other => Err(PluginDispatchError::Unrecognized(other.to_owned())),
     }
 }
@@ -78,15 +87,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn advertises_ping_and_clipboard_both_directions() {
+    fn advertises_ping_clipboard_and_share_both_directions() {
         let capabilities = capabilities();
         let expected = vec![
             ping::PACKET_TYPE.to_owned(),
             clipboard::PACKET_TYPE.to_owned(),
             clipboard::CONNECT_PACKET_TYPE.to_owned(),
+            share::PACKET_TYPE.to_owned(),
         ];
         assert_eq!(capabilities.incoming, expected);
         assert_eq!(capabilities.outgoing, expected);
+    }
+
+    #[test]
+    fn share_packets_dispatch_to_the_share_handlers() {
+        let packet =
+            share::build_request_packet(1_u64, "photo.jpg".into(), None, 10, 1741).unwrap();
+        assert!(matches!(
+            dispatch_incoming(&packet),
+            Ok(IncomingPluginPacket::ShareRequest(_))
+        ));
+
+        let update_packet = share::build_update_packet(1_u64, 1, 10).unwrap();
+        assert!(matches!(
+            dispatch_incoming(&update_packet),
+            Ok(IncomingPluginPacket::ShareRequestUpdate(_))
+        ));
     }
 
     #[test]

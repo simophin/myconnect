@@ -1,9 +1,11 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    net::SocketAddr,
     sync::{Arc, RwLock},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
+use bytes::Bytes;
 use thiserror::Error;
 use tokio::{
     sync::{broadcast, mpsc},
@@ -16,20 +18,30 @@ use uuid::Uuid;
 use super::{
     ApplicationEvent, ClipboardSnapshot, Command, EventBus, EventBusError, LocalDeviceSnapshot,
     MAX_CLIPBOARD_TEXT_BYTES, OperationErrorCode, Pairing, PairingDirection, PairingSnapshot,
-    PairingStatus, PairingTransitionError, Query, QueryResult, StatusSnapshot, TransferSnapshot,
+    PairingStatus, PairingTransitionError, Query, QueryResult, StatusSnapshot, Transfer,
+    TransferDirection, TransferSnapshot, TransferStatus,
+    transfer::{TransferConfig, sanitize_file_name, unique_destination},
 };
 use crate::device::DeviceRegistry;
 use crate::{
     clipboard::ClipboardService,
-    config::{TrustError, TrustStore, TrustedDevice},
+    config::{LocalIdentity, TrustError, TrustStore, TrustedDevice},
     device::DeviceSnapshot,
-    plugins::{self, clipboard::ClipboardBody, ping::PingBody},
+    plugins::{self, clipboard::ClipboardBody, ping::PingBody, share},
     protocol::{IdentityBody, Packet, PairingBody, verification_code},
-    transport::tls::subject_public_key_info,
+    transport::{
+        payload,
+        tls::{PeerPin, TlsMaterial, subject_public_key_info},
+    },
 };
 
 /// How long a pairing session may remain non-terminal before it expires.
 pub const PAIRING_TIMEOUT: Duration = Duration::from_secs(30);
+/// Bounded capacity of the channel used to forward HTTP multipart chunks to
+/// the outgoing payload connection. Small on purpose: the HTTP handler and
+/// the network writer stay coupled by backpressure instead of one side
+/// racing ahead and buffering the whole file in memory.
+const TRANSFER_CHANNEL_CAPACITY: usize = 4;
 
 /// Core interface consumed by the local API and future frontends.
 pub trait ApplicationService: Send + Sync {
@@ -41,6 +53,13 @@ pub trait ApplicationService: Send + Sync {
     fn cancel_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, ApplicationError>;
     fn forget_device(&self, device_id: &str) -> Result<(), ApplicationError>;
     fn set_clipboard(&self, text: String) -> Result<ClipboardSnapshot, ApplicationError>;
+    fn begin_outgoing_transfer(
+        &self,
+        device_id: &str,
+        file_name: String,
+        declared_size: u64,
+    ) -> Result<(TransferSnapshot, mpsc::Sender<Bytes>), ApplicationError>;
+    fn cancel_transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, ApplicationError>;
 }
 
 /// A live, TLS-authenticated control-channel connection to a peer, as
@@ -52,6 +71,20 @@ struct Connection {
     certificate_der: Vec<u8>,
     protocol_version: u8,
     cancellation: CancellationToken,
+    /// The peer's IP address, used to dial its advertised auxiliary payload
+    /// port for incoming transfers. `None` only if a connection was
+    /// registered without going through real LAN transport (e.g. some unit
+    /// tests), in which case incoming transfers cannot be established.
+    peer_addr: Option<SocketAddr>,
+}
+
+/// A running transfer task's cancellation handle, tracked so cancellation,
+/// peer disconnect, and daemon shutdown can all stop it and so it never
+/// outlives its resource entry.
+struct TransferTask {
+    device_id: String,
+    cancellation: CancellationToken,
+    handle: JoinHandle<()>,
 }
 
 struct PairingRuntime {
@@ -69,7 +102,8 @@ struct ApplicationState {
     connections: HashMap<String, Connection>,
     pairings: BTreeMap<Uuid, PairingRuntime>,
     pairing_by_device: HashMap<String, Uuid>,
-    transfers: BTreeMap<Uuid, TransferSnapshot>,
+    transfers: BTreeMap<Uuid, Transfer>,
+    transfer_tasks: HashMap<Uuid, TransferTask>,
     clipboard: ClipboardSnapshot,
     /// Whether clipboard packets are applied from, and sent to, peers at
     /// all. Disabling this only affects network synchronization; the local
@@ -90,6 +124,8 @@ pub struct ApplicationHandle {
     local_public_key_der: Arc<Vec<u8>>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     clipboard_service: Arc<dyn ClipboardService + Send + Sync>,
+    identity: Arc<LocalIdentity>,
+    transfer_config: Arc<TransferConfig>,
     state: Arc<RwLock<ApplicationState>>,
     commands: mpsc::Sender<Command>,
     events: EventBus,
@@ -105,6 +141,8 @@ impl ApplicationHandle {
         clipboard_service: Arc<dyn ClipboardService + Send + Sync>,
         command_capacity: usize,
         event_capacity: usize,
+        identity: Arc<LocalIdentity>,
+        transfer_config: TransferConfig,
     ) -> Result<(Self, mpsc::Receiver<Command>), ApplicationError> {
         if command_capacity == 0 {
             return Err(ApplicationError::InvalidCommandCapacity);
@@ -119,12 +157,15 @@ impl ApplicationHandle {
                 local_public_key_der: Arc::new(local_public_key_der),
                 trust_store,
                 clipboard_service,
+                identity,
+                transfer_config: Arc::new(transfer_config),
                 state: Arc::new(RwLock::new(ApplicationState {
                     devices: DeviceRegistry::new(),
                     connections: HashMap::new(),
                     pairings: BTreeMap::new(),
                     pairing_by_device: HashMap::new(),
                     transfers: BTreeMap::new(),
+                    transfer_tasks: HashMap::new(),
                     clipboard: ClipboardSnapshot {
                         text: String::new(),
                         updated_at: 0,
@@ -242,6 +283,7 @@ impl ApplicationHandle {
                     certificate_der,
                     protocol_version,
                     cancellation,
+                    peer_addr: None,
                 },
             );
         }
@@ -250,18 +292,41 @@ impl ApplicationHandle {
         Ok(snapshot)
     }
 
+    /// Record the peer's IP address for a registered connection, so an
+    /// incoming transfer can later dial the auxiliary payload port the peer
+    /// advertises on the same host. Called by the transport layer right
+    /// after [`Self::register_connection`]; a no-op if the connection has
+    /// since been replaced or removed.
+    pub fn set_connection_peer_addr(&self, device_id: &str, addr: SocketAddr) {
+        if let Ok(mut state) = self.state.write()
+            && let Some(connection) = state.connections.get_mut(device_id)
+        {
+            connection.peer_addr = Some(addr);
+        }
+    }
+
     /// Remove a control channel, fail any pairing session in progress on it,
-    /// and mark the device unreachable.
+    /// cancel any transfer in progress with it, and mark the device
+    /// unreachable.
     pub fn unregister_connection(&self, device_id: &str) {
-        let (had_connection, failed_pairing) = {
+        let (had_connection, failed_pairing, transfer_cancellations) = {
             let Ok(mut state) = self.state.write() else {
                 return;
             };
             let had_connection = state.connections.remove(device_id).is_some();
             let failed_pairing =
                 fail_active_pairing(&mut state, device_id, OperationErrorCode::ConnectionFailed);
-            (had_connection, failed_pairing)
+            let transfer_cancellations: Vec<CancellationToken> = state
+                .transfer_tasks
+                .values()
+                .filter(|task| task.device_id == device_id)
+                .map(|task| task.cancellation.clone())
+                .collect();
+            (had_connection, failed_pairing, transfer_cancellations)
         };
+        for cancellation in transfer_cancellations {
+            cancellation.cancel();
+        }
         if had_connection {
             let _ = self.mark_device_disconnected(device_id);
         }
@@ -269,6 +334,26 @@ impl ApplicationHandle {
             let _ = self
                 .events
                 .publish(super::EventData::PairingUpdated(snapshot));
+        }
+    }
+
+    /// Cancel every in-progress transfer task and wait up to `deadline` for
+    /// each to observe cancellation and finish tearing down its own socket
+    /// and temporary file, aborting any that do not in time. Called during
+    /// daemon shutdown so no transfer task or socket outlives the process.
+    pub async fn shutdown_transfers(&self, deadline: Duration) {
+        let tasks: Vec<TransferTask> = {
+            let Ok(mut state) = self.state.write() else {
+                return;
+            };
+            state.transfer_tasks.drain().map(|(_, task)| task).collect()
+        };
+        for task in tasks {
+            task.cancellation.cancel();
+            let abort_handle = task.handle.abort_handle();
+            if tokio::time::timeout(deadline, task.handle).await.is_err() {
+                abort_handle.abort();
+            }
         }
     }
 
@@ -551,6 +636,13 @@ impl ApplicationHandle {
                     Some(timestamp),
                 )
             }
+            Ok(plugins::IncomingPluginPacket::ShareRequest(body)) => {
+                self.handle_share_request(device_id, &packet, body)
+            }
+            // Batch-size updates are modeled for protocol completeness but
+            // this build only ever transfers one file per transfer
+            // resource, so there is nothing to reconcile them against.
+            Ok(plugins::IncomingPluginPacket::ShareRequestUpdate(_)) => {}
             Err(_) => {}
         }
     }
@@ -1083,6 +1175,550 @@ impl ApplicationHandle {
         }
     }
 
+    // --- File transfer ---------------------------------------------------
+
+    /// Start sending a file to a paired, connected device that has
+    /// advertised the share capability. Returns immediately with a `queued`
+    /// transfer resource and a bounded sender the caller (the local HTTP
+    /// API) streams file bytes into; a background task drains that channel
+    /// into a fresh auxiliary TLS payload connection to the peer, so the
+    /// whole path from the HTTP request body to the network never holds
+    /// more than a few chunks in memory at once.
+    pub fn begin_outgoing_transfer(
+        &self,
+        device_id: &str,
+        file_name: String,
+        declared_size: u64,
+    ) -> Result<(TransferSnapshot, mpsc::Sender<Bytes>), ApplicationError> {
+        if file_name.trim().is_empty() {
+            return Err(ApplicationError::InvalidFileName);
+        }
+        if declared_size > self.transfer_config.max_transfer_bytes {
+            return Err(ApplicationError::TransferTooLarge {
+                limit: self.transfer_config.max_transfer_bytes,
+            });
+        }
+
+        let (connection, device_name) = {
+            let state = self.read_state()?;
+            let device = state
+                .devices
+                .get(device_id)
+                .ok_or(ApplicationError::UnknownDevice)?;
+            if !device.paired {
+                return Err(ApplicationError::NotPaired);
+            }
+            if !device
+                .incoming_capabilities
+                .iter()
+                .any(|capability| capability == share::PACKET_TYPE)
+            {
+                return Err(ApplicationError::UnsupportedByPeer);
+            }
+            let connection = state
+                .connections
+                .get(device_id)
+                .cloned()
+                .ok_or(ApplicationError::DeviceNotConnected)?;
+            (connection, device.device_name.clone())
+        };
+
+        let now = unix_millis();
+        let transfer_id = Uuid::new_v4();
+        let transfer = Transfer::new(TransferSnapshot {
+            id: transfer_id,
+            device_id: device_id.to_owned(),
+            device_name,
+            direction: TransferDirection::Outgoing,
+            status: TransferStatus::Queued,
+            file_name,
+            total_bytes: declared_size,
+            transferred_bytes: 0,
+            created_at: now,
+            updated_at: now,
+            error_code: None,
+        });
+        let started = transfer.snapshot();
+
+        let (chunk_tx, chunk_rx) = mpsc::channel::<Bytes>(TRANSFER_CHANNEL_CAPACITY);
+        let cancellation = CancellationToken::new();
+        let task_handle = self.clone();
+        let task_cancellation = cancellation.clone();
+        let device_id_owned = device_id.to_owned();
+        let join = tokio::spawn(async move {
+            task_handle
+                .run_outgoing_transfer(
+                    transfer_id,
+                    device_id_owned,
+                    connection,
+                    chunk_rx,
+                    task_cancellation,
+                )
+                .await;
+        });
+
+        {
+            let mut state = self
+                .state
+                .write()
+                .map_err(|_| ApplicationError::StateUnavailable)?;
+            state.transfers.insert(transfer_id, transfer);
+            state.transfer_tasks.insert(
+                transfer_id,
+                TransferTask {
+                    device_id: device_id.to_owned(),
+                    cancellation,
+                    handle: join,
+                },
+            );
+        }
+        self.events
+            .publish(super::EventData::TransferStarted(started.clone()))?;
+        Ok((started, chunk_tx))
+    }
+
+    async fn run_outgoing_transfer(
+        &self,
+        transfer_id: Uuid,
+        device_id: String,
+        connection: Connection,
+        mut chunk_rx: mpsc::Receiver<Bytes>,
+        cancellation: CancellationToken,
+    ) {
+        let Some(total) = self.transfer_snapshot(transfer_id).map(|s| s.total_bytes) else {
+            self.cleanup_transfer_task(transfer_id);
+            return;
+        };
+        if self
+            .transition_transfer(transfer_id, TransferStatus::Connecting, None)
+            .is_none()
+        {
+            self.cleanup_transfer_task(transfer_id);
+            return;
+        }
+
+        let (listener, port) = match payload::bind_payload_listener(
+            self.transfer_config.payload_bind_ip,
+            crate::transport::lan::TCP_PORT_RANGE,
+        )
+        .await
+        {
+            Ok(bound) => bound,
+            Err(_) => {
+                self.fail_transfer(transfer_id, OperationErrorCode::ConnectionFailed);
+                self.cleanup_transfer_task(transfer_id);
+                return;
+            }
+        };
+
+        let file_name = self
+            .transfer_snapshot(transfer_id)
+            .map(|s| s.file_name)
+            .unwrap_or_default();
+        let packet = match share::build_request_packet(unix_millis(), file_name, None, total, port)
+        {
+            Ok(packet) => packet,
+            Err(_) => {
+                self.fail_transfer(transfer_id, OperationErrorCode::Internal);
+                self.cleanup_transfer_task(transfer_id);
+                return;
+            }
+        };
+        if connection.packets.try_send(packet).is_err() {
+            self.fail_transfer(transfer_id, OperationErrorCode::ConnectionFailed);
+            self.cleanup_transfer_task(transfer_id);
+            return;
+        }
+
+        let material = TlsMaterial::new(
+            self.identity.certificate_der(),
+            self.identity.private_key_der(),
+        );
+        let accept = payload::accept_payload_connection(
+            listener,
+            self.transfer_config.payload_connect_timeout,
+            &material,
+            &device_id,
+            PeerPin::Pinned(connection.certificate_der.clone()),
+        );
+        let mut stream = tokio::select! {
+            _ = cancellation.cancelled() => {
+                self.finish_transfer_cancelled(transfer_id);
+                self.cleanup_transfer_task(transfer_id);
+                return;
+            }
+            result = accept => match result {
+                Ok(stream) => stream,
+                Err(_) => {
+                    self.fail_transfer(transfer_id, OperationErrorCode::ConnectionFailed);
+                    self.cleanup_transfer_task(transfer_id);
+                    return;
+                }
+            },
+        };
+
+        if self
+            .transition_transfer(transfer_id, TransferStatus::Transferring, None)
+            .is_none()
+        {
+            self.cleanup_transfer_task(transfer_id);
+            return;
+        }
+
+        let result = payload::forward_channel(
+            &mut chunk_rx,
+            &mut stream,
+            total,
+            &cancellation,
+            |transferred| self.publish_transfer_progress(transfer_id, transferred),
+        )
+        .await;
+        match result {
+            Ok(()) => self.complete_transfer(transfer_id),
+            Err(payload::PayloadError::Cancelled) => self.finish_transfer_cancelled(transfer_id),
+            Err(_) => self.fail_transfer(transfer_id, OperationErrorCode::ConnectionFailed),
+        }
+        self.cleanup_transfer_task(transfer_id);
+    }
+
+    /// Handle an incoming `kdeconnect.share.request` from a paired peer:
+    /// validate and sanitize the declared filename and size, then, if
+    /// acceptable, spawn a task that dials the peer's advertised payload
+    /// port and streams the file into a temporary file, finalizing only on
+    /// full, verified completion.
+    fn handle_share_request(
+        &self,
+        device_id: &str,
+        packet: &Packet,
+        body: share::ShareRequestBody,
+    ) {
+        let Some(total) = packet
+            .payload_size
+            .filter(|size| *size >= 0)
+            .map(|size| size as u64)
+        else {
+            return;
+        };
+        let Some(port) = packet
+            .payload_transfer_info
+            .as_ref()
+            .and_then(share::payload_port)
+        else {
+            return;
+        };
+
+        let Some((device_name, peer_ip, certificate_der)) = ({
+            let Ok(state) = self.state.read() else {
+                return;
+            };
+            let device = state.devices.get(device_id);
+            let connection = state.connections.get(device_id);
+            match (device, connection) {
+                (Some(device), Some(connection)) => connection.peer_addr.map(|addr| {
+                    (
+                        device.device_name,
+                        addr.ip(),
+                        connection.certificate_der.clone(),
+                    )
+                }),
+                _ => None,
+            }
+        }) else {
+            return;
+        };
+
+        let now = unix_millis();
+        let transfer_id = Uuid::new_v4();
+        let sanitized = sanitize_file_name(&body.filename);
+        let rejection = if sanitized.is_err() {
+            Some(OperationErrorCode::ProtocolError)
+        } else if total > self.transfer_config.max_transfer_bytes {
+            Some(OperationErrorCode::Unavailable)
+        } else {
+            None
+        };
+
+        let display_name = sanitized.clone().unwrap_or_else(|_| body.filename.clone());
+        let transfer = Transfer::new(TransferSnapshot {
+            id: transfer_id,
+            device_id: device_id.to_owned(),
+            device_name,
+            direction: TransferDirection::Incoming,
+            status: TransferStatus::Queued,
+            file_name: display_name,
+            total_bytes: total,
+            transferred_bytes: 0,
+            created_at: now,
+            updated_at: now,
+            error_code: None,
+        });
+        let started = transfer.snapshot();
+
+        if let Some(error_code) = rejection {
+            let Ok(mut state) = self.state.write() else {
+                return;
+            };
+            state.transfers.insert(transfer_id, transfer);
+            drop(state);
+            let _ = self
+                .events
+                .publish(super::EventData::TransferStarted(started));
+            self.fail_transfer(transfer_id, error_code);
+            self.cleanup_transfer_task(transfer_id);
+            return;
+        }
+        let file_name = sanitized.expect("rejection handled above");
+
+        let cancellation = CancellationToken::new();
+        let task_handle = self.clone();
+        let task_cancellation = cancellation.clone();
+        let device_id_owned = device_id.to_owned();
+        let addr = SocketAddr::new(peer_ip, port);
+        let join = tokio::spawn(async move {
+            task_handle
+                .run_incoming_transfer(
+                    transfer_id,
+                    device_id_owned,
+                    addr,
+                    certificate_der,
+                    file_name,
+                    total,
+                    task_cancellation,
+                )
+                .await;
+        });
+
+        let Ok(mut state) = self.state.write() else {
+            join.abort();
+            return;
+        };
+        state.transfers.insert(transfer_id, transfer);
+        state.transfer_tasks.insert(
+            transfer_id,
+            TransferTask {
+                device_id: device_id.to_owned(),
+                cancellation,
+                handle: join,
+            },
+        );
+        drop(state);
+        let _ = self
+            .events
+            .publish(super::EventData::TransferStarted(started));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn run_incoming_transfer(
+        &self,
+        transfer_id: Uuid,
+        device_id: String,
+        addr: SocketAddr,
+        peer_certificate_der: Vec<u8>,
+        file_name: String,
+        total: u64,
+        cancellation: CancellationToken,
+    ) {
+        if self
+            .transition_transfer(transfer_id, TransferStatus::Connecting, None)
+            .is_none()
+        {
+            self.cleanup_transfer_task(transfer_id);
+            return;
+        }
+
+        let material = TlsMaterial::new(
+            self.identity.certificate_der(),
+            self.identity.private_key_der(),
+        );
+        let connect = payload::connect_payload(
+            addr,
+            self.transfer_config.payload_connect_timeout,
+            &material,
+            &device_id,
+            PeerPin::Pinned(peer_certificate_der),
+        );
+        let mut stream = tokio::select! {
+            _ = cancellation.cancelled() => {
+                self.finish_transfer_cancelled(transfer_id);
+                self.cleanup_transfer_task(transfer_id);
+                return;
+            }
+            result = connect => match result {
+                Ok(stream) => stream,
+                Err(_) => {
+                    self.fail_transfer(transfer_id, OperationErrorCode::ConnectionFailed);
+                    self.cleanup_transfer_task(transfer_id);
+                    return;
+                }
+            },
+        };
+
+        if tokio::fs::create_dir_all(&self.transfer_config.download_dir)
+            .await
+            .is_err()
+        {
+            self.fail_transfer(transfer_id, OperationErrorCode::Internal);
+            self.cleanup_transfer_task(transfer_id);
+            return;
+        }
+        let temp_path = self
+            .transfer_config
+            .download_dir
+            .join(format!(".{transfer_id}.part"));
+        let mut file = match tokio::fs::File::create(&temp_path).await {
+            Ok(file) => file,
+            Err(_) => {
+                self.fail_transfer(transfer_id, OperationErrorCode::Internal);
+                self.cleanup_transfer_task(transfer_id);
+                return;
+            }
+        };
+
+        if self
+            .transition_transfer(transfer_id, TransferStatus::Transferring, None)
+            .is_none()
+        {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            self.cleanup_transfer_task(transfer_id);
+            return;
+        }
+
+        let result = payload::copy_exact(
+            &mut stream,
+            &mut file,
+            total,
+            &cancellation,
+            |transferred| {
+                self.publish_transfer_progress(transfer_id, transferred);
+            },
+        )
+        .await;
+        drop(file);
+
+        match result {
+            Ok(()) => {
+                let destination =
+                    unique_destination(&self.transfer_config.download_dir, &file_name);
+                match tokio::fs::rename(&temp_path, &destination).await {
+                    Ok(()) => self.complete_transfer(transfer_id),
+                    Err(_) => {
+                        let _ = tokio::fs::remove_file(&temp_path).await;
+                        self.fail_transfer(transfer_id, OperationErrorCode::Internal);
+                    }
+                }
+            }
+            Err(payload::PayloadError::Cancelled) => {
+                let _ = tokio::fs::remove_file(&temp_path).await;
+                self.finish_transfer_cancelled(transfer_id);
+            }
+            Err(_) => {
+                let _ = tokio::fs::remove_file(&temp_path).await;
+                self.fail_transfer(transfer_id, OperationErrorCode::ConnectionFailed);
+            }
+        }
+        self.cleanup_transfer_task(transfer_id);
+    }
+
+    /// Request cancellation of an active transfer. Returns the resource's
+    /// current snapshot immediately; the actual socket/file teardown and
+    /// the transition to `cancelled` happen asynchronously in the transfer
+    /// task once it observes the cancellation, since the task alone owns
+    /// the socket and temporary file involved.
+    pub fn cancel_transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, ApplicationError> {
+        let snapshot = self
+            .transfer_snapshot(transfer_id)
+            .ok_or(ApplicationError::UnknownTransfer)?;
+        if matches!(
+            snapshot.status,
+            TransferStatus::Completed | TransferStatus::Cancelled | TransferStatus::Failed
+        ) {
+            return Err(ApplicationError::InvalidTransferState);
+        }
+        if let Ok(state) = self.state.read()
+            && let Some(task) = state.transfer_tasks.get(&transfer_id)
+        {
+            task.cancellation.cancel();
+        }
+        Ok(snapshot)
+    }
+
+    fn transfer_snapshot(&self, transfer_id: Uuid) -> Option<TransferSnapshot> {
+        self.state
+            .read()
+            .ok()?
+            .transfers
+            .get(&transfer_id)
+            .map(|transfer| transfer.snapshot())
+    }
+
+    fn transition_transfer(
+        &self,
+        transfer_id: Uuid,
+        next: TransferStatus,
+        error_code: Option<OperationErrorCode>,
+    ) -> Option<TransferSnapshot> {
+        let mut state = self.state.write().ok()?;
+        let transfer = state.transfers.get_mut(&transfer_id)?;
+        transfer.transition(next, unix_millis(), error_code).ok()
+    }
+
+    fn publish_transfer_progress(&self, transfer_id: Uuid, transferred_bytes: u64) {
+        let snapshot = (|| {
+            let mut state = self.state.write().ok()?;
+            let transfer = state.transfers.get_mut(&transfer_id)?;
+            transfer
+                .record_progress(transferred_bytes, unix_millis())
+                .ok()
+        })();
+        if let Some(snapshot) = snapshot {
+            let _ = self
+                .events
+                .publish(super::EventData::TransferProgress(snapshot));
+        }
+    }
+
+    fn complete_transfer(&self, transfer_id: Uuid) {
+        if let Some(snapshot) =
+            self.transition_transfer(transfer_id, TransferStatus::Completed, None)
+        {
+            let _ = self
+                .events
+                .publish(super::EventData::TransferCompleted(snapshot));
+        }
+    }
+
+    /// There is no dedicated `transfer.cancelled` SSE event in the fixed
+    /// event-type set; a cancellation is reported through the same
+    /// `transfer.failed` event name, carrying a snapshot whose `status`
+    /// field is `cancelled` (not `failed`) and no error code, so SSE
+    /// watchers still learn the terminal state and clients distinguish the
+    /// two by the snapshot's `status`, not the event name.
+    fn finish_transfer_cancelled(&self, transfer_id: Uuid) {
+        if let Some(snapshot) =
+            self.transition_transfer(transfer_id, TransferStatus::Cancelled, None)
+        {
+            let _ = self
+                .events
+                .publish(super::EventData::TransferFailed(snapshot));
+        }
+    }
+
+    fn fail_transfer(&self, transfer_id: Uuid, error_code: OperationErrorCode) {
+        if let Some(snapshot) =
+            self.transition_transfer(transfer_id, TransferStatus::Failed, Some(error_code))
+        {
+            let _ = self
+                .events
+                .publish(super::EventData::TransferFailed(snapshot));
+        }
+    }
+
+    fn cleanup_transfer_task(&self, transfer_id: Uuid) {
+        if let Ok(mut state) = self.state.write() {
+            state.transfer_tasks.remove(&transfer_id);
+        }
+    }
+
     fn status(&self) -> StatusSnapshot {
         StatusSnapshot {
             version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -1136,10 +1772,19 @@ impl ApplicationService for ApplicationHandle {
                     .get(&pairing_id)
                     .map(|runtime| runtime.pairing.snapshot()),
             ),
-            Query::Transfers => QueryResult::Transfers(state.transfers.values().cloned().collect()),
-            Query::Transfer { transfer_id } => {
-                QueryResult::Transfer(state.transfers.get(&transfer_id).cloned())
-            }
+            Query::Transfers => QueryResult::Transfers(
+                state
+                    .transfers
+                    .values()
+                    .map(|transfer| transfer.snapshot())
+                    .collect(),
+            ),
+            Query::Transfer { transfer_id } => QueryResult::Transfer(
+                state
+                    .transfers
+                    .get(&transfer_id)
+                    .map(|transfer| transfer.snapshot()),
+            ),
             Query::Clipboard => QueryResult::Clipboard(state.clipboard.clone()),
         })
     }
@@ -1175,6 +1820,19 @@ impl ApplicationService for ApplicationHandle {
 
     fn set_clipboard(&self, text: String) -> Result<ClipboardSnapshot, ApplicationError> {
         ApplicationHandle::set_clipboard(self, text)
+    }
+
+    fn begin_outgoing_transfer(
+        &self,
+        device_id: &str,
+        file_name: String,
+        declared_size: u64,
+    ) -> Result<(TransferSnapshot, mpsc::Sender<Bytes>), ApplicationError> {
+        ApplicationHandle::begin_outgoing_transfer(self, device_id, file_name, declared_size)
+    }
+
+    fn cancel_transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, ApplicationError> {
+        ApplicationHandle::cancel_transfer(self, transfer_id)
     }
 }
 
@@ -1234,6 +1892,14 @@ pub enum ApplicationError {
     Trust(#[source] TrustError),
     #[error("clipboard text exceeds the {limit}-byte limit")]
     ClipboardTextTooLarge { limit: usize },
+    #[error("file name must not be empty")]
+    InvalidFileName,
+    #[error("declared transfer size exceeds the {limit}-byte limit")]
+    TransferTooLarge { limit: u64 },
+    #[error("unknown transfer")]
+    UnknownTransfer,
+    #[error("transfer is not in a state that allows this operation")]
+    InvalidTransferState,
     #[error("internal application error")]
     Internal,
 }
@@ -1276,6 +1942,8 @@ mod tests {
     }
 
     fn handle() -> (ApplicationHandle, mpsc::Receiver<Command>) {
+        let directory = tempfile::tempdir().unwrap();
+        let identity = Arc::new(LocalIdentity::load_or_create(directory.path()).unwrap());
         ApplicationHandle::new(
             LocalDeviceSnapshot {
                 device_id: "local".into(),
@@ -1287,6 +1955,8 @@ mod tests {
             crate::clipboard::InMemoryClipboard::shared(),
             1,
             1,
+            identity,
+            TransferConfig::new(directory.path().join("downloads")),
         )
         .unwrap()
     }

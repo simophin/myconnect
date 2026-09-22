@@ -10,7 +10,7 @@ use std::{
 use axum::{
     Json, Router,
     body::Body,
-    extract::{DefaultBodyLimit, Path, State},
+    extract::{DefaultBodyLimit, Multipart, Path, State},
     http::{
         HeaderName, HeaderValue, Request, StatusCode,
         header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, WWW_AUTHENTICATE},
@@ -36,13 +36,18 @@ use uuid::Uuid;
 use crate::{
     application::{
         ApplicationError, ApplicationEvent, ApplicationService, ClipboardSnapshot, Command,
-        PairingSnapshot, Query, QueryResult, StatusSnapshot,
+        DEFAULT_MAX_TRANSFER_BYTES, PairingSnapshot, Query, QueryResult, StatusSnapshot,
+        TransferSnapshot,
     },
     config::ApiToken,
     device::DeviceSnapshot,
 };
 
 pub const DEFAULT_API_PORT: u16 = 24_816;
+/// Path prefix routed to the file-transfer-upload sub-router, which is
+/// exempted from the small default request body limit (it streams the body
+/// instead of buffering it, and enforces its own declared-size limit).
+const TRANSFER_UPLOAD_PATH: &str = "/transfers";
 const REQUEST_ID_HEADER: &str = "x-request-id";
 
 #[derive(Clone, Debug)]
@@ -51,6 +56,7 @@ pub struct ApiServerConfig {
     request_timeout: Duration,
     shutdown_timeout: Duration,
     max_request_body_bytes: usize,
+    max_transfer_body_bytes: usize,
 }
 
 impl ApiServerConfig {
@@ -63,6 +69,11 @@ impl ApiServerConfig {
             request_timeout: Duration::from_secs(15),
             shutdown_timeout: Duration::from_secs(5),
             max_request_body_bytes: 64 * 1024,
+            // Large enough for the configured maximum transfer size plus a
+            // small allowance for multipart boundaries and headers; the
+            // upload itself is streamed rather than buffered, so this is a
+            // sanity ceiling rather than a memory budget.
+            max_transfer_body_bytes: DEFAULT_MAX_TRANSFER_BYTES.saturating_add(64 * 1024) as usize,
         })
     }
 
@@ -82,6 +93,11 @@ impl ApiServerConfig {
 
     pub fn with_max_request_body_bytes(mut self, value: usize) -> Self {
         self.max_request_body_bytes = value;
+        self
+    }
+
+    pub fn with_max_transfer_body_bytes(mut self, value: usize) -> Self {
+        self.max_transfer_body_bytes = value;
         self
     }
 }
@@ -184,6 +200,16 @@ fn router(state: ApiState, token: ApiToken, config: &ApiServerConfig) -> Router 
                 .on_response(DefaultOnResponse::new().include_headers(false)),
         );
 
+    // The transfer-upload route is exempted from the small default body
+    // limit here (it streams the body and enforces its own declared-size
+    // limit instead of buffering it); every other route keeps the small
+    // default applied below. Because this layer is added on the inner,
+    // not-yet-nested router, it is closer to the handler than the outer
+    // `DefaultBodyLimit` and therefore overrides it for these routes only.
+    let transfer_upload = Router::new()
+        .route(TRANSFER_UPLOAD_PATH, post(post_transfer))
+        .layer(DefaultBodyLimit::max(config.max_transfer_body_bytes));
+
     let api = Router::new()
         .route("/status", get(get_status))
         .route("/discovery", post(post_discovery))
@@ -198,12 +224,21 @@ fn router(state: ApiState, token: ApiToken, config: &ApiServerConfig) -> Router 
             get(get_pairing).delete(delete_pairing),
         )
         .route("/pairings/{pairing_id}/accept", post(post_pairing_accept))
+        .route("/transfers", get(get_transfers))
+        .route(
+            "/transfers/{transfer_id}",
+            get(get_transfer).delete(delete_transfer),
+        )
+        .merge(transfer_upload)
         .route("/clipboard", get(get_clipboard).put(put_clipboard))
         .route("/events", get(get_events))
         .fallback(api_not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn_with_state(
-            config.max_request_body_bytes,
+            BodyLimits {
+                default: config.max_request_body_bytes,
+                transfer_upload: config.max_transfer_body_bytes,
+            },
             enforce_content_length,
         ))
         .layer(middleware::from_fn_with_state(
@@ -223,11 +258,24 @@ fn router(state: ApiState, token: ApiToken, config: &ApiServerConfig) -> Router 
         .layer(middleware)
 }
 
+#[derive(Clone, Copy)]
+struct BodyLimits {
+    default: usize,
+    transfer_upload: usize,
+}
+
 async fn enforce_content_length(
-    State(maximum): State<usize>,
+    State(limits): State<BodyLimits>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
+    let maximum = if request.method() == axum::http::Method::POST
+        && request.uri().path().ends_with(TRANSFER_UPLOAD_PATH)
+    {
+        limits.transfer_upload
+    } else {
+        limits.default
+    };
     let too_large = request
         .headers()
         .get(CONTENT_LENGTH)
@@ -390,6 +438,131 @@ async fn delete_pairing(
     Ok(Json(pairing))
 }
 
+async fn get_transfers(
+    State(state): State<ApiState>,
+) -> Result<Json<Vec<TransferSnapshot>>, ApiProblem> {
+    match state
+        .application
+        .query(Query::Transfers)
+        .map_err(map_error)?
+    {
+        QueryResult::Transfers(transfers) => Ok(Json(transfers)),
+        _ => Err(ApiProblem::internal()),
+    }
+}
+
+async fn get_transfer(
+    State(state): State<ApiState>,
+    Path(transfer_id): Path<Uuid>,
+) -> Result<Json<TransferSnapshot>, ApiProblem> {
+    match state
+        .application
+        .query(Query::Transfer { transfer_id })
+        .map_err(map_error)?
+    {
+        QueryResult::Transfer(Some(transfer)) => Ok(Json(transfer)),
+        QueryResult::Transfer(None) => Err(ApiProblem::not_found("transfer_not_found")),
+        _ => Err(ApiProblem::internal()),
+    }
+}
+
+async fn delete_transfer(
+    State(state): State<ApiState>,
+    Path(transfer_id): Path<Uuid>,
+) -> Result<Json<TransferSnapshot>, ApiProblem> {
+    let transfer = state
+        .application
+        .cancel_transfer(transfer_id)
+        .map_err(map_error)?;
+    Ok(Json(transfer))
+}
+
+/// Stream a `multipart/form-data` upload (a `deviceId` text field and one
+/// `file` part) to a paired device without ever buffering the complete file:
+/// each multipart chunk is forwarded, as it arrives, into a small bounded
+/// channel that a background task drains into the outgoing payload
+/// connection. The `file` part must declare its length in a `Content-Length`
+/// part header (as the bundled CLI does); this is the transfer's declared
+/// size, checked against the configured maximum before anything is sent.
+async fn post_transfer(
+    State(state): State<ApiState>,
+    mut multipart: Multipart,
+) -> Result<(StatusCode, Json<TransferSnapshot>), ApiProblem> {
+    let mut device_id: Option<String> = None;
+    let mut created: Option<TransferSnapshot> = None;
+
+    loop {
+        let field = multipart
+            .next_field()
+            .await
+            .map_err(|_| ApiProblem::bad_request("invalid_multipart"))?;
+        let Some(mut field) = field else { break };
+
+        match field.name() {
+            Some("deviceId") => {
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|_| ApiProblem::bad_request("invalid_multipart"))?;
+                device_id = Some(text);
+            }
+            Some("file") => {
+                let device_id = device_id
+                    .clone()
+                    .ok_or_else(|| ApiProblem::bad_request("missing_device_id"))?;
+                let file_name = field.file_name().unwrap_or_default().to_owned();
+                let declared_size = field
+                    .headers()
+                    .get(CONTENT_LENGTH)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .ok_or_else(|| ApiProblem::bad_request("missing_declared_size"))?;
+
+                let (transfer, sender) = state
+                    .application
+                    .begin_outgoing_transfer(&device_id, file_name, declared_size)
+                    .map_err(map_error)?;
+                created = Some(transfer);
+
+                loop {
+                    let chunk = field
+                        .chunk()
+                        .await
+                        .map_err(|_| ApiProblem::bad_request("invalid_multipart"))?;
+                    let Some(chunk) = chunk else { break };
+                    if chunk.is_empty() {
+                        continue;
+                    }
+                    // The receiver is dropped once the background transfer
+                    // task ends (success, failure, or cancellation); there is
+                    // nothing more useful to do with the rest of the upload
+                    // in that case, so stop forwarding it.
+                    if sender.send(chunk).await.is_err() {
+                        break;
+                    }
+                }
+                drop(sender);
+            }
+            _ => {
+                let _ = field.bytes().await;
+            }
+        }
+    }
+
+    let transfer_id = created
+        .ok_or_else(|| ApiProblem::bad_request("missing_file_part"))?
+        .id;
+    let latest = match state
+        .application
+        .query(Query::Transfer { transfer_id })
+        .map_err(map_error)?
+    {
+        QueryResult::Transfer(Some(transfer)) => transfer,
+        _ => return Err(ApiProblem::internal()),
+    };
+    Ok((StatusCode::ACCEPTED, Json(latest)))
+}
+
 async fn get_clipboard(
     State(state): State<ApiState>,
 ) -> Result<Json<ClipboardSnapshot>, ApiProblem> {
@@ -511,6 +684,22 @@ fn map_error(error: ApplicationError) -> ApiProblem {
             "Payload too large",
             "clipboard_text_too_large",
         ),
+        ApplicationError::NotPaired => {
+            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "device_not_paired")
+        }
+        ApplicationError::UnsupportedByPeer => {
+            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "unsupported_by_peer")
+        }
+        ApplicationError::InvalidFileName => ApiProblem::bad_request("invalid_file_name"),
+        ApplicationError::TransferTooLarge { .. } => ApiProblem::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Payload too large",
+            "transfer_too_large",
+        ),
+        ApplicationError::UnknownTransfer => ApiProblem::not_found("transfer_not_found"),
+        ApplicationError::InvalidTransferState => {
+            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "invalid_transfer_state")
+        }
         _ => ApiProblem::internal(),
     }
 }
@@ -545,6 +734,10 @@ impl ApiProblem {
 
     fn unauthorized() -> Self {
         Self::new(StatusCode::UNAUTHORIZED, "Unauthorized", "unauthorized")
+    }
+
+    fn bad_request(code: &'static str) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, "Bad request", code)
     }
 
     fn not_found(code: &'static str) -> Self {

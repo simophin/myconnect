@@ -57,6 +57,8 @@ fn peer(name: &str) -> Peer {
         InMemoryClipboard::shared(),
         32,
         128,
+        identity.clone(),
+        myconnect::application::TransferConfig::new(directory.path().join("downloads")),
     )
     .unwrap();
     Peer {
@@ -267,6 +269,7 @@ fn peer_reusing(
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
 ) -> Peer {
+    let directory = tempfile::tempdir().unwrap();
     let public_key_der = subject_public_key_info(identity.certificate_der()).unwrap();
     let (application, commands) = ApplicationHandle::new(
         LocalDeviceSnapshot {
@@ -279,6 +282,8 @@ fn peer_reusing(
         InMemoryClipboard::shared(),
         32,
         128,
+        identity.clone(),
+        myconnect::application::TransferConfig::new(directory.path().join("downloads")),
     )
     .unwrap();
     Peer {
@@ -286,7 +291,7 @@ fn peer_reusing(
         trust_store,
         application,
         commands,
-        _directory: tempfile::tempdir().unwrap(),
+        _directory: directory,
     }
 }
 

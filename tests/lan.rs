@@ -47,6 +47,8 @@ fn peer(name: &str) -> Peer {
         InMemoryClipboard::shared(),
         32,
         128,
+        identity.clone(),
+        myconnect::application::TransferConfig::new(directory.path().join("downloads")),
     )
     .unwrap();
     Peer {

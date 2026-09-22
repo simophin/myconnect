@@ -399,6 +399,7 @@ async fn handle_connection(
     identity_deadline: Duration,
 ) {
     let peer_key = expected_device_id.clone().unwrap_or_default();
+    let peer_addr = stream.peer_addr().ok();
     let exchanged = exchange_identity(stream, &announcement, identity_deadline).await;
     let Ok((stream, pre_tls_identity)) = exchanged else {
         if !peer_key.is_empty() {
@@ -521,6 +522,9 @@ async fn handle_connection(
         debug!(local_id = %local.device_id, %device_id, ?role, %error, "register_connection failed");
         registry.release(&device_id, reservation.id);
         return;
+    }
+    if let Some(peer_addr) = peer_addr {
+        application.set_connection_peer_addr(&device_id, peer_addr);
     }
     debug!(local_id = %local.device_id, %device_id, ?role, "session registered");
 

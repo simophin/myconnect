@@ -452,6 +452,8 @@ Acceptance criteria:
 
 ### Phase 10: File transfer
 
+**Status: complete (2026-09-22).**
+
 Deliverables:
 
 1. Implement `kdeconnect.share.request` and
@@ -491,6 +493,25 @@ The MVP is complete only when all of the following are true:
   not panic or leak unbounded resources.
 - Automated tests pass and at least one current KDE Connect implementation has
   been exercised for discovery, pairing, clipboard, and file interoperability.
+
+**Status as of Phase 10 completion (2026-09-22).** Every bullet above except
+the last is implemented and covered by automated tests: identity persistence,
+the authenticated local API, the API-only CLI, independent multi-device
+discovery, verified pairing with pinned trust, fail-closed reconnection,
+feedback-loop-free clipboard sync, and file transfer (send, receive, list,
+cancel, progress, and safe atomic finalization with path-traversal, size-limit,
+and disk-write-failure handling) are all in place, and the automated test
+suite (protocol, transport, application, API, and end-to-end tests, including
+`tests/transfer_e2e.rs`) passes. Restart/shutdown/malformed-packet/slow-
+client/unavailable-peer handling is exercised for LAN discovery, pairing, and
+the transfer subsystem specifically (bounded queues, cancellation tokens,
+`ApplicationHandle::shutdown_transfers`, and no unbounded in-memory buffering
+of transferred file data). What remains, and cannot be completed inside this
+environment, is the last bullet: manual interoperability verification against
+a real current KDE Connect (Android or desktop) build for discovery, pairing,
+clipboard, and file transfer in both directions. No agent should mark the
+overall MVP "done" until that manual check has actually been run and its
+result recorded here.
 
 ## 7. Explicit non-goals
 

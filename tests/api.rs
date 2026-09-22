@@ -2,9 +2,12 @@ use std::{sync::Arc, time::Duration};
 
 use myconnect::{
     api::{ApiServer, ApiServerConfig},
-    application::{ApplicationHandle, ClipboardSnapshot, Command, EventData, LocalDeviceSnapshot},
+    application::{
+        ApplicationHandle, ClipboardSnapshot, Command, EventData, LocalDeviceSnapshot,
+        TransferConfig,
+    },
     clipboard::InMemoryClipboard,
-    config::{ApiToken, FilesystemTrustStore},
+    config::{ApiToken, FilesystemTrustStore, LocalIdentity},
     device::DeviceRegistry,
     protocol::{DeviceType, IdentityBody},
 };
@@ -28,6 +31,8 @@ impl TestServer {
     async fn start() -> Self {
         let directory = tempfile::tempdir().unwrap();
         let token = ApiToken::load_or_create(directory.path()).unwrap();
+        let identity =
+            Arc::new(LocalIdentity::load_or_create(directory.path().join("identity")).unwrap());
         let (application, commands) = ApplicationHandle::new(
             LocalDeviceSnapshot {
                 device_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
@@ -39,6 +44,8 @@ impl TestServer {
             InMemoryClipboard::shared(),
             4,
             4,
+            identity,
+            TransferConfig::new(directory.path().join("downloads")),
         )
         .unwrap();
         let mut devices = DeviceRegistry::new();
@@ -80,6 +87,39 @@ impl TestServer {
 
     fn authorization(&self) -> String {
         format!("Authorization: Bearer {}\r\n", self.token.expose_secret())
+    }
+
+    /// Register a live, paired connection for `device_id`, as the transport
+    /// layer would after a real handshake, so transfer endpoints have
+    /// somewhere to send a `kdeconnect.share.request`.
+    fn connect_and_pair(
+        &self,
+        device_id: &str,
+    ) -> tokio::sync::mpsc::Receiver<myconnect::protocol::Packet> {
+        let identity = IdentityBody {
+            device_id: device_id.to_owned(),
+            device_name: "Peer Phone".into(),
+            device_type: DeviceType::Phone,
+            incoming_capabilities: vec!["kdeconnect.share.request".into()],
+            outgoing_capabilities: vec!["kdeconnect.share.request".into()],
+            protocol_version: 8,
+            extra: Map::new(),
+        };
+        self.application
+            .discover_device(&identity, true, 20)
+            .unwrap();
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        self.application
+            .register_connection(
+                device_id,
+                vec![1, 2, 3],
+                8,
+                tx,
+                CancellationToken::new(),
+                20,
+            )
+            .unwrap();
+        rx
     }
 }
 
@@ -332,4 +372,150 @@ fn kde_connect_ports_are_rejected() {
     for port in 1716..=1764 {
         assert!(ApiServerConfig::new(port).is_err());
     }
+}
+
+#[tokio::test]
+async fn transfer_upload_is_streamed_queryable_and_cancellable() {
+    let server = TestServer::start().await;
+    let device_id = "cccccccccccccccccccccccccccccccc";
+    let _packets = server.connect_and_pair(device_id);
+
+    let boundary = "myconnect-test-boundary";
+    let file_bytes = b"hello from the transfer test";
+    let mut multipart_body = Vec::new();
+    multipart_body.extend_from_slice(
+        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"deviceId\"\r\n\r\n{device_id}\r\n")
+            .as_bytes(),
+    );
+    multipart_body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"hello.txt\"\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
+            file_bytes.len()
+        )
+        .as_bytes(),
+    );
+    multipart_body.extend_from_slice(file_bytes);
+    multipart_body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    let mut stream = TcpStream::connect(server.server.local_addr())
+        .await
+        .unwrap();
+    let http_request = format!(
+        "POST /api/v1/transfers HTTP/1.1\r\nHost: localhost\r\n{}Content-Type: multipart/form-data; boundary={boundary}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        server.authorization(),
+        multipart_body.len(),
+    );
+    stream.write_all(http_request.as_bytes()).await.unwrap();
+    stream.write_all(&multipart_body).await.unwrap();
+    let mut response = Vec::new();
+    timeout(Duration::from_secs(5), stream.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    let response = String::from_utf8(response).unwrap();
+    assert!(
+        response.starts_with("HTTP/1.1 202 Accepted"),
+        "unexpected response: {response}"
+    );
+    let created: serde_json::Value = serde_json::from_str(body(&response)).unwrap();
+    assert_eq!(created["deviceId"], device_id);
+    assert_eq!(created["fileName"], "hello.txt");
+    assert_eq!(created["totalBytes"], file_bytes.len());
+    assert_eq!(created["direction"], "outgoing");
+    let transfer_id = created["id"].as_str().unwrap().to_owned();
+
+    let listed = request(&server, "GET", "/api/v1/transfers", true).await;
+    assert!(listed.starts_with("HTTP/1.1 200 OK"));
+    let listed_json: serde_json::Value = serde_json::from_str(body(&listed)).unwrap();
+    assert!(
+        listed_json
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|transfer| transfer["id"] == transfer_id)
+    );
+
+    let fetched = request(
+        &server,
+        "GET",
+        &format!("/api/v1/transfers/{transfer_id}"),
+        true,
+    )
+    .await;
+    assert!(fetched.starts_with("HTTP/1.1 200 OK"));
+
+    let missing = request(
+        &server,
+        "GET",
+        "/api/v1/transfers/00000000-0000-0000-0000-000000000000",
+        true,
+    )
+    .await;
+    assert!(missing.starts_with("HTTP/1.1 404 Not Found"));
+    assert!(body(&missing).contains("transfer_not_found"));
+
+    let cancelled = request(
+        &server,
+        "DELETE",
+        &format!("/api/v1/transfers/{transfer_id}"),
+        true,
+    )
+    .await;
+    assert!(cancelled.starts_with("HTTP/1.1 200 OK"));
+    let cancelled_json: serde_json::Value = serde_json::from_str(body(&cancelled)).unwrap();
+    assert_eq!(cancelled_json["id"], transfer_id);
+
+    server.server.shutdown().await.unwrap();
+    server
+        .application
+        .shutdown_transfers(Duration::from_secs(1))
+        .await;
+}
+
+#[tokio::test]
+async fn transfer_upload_to_unpaired_device_is_rejected() {
+    let server = TestServer::start().await;
+    // `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb` is discovered but neither paired
+    // nor connected in `TestServer::start`.
+    let device_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let boundary = "myconnect-test-boundary";
+    let file_bytes = b"should not be sent";
+    let mut multipart_body = Vec::new();
+    multipart_body.extend_from_slice(
+        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"deviceId\"\r\n\r\n{device_id}\r\n")
+            .as_bytes(),
+    );
+    multipart_body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"secret.txt\"\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
+            file_bytes.len()
+        )
+        .as_bytes(),
+    );
+    multipart_body.extend_from_slice(file_bytes);
+    multipart_body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    let mut stream = TcpStream::connect(server.server.local_addr())
+        .await
+        .unwrap();
+    let http_request = format!(
+        "POST /api/v1/transfers HTTP/1.1\r\nHost: localhost\r\n{}Content-Type: multipart/form-data; boundary={boundary}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        server.authorization(),
+        multipart_body.len(),
+    );
+    stream.write_all(http_request.as_bytes()).await.unwrap();
+    stream.write_all(&multipart_body).await.unwrap();
+    let mut response = Vec::new();
+    timeout(Duration::from_secs(5), stream.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    let response = String::from_utf8(response).unwrap();
+    assert!(
+        response.starts_with("HTTP/1.1 409 Conflict"),
+        "unexpected response: {response}"
+    );
+    assert!(body(&response).contains("device_not_paired"));
+
+    server.server.shutdown().await.unwrap();
 }

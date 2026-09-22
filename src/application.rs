@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
@@ -19,6 +19,7 @@ use crate::{
 mod events;
 mod service;
 mod state;
+mod transfer;
 
 pub use events::{ApplicationEvent, EventBus, EventBusError, EventData};
 pub use service::{ApplicationError, ApplicationHandle, ApplicationService};
@@ -28,6 +29,7 @@ pub use state::{
     QueryResult, StatusSnapshot, Transfer, TransferDirection, TransferProgressError,
     TransferSnapshot, TransferStatus, TransferTransitionError,
 };
+pub use transfer::{DEFAULT_MAX_TRANSFER_BYTES, FileNameError, TransferConfig};
 
 /// Options for starting the MyConnect service.
 #[derive(Debug, PartialEq, Eq)]
@@ -55,6 +57,11 @@ pub async fn run_service(request: RunRequest) -> Result<()> {
         Arc::new(FilesystemTrustStore::new(&config_dir));
     let local_public_key_der = subject_public_key_info(identity.certificate_der())
         .context("local identity certificate could not be parsed")?;
+    let download_dir = request
+        .download_dir
+        .clone()
+        .or_else(default_download_dir)
+        .unwrap_or_else(|| config_dir.join("downloads"));
     let (application, commands) = ApplicationHandle::new(
         LocalDeviceSnapshot {
             device_id: identity.device_id().to_owned(),
@@ -66,6 +73,8 @@ pub async fn run_service(request: RunRequest) -> Result<()> {
         InMemoryClipboard::shared(),
         32,
         256,
+        identity.clone(),
+        TransferConfig::new(download_dir),
     )?;
     let shutdown = CancellationToken::new();
     let capabilities = plugins::capabilities();
@@ -89,7 +98,7 @@ pub async fn run_service(request: RunRequest) -> Result<()> {
 
     let server = ApiServer::start(
         ApiServerConfig::new(request.api_port)?,
-        Arc::new(application),
+        Arc::new(application.clone()),
         token,
         shutdown.clone(),
     )
@@ -101,5 +110,12 @@ pub async fn run_service(request: RunRequest) -> Result<()> {
         .context("failed to listen for shutdown signal")?;
     server.shutdown().await?;
     lan.shutdown().await?;
+    application.shutdown_transfers(Duration::from_secs(5)).await;
     Ok(())
+}
+
+/// The platform download directory, if one can be determined. Falls back to
+/// a `downloads` directory under the MyConnect configuration directory.
+fn default_download_dir() -> Option<PathBuf> {
+    directories::UserDirs::new().and_then(|dirs| dirs.download_dir().map(PathBuf::from))
 }

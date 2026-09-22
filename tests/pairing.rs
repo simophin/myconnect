@@ -6,6 +6,7 @@ use myconnect::{
     application::{
         ApplicationError, ApplicationEvent, ApplicationHandle, ApplicationService, Command,
         EventData, LocalDeviceSnapshot, PairingDirection, PairingStatus, Query, QueryResult,
+        TransferConfig,
     },
     clipboard::InMemoryClipboard,
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
@@ -33,7 +34,8 @@ fn harness() -> Harness {
     let directory = tempfile::tempdir().unwrap();
     let trust_store: Arc<dyn TrustStore + Send + Sync> =
         Arc::new(FilesystemTrustStore::new(directory.path()));
-    let local_identity = LocalIdentity::load_or_create(directory.path().join("local")).unwrap();
+    let local_identity =
+        Arc::new(LocalIdentity::load_or_create(directory.path().join("local")).unwrap());
     let local_public_key = subject_public_key_info(local_identity.certificate_der()).unwrap();
     let (application, commands) = ApplicationHandle::new(
         LocalDeviceSnapshot {
@@ -46,6 +48,8 @@ fn harness() -> Harness {
         InMemoryClipboard::shared(),
         8,
         32,
+        local_identity,
+        TransferConfig::new(directory.path().join("downloads")),
     )
     .unwrap();
 
