@@ -58,6 +58,11 @@ The commands currently parse their arguments and reach the shared application
 layer; device discovery, connectivity, and transfers are the next implementation
 steps.
 
+Protocol and Rust ecosystem research is recorded in
+[`docs/KDECONNECT_PROTOCOL_RESEARCH.md`](docs/KDECONNECT_PROTOCOL_RESEARCH.md).
+The ordered implementation handoff is in
+[`docs/HANDOFF_PLAN.md`](docs/HANDOFF_PLAN.md).
+
 
 ### Tech stack and development guidelines
 
