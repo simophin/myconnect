@@ -6,14 +6,19 @@ MyConnect is an open-source project written in Rust that aims to provide similar
 
 Provides a desktop application for MacOS/Linux/Windows.
 
-### MVP
+### Status
 
-The Minimum Viable Product (MVP) for MyConnect includes the following features:
+The MVP is implemented: LAN discovery, protocol-v8 TLS connections with
+certificate pinning, user-confirmed pairing, persistent identity and trust,
+text clipboard synchronization, file transfer with progress and
+cancellation, and a versioned authenticated local HTTP API that the CLI (and
+any future GUI) uses exclusively — no frontend touches KDE Connect sockets or
+state directly.
 
-- CLI interface for daemon control, devices, pairing, clipboard, and transfers
-- Ability to connect and communicate with multiple devices
-- File transfer between devices
-- Clipboard synchronization between devices
+Manual interoperability testing against a real KDE Connect (Android/desktop)
+installation has not yet been performed; see
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#9-known-gaps) for the current
+list of gaps.
 
 ### CLI interface
 
@@ -35,15 +40,23 @@ token as the daemon. For development, `MYCONNECT_API_URL` and
 
 ### Project structure
 
-MyConnect is a single Cargo package with a shared library and separate binary
-entry points:
+MyConnect is a single Cargo package with a shared library and a thin binary
+entry point:
 
 ```text
 src/
-├── application.rs          # frontend-independent application API
-├── lib.rs                  # shared library
+├── lib.rs           # shared library
+├── protocol/        # wire packet models and bounded framing
+├── config/          # persistent identity, API token, peer trust
+├── transport/        # UDP discovery, TCP/TLS, auxiliary payload connections
+├── device.rs         # device registry and snapshots
+├── plugins/           # fixed packet routing: ping, clipboard, share
+├── application(.rs/*) # orchestration: pairing/transfer state machines, event bus
+├── clipboard.rs        # clipboard service trait + in-memory implementation
+├── api.rs               # authenticated local HTTP control plane
+├── client.rs             # HTTP client used by the CLI
 └── bin/
-    └── myconnect/          # CLI binary
+    └── myconnect/        # CLI binary
         ├── cli.rs
         └── main.rs
 ```
@@ -51,7 +64,9 @@ src/
 Keeping behavior in the library lets other frontends use the same application
 API. A GUI can be introduced later as another binary, for example at
 `src/bin/myconnect-gui/main.rs`, without coupling GUI dependencies to the CLI
-entry point.
+entry point. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for module
+boundaries, data flow, the full HTTP API, and the pairing/transfer state
+machines.
 
 Run the CLI with:
 
@@ -67,10 +82,11 @@ Use `RUST_LOG` to control log output, for example
 All commands except `run` communicate with the daemon through its authenticated
 local HTTP API.
 
-Protocol and Rust ecosystem research is recorded in
-[`docs/KDECONNECT_PROTOCOL_RESEARCH.md`](docs/KDECONNECT_PROTOCOL_RESEARCH.md).
-The ordered implementation handoff is in
-[`docs/HANDOFF_PLAN.md`](docs/HANDOFF_PLAN.md).
+The current architecture — module map, connection lifecycle, state machines,
+and HTTP API reference — is documented in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The original protocol
+research and the phase-by-phase implementation plan used to build the MVP are
+preserved for historical reference in [`docs/archive/`](docs/archive/).
 
 
 ### Tech stack and development guidelines
