@@ -8,6 +8,7 @@
 //! transport sockets, or CLI types, so it can be exercised without a
 //! connection or an application handle.
 
+pub mod clipboard;
 pub mod ping;
 
 use thiserror::Error;
@@ -26,8 +27,16 @@ pub struct PluginCapabilities {
 /// The fixed set of packet types this build can send and receive.
 pub fn capabilities() -> PluginCapabilities {
     PluginCapabilities {
-        incoming: vec![ping::PACKET_TYPE.to_owned()],
-        outgoing: vec![ping::PACKET_TYPE.to_owned()],
+        incoming: vec![
+            ping::PACKET_TYPE.to_owned(),
+            clipboard::PACKET_TYPE.to_owned(),
+            clipboard::CONNECT_PACKET_TYPE.to_owned(),
+        ],
+        outgoing: vec![
+            ping::PACKET_TYPE.to_owned(),
+            clipboard::PACKET_TYPE.to_owned(),
+            clipboard::CONNECT_PACKET_TYPE.to_owned(),
+        ],
     }
 }
 
@@ -35,6 +44,8 @@ pub fn capabilities() -> PluginCapabilities {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IncomingPluginPacket {
     Ping(ping::PingBody),
+    Clipboard(clipboard::ClipboardBody),
+    ClipboardConnect(clipboard::ClipboardConnectBody),
 }
 
 #[derive(Debug, Error)]
@@ -54,6 +65,10 @@ pub enum PluginDispatchError {
 pub fn dispatch_incoming(packet: &Packet) -> Result<IncomingPluginPacket, PluginDispatchError> {
     match packet.packet_type.as_str() {
         ping::PACKET_TYPE => Ok(IncomingPluginPacket::Ping(packet.body_as()?)),
+        clipboard::PACKET_TYPE => Ok(IncomingPluginPacket::Clipboard(packet.body_as()?)),
+        clipboard::CONNECT_PACKET_TYPE => {
+            Ok(IncomingPluginPacket::ClipboardConnect(packet.body_as()?))
+        }
         other => Err(PluginDispatchError::Unrecognized(other.to_owned())),
     }
 }
@@ -63,10 +78,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn advertises_ping_both_directions() {
+    fn advertises_ping_and_clipboard_both_directions() {
         let capabilities = capabilities();
-        assert_eq!(capabilities.incoming, vec![ping::PACKET_TYPE.to_owned()]);
-        assert_eq!(capabilities.outgoing, vec![ping::PACKET_TYPE.to_owned()]);
+        let expected = vec![
+            ping::PACKET_TYPE.to_owned(),
+            clipboard::PACKET_TYPE.to_owned(),
+            clipboard::CONNECT_PACKET_TYPE.to_owned(),
+        ];
+        assert_eq!(capabilities.incoming, expected);
+        assert_eq!(capabilities.outgoing, expected);
     }
 
     #[test]
@@ -85,6 +105,21 @@ mod tests {
         assert!(matches!(
             dispatch_incoming(&packet),
             Ok(IncomingPluginPacket::Ping(_))
+        ));
+    }
+
+    #[test]
+    fn clipboard_packets_dispatch_to_the_clipboard_handlers() {
+        let packet = clipboard::build_packet(1_u64, "hello".into()).unwrap();
+        assert!(matches!(
+            dispatch_incoming(&packet),
+            Ok(IncomingPluginPacket::Clipboard(_))
+        ));
+
+        let connect_packet = clipboard::build_connect_packet(1_u64, "hello".into(), 1).unwrap();
+        assert!(matches!(
+            dispatch_incoming(&connect_packet),
+            Ok(IncomingPluginPacket::ClipboardConnect(_))
         ));
     }
 }

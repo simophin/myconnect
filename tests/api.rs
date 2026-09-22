@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 use myconnect::{
     api::{ApiServer, ApiServerConfig},
     application::{ApplicationHandle, ClipboardSnapshot, Command, EventData, LocalDeviceSnapshot},
+    clipboard::InMemoryClipboard,
     config::{ApiToken, FilesystemTrustStore},
     device::DeviceRegistry,
     protocol::{DeviceType, IdentityBody},
@@ -35,6 +36,7 @@ impl TestServer {
             8,
             b"test-local-pubkey".to_vec(),
             Arc::new(FilesystemTrustStore::new(directory.path())),
+            InMemoryClipboard::shared(),
             4,
             4,
         )
@@ -92,6 +94,29 @@ async fn request(server: &TestServer, method: &str, path: &str, authenticated: b
     };
     let request = format!(
         "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{authorization}Connection: close\r\nContent-Length: 0\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    timeout(Duration::from_secs(2), stream.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    String::from_utf8(response).unwrap()
+}
+
+async fn request_with_body(
+    server: &TestServer,
+    method: &str,
+    path: &str,
+    json_body: &str,
+) -> String {
+    let mut stream = TcpStream::connect(server.server.local_addr())
+        .await
+        .unwrap();
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{}Content-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{json_body}",
+        server.authorization(),
+        json_body.len(),
     );
     stream.write_all(request.as_bytes()).await.unwrap();
     let mut response = Vec::new();
@@ -264,6 +289,42 @@ async fn sse_delivers_typed_events_and_shutdown_cleans_up_clients() {
         .await
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn clipboard_get_and_put_round_trip_and_enforce_the_size_limit() {
+    let server = TestServer::start().await;
+
+    let empty = request(&server, "GET", "/api/v1/clipboard", true).await;
+    assert!(empty.starts_with("HTTP/1.1 200 OK"));
+    let empty_json: serde_json::Value = serde_json::from_str(body(&empty)).unwrap();
+    assert_eq!(empty_json["text"], "");
+
+    let put = request_with_body(
+        &server,
+        "PUT",
+        "/api/v1/clipboard",
+        r#"{"text":"hello from api"}"#,
+    )
+    .await;
+    assert!(put.starts_with("HTTP/1.1 200 OK"));
+    let put_json: serde_json::Value = serde_json::from_str(body(&put)).unwrap();
+    assert_eq!(put_json["text"], "hello from api");
+
+    let get = request(&server, "GET", "/api/v1/clipboard", true).await;
+    let get_json: serde_json::Value = serde_json::from_str(body(&get)).unwrap();
+    assert_eq!(get_json["text"], "hello from api");
+
+    // Oversized clipboard text is rejected with a typed, clipboard-specific
+    // problem, distinct from the generic request-body-too-large rejection
+    // (the API's default body limit is larger than the clipboard limit).
+    let oversized = format!(r#"{{"text":"{}"}}"#, "x".repeat(40 * 1024));
+    let oversized_response =
+        request_with_body(&server, "PUT", "/api/v1/clipboard", &oversized).await;
+    assert!(oversized_response.starts_with("HTTP/1.1 413 Payload Too Large"));
+    assert!(body(&oversized_response).contains("clipboard_text_too_large"));
+
+    server.server.shutdown().await.unwrap();
 }
 
 #[test]

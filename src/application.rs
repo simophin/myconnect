@@ -6,6 +6,7 @@ use tracing::info;
 
 use crate::{
     api::{ApiServer, ApiServerConfig, DEFAULT_API_PORT},
+    clipboard::InMemoryClipboard,
     config::{ApiToken, FilesystemTrustStore, LocalIdentity, TrustStore, default_config_dir},
     plugins,
     protocol::DeviceType,
@@ -22,10 +23,10 @@ mod state;
 pub use events::{ApplicationEvent, EventBus, EventBusError, EventData};
 pub use service::{ApplicationError, ApplicationHandle, ApplicationService};
 pub use state::{
-    ClipboardSnapshot, Command, LocalDeviceSnapshot, OperationErrorCode, Pairing, PairingDirection,
-    PairingSnapshot, PairingStatus, PairingTransitionError, Query, QueryResult, StatusSnapshot,
-    Transfer, TransferDirection, TransferProgressError, TransferSnapshot, TransferStatus,
-    TransferTransitionError,
+    ClipboardSnapshot, Command, LocalDeviceSnapshot, MAX_CLIPBOARD_TEXT_BYTES, OperationErrorCode,
+    Pairing, PairingDirection, PairingSnapshot, PairingStatus, PairingTransitionError, Query,
+    QueryResult, StatusSnapshot, Transfer, TransferDirection, TransferProgressError,
+    TransferSnapshot, TransferStatus, TransferTransitionError,
 };
 
 /// Options for starting the MyConnect service.
@@ -62,6 +63,7 @@ pub async fn run_service(request: RunRequest) -> Result<()> {
         8,
         local_public_key_der,
         trust_store.clone(),
+        InMemoryClipboard::shared(),
         32,
         256,
     )?;

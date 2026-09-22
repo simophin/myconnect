@@ -13,6 +13,7 @@ use myconnect::{
         ApplicationHandle, ApplicationService, Command, EventData, LocalDeviceSnapshot,
         PairingDirection, PairingStatus, Query, QueryResult,
     },
+    clipboard::InMemoryClipboard,
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     device::DeviceReachability,
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
@@ -53,6 +54,7 @@ fn peer(name: &str) -> Peer {
         8,
         public_key_der,
         trust_store.clone(),
+        InMemoryClipboard::shared(),
         32,
         128,
     )
@@ -274,6 +276,7 @@ fn peer_reusing(
         8,
         public_key_der,
         trust_store.clone(),
+        InMemoryClipboard::shared(),
         32,
         128,
     )

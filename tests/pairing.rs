@@ -7,6 +7,7 @@ use myconnect::{
         ApplicationError, ApplicationEvent, ApplicationHandle, ApplicationService, Command,
         EventData, LocalDeviceSnapshot, PairingDirection, PairingStatus, Query, QueryResult,
     },
+    clipboard::InMemoryClipboard,
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     protocol::{DeviceType, IdentityBody, Packet, PairingBody},
     transport::tls::subject_public_key_info,
@@ -42,6 +43,7 @@ fn harness() -> Harness {
         8,
         local_public_key,
         trust_store.clone(),
+        InMemoryClipboard::shared(),
         8,
         32,
     )

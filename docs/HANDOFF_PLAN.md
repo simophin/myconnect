@@ -430,6 +430,8 @@ Acceptance criteria:
 
 ### Phase 9: Text clipboard
 
+**Status: complete (2026-09-22).**
+
 Deliverables:
 
 1. Implement `kdeconnect.clipboard` and `kdeconnect.clipboard.connect` packet

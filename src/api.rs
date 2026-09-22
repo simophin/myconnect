@@ -35,8 +35,8 @@ use uuid::Uuid;
 
 use crate::{
     application::{
-        ApplicationError, ApplicationEvent, ApplicationService, Command, PairingSnapshot, Query,
-        QueryResult, StatusSnapshot,
+        ApplicationError, ApplicationEvent, ApplicationService, ClipboardSnapshot, Command,
+        PairingSnapshot, Query, QueryResult, StatusSnapshot,
     },
     config::ApiToken,
     device::DeviceSnapshot,
@@ -198,6 +198,7 @@ fn router(state: ApiState, token: ApiToken, config: &ApiServerConfig) -> Router 
             get(get_pairing).delete(delete_pairing),
         )
         .route("/pairings/{pairing_id}/accept", post(post_pairing_accept))
+        .route("/clipboard", get(get_clipboard).put(put_clipboard))
         .route("/events", get(get_events))
         .fallback(api_not_found)
         .method_not_allowed_fallback(method_not_allowed)
@@ -389,6 +390,35 @@ async fn delete_pairing(
     Ok(Json(pairing))
 }
 
+async fn get_clipboard(
+    State(state): State<ApiState>,
+) -> Result<Json<ClipboardSnapshot>, ApiProblem> {
+    match state
+        .application
+        .query(Query::Clipboard)
+        .map_err(map_error)?
+    {
+        QueryResult::Clipboard(clipboard) => Ok(Json(clipboard)),
+        _ => Err(ApiProblem::internal()),
+    }
+}
+
+#[derive(Deserialize)]
+struct SetClipboardRequest {
+    text: String,
+}
+
+async fn put_clipboard(
+    State(state): State<ApiState>,
+    Json(request): Json<SetClipboardRequest>,
+) -> Result<Json<ClipboardSnapshot>, ApiProblem> {
+    let clipboard = state
+        .application
+        .set_clipboard(request.text)
+        .map_err(map_error)?;
+    Ok(Json(clipboard))
+}
+
 async fn get_events(
     State(state): State<ApiState>,
 ) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
@@ -476,6 +506,11 @@ fn map_error(error: ApplicationError) -> ApiProblem {
         ApplicationError::InvalidPairingState | ApplicationError::InvalidTransition(_) => {
             ApiProblem::new(StatusCode::CONFLICT, "Conflict", "invalid_pairing_state")
         }
+        ApplicationError::ClipboardTextTooLarge { .. } => ApiProblem::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Payload too large",
+            "clipboard_text_too_large",
+        ),
         _ => ApiProblem::internal(),
     }
 }

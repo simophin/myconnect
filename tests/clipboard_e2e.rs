@@ -1,6 +1,7 @@
-//! End-to-end ping vertical slice: LAN discovery, protocol-v8 TLS pairing,
-//! and encrypted plugin dispatch of `kdeconnect.ping`, plus capability
-//! filtering that rejects a ping to a peer that never advertised support.
+//! End-to-end text clipboard synchronization: LAN discovery, protocol-v8
+//! TLS pairing, and encrypted `kdeconnect.clipboard` /
+//! `kdeconnect.clipboard.connect` dispatch between two in-process peers,
+//! plus the stale-timestamp, duplicate-content, and feedback-loop guards.
 
 use std::{
     net::{Ipv4Addr, SocketAddr},
@@ -9,10 +10,7 @@ use std::{
 };
 
 use myconnect::{
-    application::{
-        ApplicationError, ApplicationHandle, ApplicationService, Command, LocalDeviceSnapshot,
-        Query, QueryResult,
-    },
+    application::{ApplicationHandle, ApplicationService, Command, LocalDeviceSnapshot},
     clipboard::InMemoryClipboard,
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     device::DeviceReachability,
@@ -62,9 +60,9 @@ fn peer(name: &str) -> Peer {
     }
 }
 
-/// A `LocalDeviceInfo` that advertises the ping capability in both
-/// directions, as production code does via `plugins::capabilities()`.
-fn local_with_ping(device_id: &str, name: &str) -> LocalDeviceInfo {
+/// A `LocalDeviceInfo` that advertises every registered plugin capability,
+/// as production code does via `plugins::capabilities()`.
+fn local(device_id: &str, name: &str) -> LocalDeviceInfo {
     let capabilities = plugins::capabilities();
     LocalDeviceInfo {
         device_id: device_id.into(),
@@ -72,18 +70,6 @@ fn local_with_ping(device_id: &str, name: &str) -> LocalDeviceInfo {
         device_type: DeviceType::Desktop,
         incoming_capabilities: capabilities.incoming,
         outgoing_capabilities: capabilities.outgoing,
-    }
-}
-
-/// A `LocalDeviceInfo` that advertises no plugin capabilities at all, used
-/// to prove capability filtering rejects an outgoing ping.
-fn local_without_capabilities(device_id: &str, name: &str) -> LocalDeviceInfo {
-    LocalDeviceInfo {
-        device_id: device_id.into(),
-        device_name: name.into(),
-        device_type: DeviceType::Desktop,
-        incoming_capabilities: Vec::new(),
-        outgoing_capabilities: Vec::new(),
     }
 }
 
@@ -112,8 +98,8 @@ async fn wait_for_reachability(
 ) {
     timeout(Duration::from_secs(3), async {
         loop {
-            if let QueryResult::Device(Some(device)) = application
-                .query(Query::Device {
+            if let myconnect::application::QueryResult::Device(Some(device)) = application
+                .query(myconnect::application::Query::Device {
                     device_id: device_id.into(),
                 })
                 .unwrap()
@@ -131,8 +117,8 @@ async fn wait_for_reachability(
 async fn wait_for_paired(application: &ApplicationHandle, device_id: &str, expected: bool) {
     timeout(Duration::from_secs(3), async {
         loop {
-            if let QueryResult::Device(Some(device)) = application
-                .query(Query::Device {
+            if let myconnect::application::QueryResult::Device(Some(device)) = application
+                .query(myconnect::application::Query::Device {
                     device_id: device_id.into(),
                 })
                 .unwrap()
@@ -147,11 +133,13 @@ async fn wait_for_paired(application: &ApplicationHandle, device_id: &str, expec
     .unwrap();
 }
 
-async fn wait_for_ping(application: &ApplicationHandle, device_id: &str, expected_message: &str) {
+async fn wait_for_clipboard_text(application: &ApplicationHandle, expected_text: &str) {
     timeout(Duration::from_secs(3), async {
         loop {
-            if let Some(body) = application.last_ping_received(device_id)
-                && body.message.as_deref() == Some(expected_message)
+            if let myconnect::application::QueryResult::Clipboard(clipboard) = application
+                .query(myconnect::application::Query::Clipboard)
+                .unwrap()
+                && clipboard.text == expected_text
             {
                 break;
             }
@@ -160,6 +148,25 @@ async fn wait_for_ping(application: &ApplicationHandle, device_id: &str, expecte
     })
     .await
     .unwrap();
+}
+
+/// Drain every event currently queued for a subscriber and count how many
+/// are `clipboard.changed`. The bus also carries device lifecycle events
+/// from periodic discovery announcements, which must not be mistaken for a
+/// clipboard feedback loop.
+fn count_clipboard_events(
+    events: &mut tokio::sync::broadcast::Receiver<myconnect::application::ApplicationEvent>,
+) -> usize {
+    let mut count = 0;
+    while let Ok(event) = events.try_recv() {
+        if matches!(
+            event.event,
+            myconnect::application::EventData::ClipboardChanged(_)
+        ) {
+            count += 1;
+        }
+    }
+    count
 }
 
 async fn pair(a: &ApplicationHandle, b: &ApplicationHandle, a_id: &str, b_id: &str) {
@@ -182,7 +189,7 @@ async fn pair(a: &ApplicationHandle, b: &ApplicationHandle, a_id: &str, b_id: &s
 }
 
 #[tokio::test]
-async fn discovery_pairing_and_ping_succeed_over_encrypted_dispatch() {
+async fn discovery_pairing_and_clipboard_sync_are_bidirectional() {
     let a = peer("Peer A");
     let b = peer("Peer B");
     let a_id = a.identity.device_id().to_owned();
@@ -192,7 +199,7 @@ async fn discovery_pairing_and_ping_succeed_over_encrypted_dispatch() {
 
     let a_service = LanService::start(
         test_config(a_udp, b_udp),
-        local_with_ping(&a_id, "Peer A"),
+        local(&a_id, "Peer A"),
         a.application.clone(),
         a.commands,
         a.identity.clone(),
@@ -203,7 +210,7 @@ async fn discovery_pairing_and_ping_succeed_over_encrypted_dispatch() {
     .unwrap();
     let b_service = LanService::start(
         test_config(b_udp, a_udp),
-        local_with_ping(&b_id, "Peer B"),
+        local(&b_id, "Peer B"),
         b.application.clone(),
         b.commands,
         b.identity.clone(),
@@ -216,35 +223,36 @@ async fn discovery_pairing_and_ping_succeed_over_encrypted_dispatch() {
     wait_for_reachability(&a.application, &b_id, DeviceReachability::Connected).await;
     wait_for_reachability(&b.application, &a_id, DeviceReachability::Connected).await;
 
-    // Before pairing, a ping must not be delivered even though both sides
-    // are connected and capability-compatible.
-    assert!(matches!(
-        a.application.send_ping(&b_id, Some("too early".into())),
-        Err(ApplicationError::NotPaired)
-    ));
-
     pair(&a.application, &b.application, &a_id, &b_id).await;
 
-    // Now that both devices are paired and each advertised
-    // `kdeconnect.ping`, a ping sent over the TLS-protected connection must
-    // be decoded and dispatched to the plugin handler on the other side.
-    a.application
-        .send_ping(&b_id, Some("hello from A".into()))
-        .unwrap();
-    wait_for_ping(&b.application, &a_id, "hello from A").await;
+    // Local-to-remote: A sets its clipboard and B observes the same text
+    // over the encrypted connection.
+    a.application.set_clipboard("hello from A".into()).unwrap();
+    wait_for_clipboard_text(&b.application, "hello from A").await;
 
-    // And the reverse direction, proving the dispatch path is symmetric.
+    // Remote-to-local: B sets its clipboard and A observes it, proving the
+    // dispatch path is symmetric.
+    b.application.set_clipboard("hello from B".into()).unwrap();
+    wait_for_clipboard_text(&a.application, "hello from B").await;
+
+    // Setting the same text again on B must not disturb A (duplicate
+    // content is ignored, not resent). The bus also carries unrelated
+    // device lifecycle events from periodic discovery announcements, so
+    // only clipboard events are counted.
+    let mut a_events = a.application.subscribe();
     b.application
-        .send_ping(&a_id, Some("hello from B".into()))
-        .unwrap();
-    wait_for_ping(&a.application, &b_id, "hello from B").await;
+        .set_clipboard("hello from B".into())
+        .expect("setting identical text is a no-op, not an error");
+    // Give any (unwanted) event a moment to arrive before asserting none did.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(count_clipboard_events(&mut a_events), 0);
 
     a_service.shutdown().await.unwrap();
     b_service.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn capability_filtering_prevents_sending_ping_to_a_peer_that_never_advertised_it() {
+async fn remote_clipboard_update_is_not_echoed_back_to_its_source() {
     let a = peer("Peer A");
     let b = peer("Peer B");
     let a_id = a.identity.device_id().to_owned();
@@ -254,7 +262,7 @@ async fn capability_filtering_prevents_sending_ping_to_a_peer_that_never_adverti
 
     let a_service = LanService::start(
         test_config(a_udp, b_udp),
-        local_with_ping(&a_id, "Peer A"),
+        local(&a_id, "Peer A"),
         a.application.clone(),
         a.commands,
         a.identity.clone(),
@@ -263,10 +271,9 @@ async fn capability_filtering_prevents_sending_ping_to_a_peer_that_never_adverti
     )
     .await
     .unwrap();
-    // B advertises no plugin capabilities at all.
     let b_service = LanService::start(
         test_config(b_udp, a_udp),
-        local_without_capabilities(&b_id, "Peer B"),
+        local(&b_id, "Peer B"),
         b.application.clone(),
         b.commands,
         b.identity.clone(),
@@ -278,18 +285,20 @@ async fn capability_filtering_prevents_sending_ping_to_a_peer_that_never_adverti
 
     wait_for_reachability(&a.application, &b_id, DeviceReachability::Connected).await;
     wait_for_reachability(&b.application, &a_id, DeviceReachability::Connected).await;
-
     pair(&a.application, &b.application, &a_id, &b_id).await;
 
-    // B is paired and connected, but never advertised `kdeconnect.ping` in
-    // its incoming capabilities, so sending must be refused with a typed
-    // rejection rather than silently dropped or delivered anyway.
-    assert!(matches!(
-        a.application
-            .send_ping(&b_id, Some("should not send".into())),
-        Err(ApplicationError::UnsupportedByPeer)
-    ));
-    assert_eq!(b.application.last_ping_received(&a_id), None);
+    // B receives an update that originated from A. B must apply it locally
+    // without bouncing it straight back to A, which would otherwise be an
+    // infinite feedback loop between exactly two paired peers.
+    let mut a_events = a.application.subscribe();
+    a.application.set_clipboard("from A".into()).unwrap();
+    wait_for_clipboard_text(&b.application, "from A").await;
+
+    // A must not observe a second `clipboard.changed` event caused by its
+    // own content bouncing back from B. The first, expected event (from A's
+    // own local `set_clipboard` call) is drained separately below.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(count_clipboard_events(&mut a_events), 1);
 
     a_service.shutdown().await.unwrap();
     b_service.shutdown().await.unwrap();

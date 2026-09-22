@@ -248,6 +248,15 @@ pub enum TransferProgressError {
     },
 }
 
+/// Conservative upper bound on synchronized clipboard text, in UTF-8 bytes.
+/// Text clipboard content is small by nature; this bound exists to keep a
+/// misbehaving or malicious peer from forcing unbounded allocation or
+/// unbounded API payloads. Oversized content is rejected with a typed error
+/// rather than silently truncated or accepted. Kept below the API's default
+/// request body limit so the API surfaces the clipboard-specific error
+/// rather than a generic body-too-large rejection.
+pub const MAX_CLIPBOARD_TEXT_BYTES: usize = 32 * 1024;
+
 /// Immutable view of synchronized text clipboard state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -268,7 +277,6 @@ pub enum Command {
     CancelPairing { pairing_id: Uuid },
     StartTransfer { device_id: String, file: PathBuf },
     CancelTransfer { transfer_id: Uuid },
-    SetClipboard { text: String },
 }
 
 /// Transport-independent reads accepted by the application core.
