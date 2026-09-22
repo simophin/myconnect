@@ -1,0 +1,1 @@
+{"id":0,"type":"kdeconnect.identity","body":{"deviceId":"740bd4b9b4184ee497d6caf1da8151be","deviceName":"FOSS Phone","deviceType":"phone","incomingCapabilities":["kdeconnect.mock.echo","kdeconnect.mock.transfer"],"outgoingCapabilities":["kdeconnect.mock.echo","kdeconnect.mock.transfer"],"protocolVersion":8}}

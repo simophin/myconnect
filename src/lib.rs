@@ -4,3 +4,4 @@
 //! future GUI can share the same behavior.
 
 pub mod application;
+pub mod protocol;

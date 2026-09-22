@@ -218,6 +218,8 @@ at the listed deliverable boundaries and keep all intermediate commits green.
 
 ### Phase 1: Wire packet foundation
 
+**Status: complete (2026-09-22).**
+
 Deliverables:
 
 1. Add `serde`, `serde_json`, and `thiserror`.
