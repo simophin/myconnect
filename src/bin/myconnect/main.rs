@@ -10,8 +10,7 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     init_tracing();
 
-    let request = Cli::parse().into();
-    myconnect::application::execute(request).await
+    Cli::parse().execute().await
 }
 
 fn init_tracing() {

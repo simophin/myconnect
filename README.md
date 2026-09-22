@@ -10,7 +10,7 @@ Provides a desktop application for MacOS/Linux/Windows.
 
 The Minimum Viable Product (MVP) for MyConnect includes the following features:
 
-- CLI interface with basic commands (`run`, `send`)
+- CLI interface for daemon control, devices, pairing, clipboard, and transfers
 - Ability to connect and communicate with multiple devices
 - File transfer between devices
 - Clipboard synchronization between devices
@@ -21,8 +21,17 @@ The CLI interface is command based, allowing users to interact with MyConnect th
 
 #### Example Commands
 
-- `myconnect run` - Run the MyConnect service, where the clipboard is synchronized between devices, and file receiving is enabled. The file will be saved to the default download directory, or a custom directory if specified.
-- `myconnect send <device> <file>` - Send a file to a specific device. This command does not handle clipboard synchronization, nor will it receive files.
+- `myconnect run` - Run the authenticated local daemon in the foreground.
+- `myconnect devices [--watch]` - List devices and optionally follow changes.
+- `myconnect pair <device-id>` - Start pairing with a discovered device.
+- `myconnect pair accept|reject <pairing-id>` - Resolve a pairing request.
+- `myconnect unpair <device-id>` - Remove trust and forget a device.
+- `myconnect send <device-id> <file> [--watch]` - Stream a file to a device.
+- `myconnect clipboard get|set <text>|watch` - Control text synchronization.
+
+Add `--json` for machine-readable output. API clients use the same persistent
+token as the daemon. For development, `MYCONNECT_API_URL` and
+`MYCONNECT_API_TOKEN` override the loopback URL and stored token.
 
 ### Project structure
 
@@ -48,15 +57,15 @@ Run the CLI with:
 
 ```sh
 cargo run -- run
-cargo run -- send <device> <file>
+cargo run -- devices
+cargo run -- send <device-id> <file> --watch
 ```
 
 Use `RUST_LOG` to control log output, for example
 `RUST_LOG=myconnect=debug cargo run -- run`.
 
-The commands currently parse their arguments and reach the shared application
-layer; device discovery, connectivity, and transfers are the next implementation
-steps.
+All commands except `run` communicate with the daemon through its authenticated
+local HTTP API.
 
 Protocol and Rust ecosystem research is recorded in
 [`docs/KDECONNECT_PROTOCOL_RESEARCH.md`](docs/KDECONNECT_PROTOCOL_RESEARCH.md).

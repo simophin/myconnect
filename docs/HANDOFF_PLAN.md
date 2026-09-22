@@ -321,6 +321,8 @@ Do not expose the API on the LAN in the MVP.
 
 ### Phase 5: CLI as API client
 
+**Status: complete (2026-09-22).**
+
 Deliverables:
 
 1. Keep `myconnect run` as the foreground daemon command.

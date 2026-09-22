@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use anyhow::{Context, Result};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::{
     api::{ApiServer, ApiServerConfig, DEFAULT_API_PORT},
@@ -23,15 +23,6 @@ pub use state::{
     TransferTransitionError,
 };
 
-/// A request from any MyConnect frontend.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Request {
-    /// Start the long-running MyConnect service.
-    Run(RunRequest),
-    /// Send a file to a device.
-    Send(SendRequest),
-}
-
 /// Options for starting the MyConnect service.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RunRequest {
@@ -50,34 +41,7 @@ impl Default for RunRequest {
     }
 }
 
-/// Options for sending a file to a device.
-#[derive(Debug, PartialEq, Eq)]
-pub struct SendRequest {
-    /// Device name or identifier selected by the user.
-    pub device: String,
-    /// File to send.
-    pub file: PathBuf,
-}
-
-/// Execute a frontend request.
-///
-/// This is the seam shared by the CLI and future GUI binaries. Protocol,
-/// discovery, and transfer implementations will be connected here as they are
-/// introduced.
-pub async fn execute(request: Request) -> Result<()> {
-    match request {
-        Request::Run(request) => {
-            run_service(request).await?;
-        }
-        Request::Send(request) => {
-            warn!(device = %request.device, file = %request.file.display(), "file transfer is not implemented yet");
-        }
-    }
-
-    Ok(())
-}
-
-async fn run_service(request: RunRequest) -> Result<()> {
+pub async fn run_service(request: RunRequest) -> Result<()> {
     let config_dir = default_config_dir().context("could not determine configuration directory")?;
     let identity = LocalIdentity::load_or_create(&config_dir)?;
     let token = ApiToken::load_or_create(&config_dir)?;

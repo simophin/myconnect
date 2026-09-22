@@ -19,6 +19,10 @@ const TOKEN_LENGTH: usize = 64;
 pub struct ApiToken(String);
 
 impl ApiToken {
+    pub fn from_secret(value: impl Into<String>) -> Result<Self, ApiTokenError> {
+        Self::parse(value.into())
+    }
+
     pub fn load_or_create(config_dir: impl AsRef<Path>) -> Result<Self, ApiTokenError> {
         let config_dir = config_dir.as_ref();
         let path = config_dir.join(TOKEN_FILE);
