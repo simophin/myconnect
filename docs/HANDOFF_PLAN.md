@@ -244,6 +244,8 @@ Do not open sockets in this phase.
 
 ### Phase 2: Persistent identity and trust
 
+**Status: complete (2026-09-22).**
+
 Deliverables:
 
 1. Add `directories`, `uuid`, `rcgen`, `sha2`, and only the certificate parsing
