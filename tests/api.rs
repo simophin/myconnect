@@ -1,0 +1,272 @@
+use std::{sync::Arc, time::Duration};
+
+use myconnect::{
+    api::{ApiServer, ApiServerConfig},
+    application::{ApplicationHandle, ClipboardSnapshot, Command, EventData, LocalDeviceSnapshot},
+    config::ApiToken,
+    device::DeviceRegistry,
+    protocol::{DeviceType, IdentityBody},
+};
+use serde_json::Map;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+    time::timeout,
+};
+use tokio_util::sync::CancellationToken;
+
+struct TestServer {
+    _directory: tempfile::TempDir,
+    token: ApiToken,
+    application: ApplicationHandle,
+    commands: tokio::sync::mpsc::Receiver<Command>,
+    server: ApiServer,
+}
+
+impl TestServer {
+    async fn start() -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let token = ApiToken::load_or_create(directory.path()).unwrap();
+        let (application, commands) = ApplicationHandle::new(
+            LocalDeviceSnapshot {
+                device_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                device_name: "Test Device".into(),
+            },
+            8,
+            4,
+            4,
+        )
+        .unwrap();
+        let mut devices = DeviceRegistry::new();
+        devices
+            .discover(
+                &IdentityBody {
+                    device_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                    device_name: "Peer Phone".into(),
+                    device_type: DeviceType::Phone,
+                    incoming_capabilities: vec!["kdeconnect.clipboard".into()],
+                    outgoing_capabilities: vec!["kdeconnect.share.request".into()],
+                    protocol_version: 8,
+                    extra: Map::new(),
+                },
+                false,
+                10,
+            )
+            .unwrap();
+        application.replace_devices(devices).unwrap();
+        let server = ApiServer::start(
+            ApiServerConfig::new(0)
+                .unwrap()
+                .with_shutdown_timeout(Duration::from_secs(2)),
+            Arc::new(application.clone()),
+            token.clone(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert!(server.local_addr().ip().is_loopback());
+        Self {
+            _directory: directory,
+            token,
+            application,
+            commands,
+            server,
+        }
+    }
+
+    fn authorization(&self) -> String {
+        format!("Authorization: Bearer {}\r\n", self.token.expose_secret())
+    }
+}
+
+async fn request(server: &TestServer, method: &str, path: &str, authenticated: bool) -> String {
+    let mut stream = TcpStream::connect(server.server.local_addr())
+        .await
+        .unwrap();
+    let authorization = if authenticated {
+        server.authorization()
+    } else {
+        String::new()
+    };
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{authorization}Connection: close\r\nContent-Length: 0\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    timeout(Duration::from_secs(2), stream.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    String::from_utf8(response).unwrap()
+}
+
+fn body(response: &str) -> &str {
+    response.split_once("\r\n\r\n").unwrap().1
+}
+
+#[tokio::test]
+async fn control_plane_is_authenticated_and_runs_on_ephemeral_loopback() {
+    let mut server = TestServer::start().await;
+
+    let mut unauthorized_body = None;
+    for (method, path) in [
+        ("GET", "/api/v1/status"),
+        ("POST", "/api/v1/discovery"),
+        ("GET", "/api/v1/devices"),
+        ("GET", "/api/v1/devices/missing"),
+        ("GET", "/api/v1/events"),
+    ] {
+        let response = request(&server, method, path, false).await;
+        assert!(response.starts_with("HTTP/1.1 401 Unauthorized"));
+        assert!(
+            response
+                .to_ascii_lowercase()
+                .contains("content-type: application/problem+json")
+        );
+        match &unauthorized_body {
+            Some(expected) => assert_eq!(body(&response), expected),
+            None => unauthorized_body = Some(body(&response).to_owned()),
+        }
+    }
+
+    let status = request(&server, "GET", "/api/v1/status", true).await;
+    assert!(status.starts_with("HTTP/1.1 200 OK"));
+    assert!(status.to_ascii_lowercase().contains("x-request-id:"));
+    assert!(
+        !status
+            .to_ascii_lowercase()
+            .contains("access-control-allow-origin")
+    );
+    let status_json: serde_json::Value = serde_json::from_str(body(&status)).unwrap();
+    assert_eq!(status_json["protocolVersion"], 8);
+    assert_eq!(
+        status_json["localDevice"]["deviceId"],
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+
+    let devices = request(&server, "GET", "/api/v1/devices", true).await;
+    let devices_json: serde_json::Value = serde_json::from_str(body(&devices)).unwrap();
+    assert_eq!(devices_json.as_array().unwrap().len(), 1);
+    assert_eq!(devices_json[0]["deviceName"], "Peer Phone");
+    let device = request(
+        &server,
+        "GET",
+        "/api/v1/devices/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        true,
+    )
+    .await;
+    let device_json: serde_json::Value = serde_json::from_str(body(&device)).unwrap();
+    assert_eq!(device_json["reachability"], "discovered");
+    let missing = request(&server, "GET", "/api/v1/devices/missing", true).await;
+    assert!(missing.starts_with("HTTP/1.1 404 Not Found"));
+    assert!(body(&missing).contains("device_not_found"));
+    let wrong_method = request(&server, "POST", "/api/v1/status", true).await;
+    assert!(wrong_method.starts_with("HTTP/1.1 405 Method Not Allowed"));
+    assert!(
+        wrong_method
+            .to_ascii_lowercase()
+            .contains("content-type: application/problem+json")
+    );
+
+    let mut oversized_stream = TcpStream::connect(server.server.local_addr())
+        .await
+        .unwrap();
+    let oversized_request = format!(
+        "POST /api/v1/discovery HTTP/1.1\r\nHost: localhost\r\n{}Connection: close\r\nContent-Length: 65537\r\n\r\n",
+        server.authorization()
+    );
+    oversized_stream
+        .write_all(oversized_request.as_bytes())
+        .await
+        .unwrap();
+    let mut oversized_response = Vec::new();
+    timeout(
+        Duration::from_secs(2),
+        oversized_stream.read_to_end(&mut oversized_response),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let oversized_response = String::from_utf8(oversized_response).unwrap();
+    assert!(oversized_response.starts_with("HTTP/1.1 413 Payload Too Large"));
+    assert!(body(&oversized_response).contains("payload_too_large"));
+
+    let discovery = request(&server, "POST", "/api/v1/discovery", true).await;
+    assert!(discovery.starts_with("HTTP/1.1 202 Accepted"));
+    assert_eq!(
+        server.commands.recv().await,
+        Some(Command::AnnounceDiscovery)
+    );
+
+    server.server.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn sse_delivers_typed_events_and_shutdown_cleans_up_clients() {
+    let server = TestServer::start().await;
+    let mut stream = TcpStream::connect(server.server.local_addr())
+        .await
+        .unwrap();
+    let request = format!(
+        "GET /api/v1/events HTTP/1.1\r\nHost: localhost\r\n{}Connection: keep-alive\r\n\r\n",
+        server.authorization()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+
+    let mut response = Vec::new();
+    timeout(Duration::from_secs(2), async {
+        while !response.windows(4).any(|window| window == b"\r\n\r\n") {
+            let mut buffer = [0_u8; 512];
+            let read = stream.read(&mut buffer).await.unwrap();
+            assert!(read > 0);
+            response.extend_from_slice(&buffer[..read]);
+        }
+    })
+    .await
+    .unwrap();
+    assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 200 OK"));
+
+    server
+        .application
+        .event_bus()
+        .publish(EventData::ClipboardChanged(ClipboardSnapshot {
+            text: "event payload".into(),
+            updated_at: 12,
+            source_device_id: None,
+        }))
+        .unwrap();
+
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let mut buffer = [0_u8; 512];
+            let read = stream.read(&mut buffer).await.unwrap();
+            assert!(read > 0);
+            response.extend_from_slice(&buffer[..read]);
+            if response
+                .windows(b"event: clipboard.changed".len())
+                .any(|window| window == b"event: clipboard.changed")
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let response = String::from_utf8_lossy(&response);
+    assert!(response.contains("\"type\":\"clipboard.changed\""));
+    assert!(response.contains("\"sequence\":1"));
+
+    server.server.shutdown().await.unwrap();
+    let mut remaining = Vec::new();
+    timeout(Duration::from_secs(1), stream.read_to_end(&mut remaining))
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[test]
+fn kde_connect_ports_are_rejected() {
+    for port in 1716..=1764 {
+        assert!(ApiServerConfig::new(port).is_err());
+    }
+}

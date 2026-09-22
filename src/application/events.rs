@@ -38,6 +38,24 @@ pub enum EventData {
     ClipboardChanged(ClipboardSnapshot),
 }
 
+impl EventData {
+    pub fn event_type(&self) -> &'static str {
+        match self {
+            Self::DeviceDiscovered(_) => "device.discovered",
+            Self::DeviceConnected(_) => "device.connected",
+            Self::DeviceUpdated(_) => "device.updated",
+            Self::DeviceDisconnected(_) => "device.disconnected",
+            Self::PairingRequested(_) => "pairing.requested",
+            Self::PairingUpdated(_) => "pairing.updated",
+            Self::TransferStarted(_) => "transfer.started",
+            Self::TransferProgress(_) => "transfer.progress",
+            Self::TransferCompleted(_) => "transfer.completed",
+            Self::TransferFailed(_) => "transfer.failed",
+            Self::ClipboardChanged(_) => "clipboard.changed",
+        }
+    }
+}
+
 /// Sequenced event sent to API and other application clients.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

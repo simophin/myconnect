@@ -3,6 +3,7 @@
 //! Binary targets should stay thin and call into this library so the CLI and a
 //! future GUI can share the same behavior.
 
+pub mod api;
 pub mod application;
 pub mod config;
 pub mod device;

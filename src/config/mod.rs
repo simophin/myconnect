@@ -1,6 +1,7 @@
 //! Persistent local identity and peer trust configuration.
 
 mod identity;
+mod token;
 mod trust;
 
 use std::path::PathBuf;
@@ -8,6 +9,7 @@ use std::path::PathBuf;
 use directories::ProjectDirs;
 
 pub use identity::{IdentityError, LocalIdentity};
+pub use token::{ApiToken, ApiTokenError};
 pub use trust::{FilesystemTrustStore, TrustError, TrustStore, TrustedDevice};
 
 /// Return the platform-specific directory used for MyConnect configuration.

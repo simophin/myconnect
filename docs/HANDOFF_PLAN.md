@@ -292,6 +292,8 @@ Acceptance criteria:
 
 ### Phase 4: Local HTTP control plane
 
+**Status: complete (2026-09-22).**
+
 Deliverables:
 
 1. Add Axum and minimal Tower middleware.

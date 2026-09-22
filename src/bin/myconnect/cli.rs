@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use myconnect::api::DEFAULT_API_PORT;
 use myconnect::application::{Request, RunRequest, SendRequest};
 
 /// Connect and communicate with your devices.
@@ -18,6 +19,9 @@ enum Command {
         /// Directory in which received files will be stored.
         #[arg(long, value_name = "DIRECTORY")]
         download_dir: Option<PathBuf>,
+        /// Loopback port for the local control API.
+        #[arg(long, default_value_t = DEFAULT_API_PORT)]
+        api_port: u16,
     },
     /// Send a file to a device.
     Send {
@@ -31,7 +35,13 @@ enum Command {
 impl From<Cli> for Request {
     fn from(cli: Cli) -> Self {
         match cli.command {
-            Command::Run { download_dir } => Request::Run(RunRequest { download_dir }),
+            Command::Run {
+                download_dir,
+                api_port,
+            } => Request::Run(RunRequest {
+                download_dir,
+                api_port,
+            }),
             Command::Send { device, file } => Request::Send(SendRequest { device, file }),
         }
     }
@@ -52,6 +62,7 @@ mod tests {
             Request::from(cli),
             Request::Run(RunRequest {
                 download_dir: Some(PathBuf::from("/tmp")),
+                api_port: DEFAULT_API_PORT,
             })
         );
     }
