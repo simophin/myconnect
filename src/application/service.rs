@@ -22,6 +22,7 @@ use crate::device::DeviceRegistry;
 use crate::{
     config::{TrustError, TrustStore, TrustedDevice},
     device::DeviceSnapshot,
+    plugins::{self, ping::PingBody},
     protocol::{IdentityBody, Packet, PairingBody, verification_code},
     transport::tls::subject_public_key_info,
 };
@@ -68,6 +69,10 @@ struct ApplicationState {
     pairing_by_device: HashMap<String, Uuid>,
     transfers: BTreeMap<Uuid, TransferSnapshot>,
     clipboard: ClipboardSnapshot,
+    /// The most recent `kdeconnect.ping` body received from each paired
+    /// peer. This is an internal integration point for tests; it is not
+    /// exposed through the HTTP API or CLI.
+    last_ping_received: HashMap<String, PingBody>,
 }
 
 /// Cloneable application facade backed by bounded commands and snapshots.
@@ -116,6 +121,7 @@ impl ApplicationHandle {
                         updated_at: 0,
                         source_device_id: None,
                     },
+                    last_ping_received: HashMap::new(),
                 })),
                 commands,
                 events,
@@ -491,18 +497,95 @@ impl ApplicationHandle {
         Ok(snapshot)
     }
 
-    /// Dispatch a packet received on a registered connection. Only
-    /// `kdeconnect.pair` packets are handled here; unpaired devices cannot
-    /// trigger any other behavior, and paired-device plugin dispatch is
-    /// implemented starting in a later phase.
+    /// Dispatch a packet received on a registered connection.
+    ///
+    /// `kdeconnect.pair` packets are always handled, independent of pairing
+    /// state, since pairing itself establishes trust. Every other packet
+    /// type is routed to the fixed plugin registry in [`crate::plugins`]
+    /// only if the sending device is currently paired; unpaired connections
+    /// cannot trigger any other behavior.
     pub fn handle_peer_packet(&self, device_id: &str, packet: Packet) {
-        if packet.packet_type != "kdeconnect.pair" {
+        if packet.packet_type == "kdeconnect.pair" {
+            let Ok(body) = packet.body_as::<PairingBody>() else {
+                return;
+            };
+            self.handle_pair_body(device_id, body, unix_seconds());
             return;
         }
-        let Ok(body) = packet.body_as::<PairingBody>() else {
+
+        let paired = self
+            .state
+            .read()
+            .ok()
+            .and_then(|state| state.devices.get(device_id))
+            .is_some_and(|device| device.paired);
+        if !paired {
             return;
+        }
+
+        match plugins::dispatch_incoming(&packet) {
+            Ok(plugins::IncomingPluginPacket::Ping(body)) => self.handle_ping(device_id, body),
+            Err(_) => {}
+        }
+    }
+
+    fn handle_ping(&self, device_id: &str, body: PingBody) {
+        if let Ok(mut state) = self.state.write() {
+            state.last_ping_received.insert(device_id.to_owned(), body);
+        }
+    }
+
+    /// Send a `kdeconnect.ping` packet to a paired, connected device.
+    ///
+    /// This is an internal integration point for tests, not a public MVP
+    /// API surface: it is not wired to any HTTP endpoint. Sending is
+    /// refused, with a typed error, unless the device is paired, connected,
+    /// and has advertised `kdeconnect.ping` in its `incomingCapabilities`.
+    pub fn send_ping(
+        &self,
+        device_id: &str,
+        message: Option<String>,
+    ) -> Result<(), ApplicationError> {
+        let connection = {
+            let state = self.read_state()?;
+            let device = state
+                .devices
+                .get(device_id)
+                .ok_or(ApplicationError::UnknownDevice)?;
+            if !device.paired {
+                return Err(ApplicationError::NotPaired);
+            }
+            if !device
+                .incoming_capabilities
+                .iter()
+                .any(|capability| capability == plugins::ping::PACKET_TYPE)
+            {
+                return Err(ApplicationError::UnsupportedByPeer);
+            }
+            state
+                .connections
+                .get(device_id)
+                .cloned()
+                .ok_or(ApplicationError::DeviceNotConnected)?
         };
-        self.handle_pair_body(device_id, body, unix_seconds());
+
+        let packet = plugins::ping::build_packet(unix_millis(), message)
+            .map_err(|_| ApplicationError::Internal)?;
+        connection
+            .packets
+            .try_send(packet)
+            .map_err(|_| ApplicationError::DeviceNotConnected)
+    }
+
+    /// The most recent `kdeconnect.ping` body received from `device_id`, if
+    /// any. Internal test/integration helper; see [`Self::send_ping`].
+    pub fn last_ping_received(&self, device_id: &str) -> Option<PingBody> {
+        self.state
+            .read()
+            .ok()?
+            .last_ping_received
+            .get(device_id)
+            .cloned()
     }
 
     fn handle_pair_body(&self, device_id: &str, body: PairingBody, received_at: i64) {
@@ -926,6 +1009,10 @@ pub enum ApplicationError {
     PairingInProgress,
     #[error("device does not have a live connection")]
     DeviceNotConnected,
+    #[error("device is not paired")]
+    NotPaired,
+    #[error("peer has not advertised support for this packet type")]
+    UnsupportedByPeer,
     #[error("peer certificate is invalid")]
     InvalidPeerCertificate,
     #[error("unknown pairing")]
@@ -1028,5 +1115,84 @@ mod tests {
             handle.start_outgoing_pairing("missing"),
             Err(ApplicationError::UnknownDevice)
         ));
+    }
+
+    fn make_identity(device_id: &str, incoming_capabilities: Vec<String>) -> IdentityBody {
+        IdentityBody {
+            device_id: device_id.to_owned(),
+            device_name: "Peer".into(),
+            device_type: crate::protocol::DeviceType::Phone,
+            incoming_capabilities,
+            outgoing_capabilities: Vec::new(),
+            protocol_version: 8,
+            extra: Default::default(),
+        }
+    }
+
+    #[test]
+    fn unpaired_devices_cannot_exchange_pings() {
+        let (handle, _commands) = handle();
+        let device_id = "740bd4b9b4184ee497d6caf1da8151be";
+        let identity = make_identity(device_id, vec![plugins::ping::PACKET_TYPE.into()]);
+        handle.discover_device(&identity, false, 1).unwrap();
+        let (tx, _rx) = mpsc::channel(4);
+        handle
+            .register_connection(device_id, vec![1, 2, 3], 8, tx, CancellationToken::new(), 1)
+            .unwrap();
+
+        // Sending is refused before pairing, with a typed error rather than
+        // a silent no-op.
+        assert!(matches!(
+            handle.send_ping(device_id, None),
+            Err(ApplicationError::NotPaired)
+        ));
+
+        // An incoming ping from an unpaired connection must not be
+        // delivered to the plugin handler.
+        let packet = plugins::ping::build_packet(1_u64, Some("hi".into())).unwrap();
+        handle.handle_peer_packet(device_id, packet);
+        assert_eq!(handle.last_ping_received(device_id), None);
+    }
+
+    #[test]
+    fn capability_filtering_rejects_unsupported_peers_and_paired_devices_exchange_pings() {
+        let (handle, _commands) = handle();
+        let device_id = "740bd4b9b4184ee497d6caf1da8151be";
+        let identity = make_identity(device_id, Vec::new());
+        handle.discover_device(&identity, true, 1).unwrap();
+        let (tx, mut rx) = mpsc::channel(4);
+        handle
+            .register_connection(device_id, vec![1, 2, 3], 8, tx, CancellationToken::new(), 1)
+            .unwrap();
+
+        // Paired and connected, but the peer never advertised the ping
+        // capability: sending must be refused with a typed rejection, not a
+        // silent no-op or a panic.
+        assert!(matches!(
+            handle.send_ping(device_id, None),
+            Err(ApplicationError::UnsupportedByPeer)
+        ));
+
+        // The peer re-announces (e.g. on reconnect) advertising the
+        // capability.
+        let identity_with_ping = make_identity(device_id, vec![plugins::ping::PACKET_TYPE.into()]);
+        handle
+            .discover_device(&identity_with_ping, true, 2)
+            .unwrap();
+
+        handle.send_ping(device_id, Some("hello".into())).unwrap();
+        let sent = rx.try_recv().unwrap();
+        assert_eq!(sent.packet_type, plugins::ping::PACKET_TYPE);
+
+        let incoming = plugins::ping::build_packet(2_u64, Some("pong".into())).unwrap();
+        handle.handle_peer_packet(device_id, incoming);
+        assert_eq!(
+            handle
+                .last_ping_received(device_id)
+                .unwrap()
+                .message
+                .as_deref(),
+            Some("pong")
+        );
     }
 }

@@ -410,6 +410,8 @@ the handshake signature.
 
 ### Phase 8: Ping vertical slice
 
+**Status: complete (2026-09-22).**
+
 Deliverables:
 
 1. Implement plugin capability registration and packet routing only to the

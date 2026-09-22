@@ -7,6 +7,7 @@ use tracing::info;
 use crate::{
     api::{ApiServer, ApiServerConfig, DEFAULT_API_PORT},
     config::{ApiToken, FilesystemTrustStore, LocalIdentity, TrustStore, default_config_dir},
+    plugins,
     protocol::DeviceType,
     transport::{
         lan::{LanConfig, LanService, LocalDeviceInfo},
@@ -65,14 +66,15 @@ pub async fn run_service(request: RunRequest) -> Result<()> {
         256,
     )?;
     let shutdown = CancellationToken::new();
+    let capabilities = plugins::capabilities();
     let lan = LanService::start(
         LanConfig::default(),
         LocalDeviceInfo {
             device_id: identity.device_id().to_owned(),
             device_name: "MyConnect".to_owned(),
             device_type: DeviceType::Desktop,
-            incoming_capabilities: Vec::new(),
-            outgoing_capabilities: Vec::new(),
+            incoming_capabilities: capabilities.incoming,
+            outgoing_capabilities: capabilities.outgoing,
         },
         application.clone(),
         commands,
