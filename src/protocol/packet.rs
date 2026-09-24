@@ -101,10 +101,7 @@ impl IdentityBody {
             return Err(IdentityValidationError::DeviceId);
         }
 
-        let name_len = self.device_name.chars().count();
-        if !(1..=32).contains(&name_len)
-            || self.device_name.chars().any(is_forbidden_name_character)
-        {
+        if !is_valid_device_name(&self.device_name) {
             return Err(IdentityValidationError::DeviceName);
         }
 
@@ -118,7 +115,13 @@ impl IdentityBody {
     }
 }
 
-fn is_forbidden_name_character(character: char) -> bool {
+/// Whether `name` fits the identity schema: 1 to 32 characters, none of
+/// them reserved punctuation.
+pub fn is_valid_device_name(name: &str) -> bool {
+    (1..=32).contains(&name.chars().count()) && !name.chars().any(is_forbidden_name_character)
+}
+
+pub(crate) fn is_forbidden_name_character(character: char) -> bool {
     matches!(
         character,
         '"' | '\'' | ',' | ';' | ':' | '.' | '!' | '?' | '(' | ')' | '[' | ']' | '<' | '>'

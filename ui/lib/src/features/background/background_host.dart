@@ -8,6 +8,7 @@ import 'package:myconnect_ui/src/core/api/models/pairing.dart';
 import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 import 'package:myconnect_ui/src/core/providers.dart';
 import 'package:myconnect_ui/src/features/pairing/pairings_controller.dart';
+import 'package:myconnect_ui/src/features/settings/settings_controller.dart';
 import 'package:myconnect_ui/src/features/transfers/transfers_controller.dart';
 
 final _log = Logger('BackgroundHost');
@@ -15,8 +16,9 @@ final _log = Logger('BackgroundHost');
 /// Keeps the app, and with it the embedded daemon, running while the window
 /// is closed.
 ///
-/// Closing the window only hides it; the tray menu shows it again or quits.
-/// Quitting is the one path that stops the daemon. While the window is
+/// Closing the window only hides it, unless the user turned off the
+/// `closeToTray` setting; the tray menu shows it again or quits. Quitting is
+/// the one path that stops the daemon. While the window is
 /// hidden or unfocused, incoming pairing requests and received files raise a
 /// notification that brings the window back.
 ///
@@ -58,7 +60,7 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
     final shell = ref.read(desktopShellProvider);
     try {
       await shell.start(
-        onCloseRequested: () => unawaited(shell.hideWindow()),
+        onCloseRequested: () => unawaited(_close()),
         onShowRequested: () => unawaited(shell.showWindow()),
         onQuitRequested: () => unawaited(_quit()),
       );
@@ -71,6 +73,18 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
           .start(onActivated: () => unawaited(shell.showWindow()));
     } on Object catch (error) {
       _log.warning('Notifications unavailable: $error');
+    }
+  }
+
+  /// Hide the window, or quit if the user doesn't want the app to keep
+  /// running. Without settings (e.g. the daemon failed to start), hide, so
+  /// the tray stays the way out.
+  Future<void> _close() async {
+    final closeToTray = ref.read(settingsProvider).value?.closeToTray ?? true;
+    if (closeToTray) {
+      await ref.read(desktopShellProvider).hideWindow();
+    } else {
+      await _quit();
     }
   }
 
@@ -155,6 +169,8 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
 
   @override
   Widget build(BuildContext context) {
+    // Loaded up front so closing the window can honour `closeToTray`.
+    ref.listen(settingsProvider, (_, _) {});
     ref.listen(
       pendingIncomingPairingsProvider,
       (_, pending) => unawaited(_syncPairingNotifications(pending)),

@@ -7,7 +7,7 @@ use std::{
 use myconnect::{
     application::{
         ApplicationHandle, ApplicationService, Command, EventData, LocalDeviceSnapshot, Query,
-        QueryResult,
+        QueryResult, SettingsPatch,
     },
     clipboard::InMemoryClipboard,
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
@@ -114,6 +114,68 @@ async fn wait_for_reachability(
     })
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn a_renamed_device_is_seen_under_its_new_name() {
+    let a = peer("Peer A");
+    let b = peer("Peer B");
+    let a_id = a.identity.device_id().to_owned();
+    let b_id = b.identity.device_id().to_owned();
+    let a_udp = free_udp_addr();
+    let b_udp = free_udp_addr();
+    // Only the first periodic announcement goes out during the test, so the
+    // new name has to arrive in the announcement made on rename.
+    let a_service = LanService::start(
+        test_config(a_udp, b_udp).with_announce_interval(Duration::from_secs(60)),
+        local(&a_id, "Peer A"),
+        a.application.clone(),
+        a.commands,
+        a.identity.clone(),
+        a.trust_store.clone(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let b_service = LanService::start(
+        test_config(b_udp, a_udp).with_announce_interval(Duration::from_secs(60)),
+        local(&b_id, "Peer B"),
+        b.application.clone(),
+        b.commands,
+        b.identity.clone(),
+        b.trust_store.clone(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    wait_for_reachability(&b.application, &a_id, DeviceReachability::Connected).await;
+
+    a.application
+        .update_settings(SettingsPatch {
+            device_name: Some(Some("Renamed A".into())),
+            ..Default::default()
+        })
+        .unwrap();
+    timeout(Duration::from_secs(3), async {
+        loop {
+            if let QueryResult::Device(Some(device)) = b
+                .application
+                .query(Query::Device {
+                    device_id: a_id.clone(),
+                })
+                .unwrap()
+                && device.device_name == "Renamed A"
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("peer sees the new name");
+
+    a_service.shutdown().await.unwrap();
+    b_service.shutdown().await.unwrap();
 }
 
 #[tokio::test]

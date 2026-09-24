@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
@@ -9,7 +8,9 @@ import 'package:myconnect_ui/src/core/daemon/native_bindings.dart';
 final _log = Logger('NativeDaemonHost');
 
 /// Start options for the embedded daemon, mirroring `myconnect run`. Empty
-/// strings mean "use the daemon's default".
+/// strings mean "use the daemon's setting". A value given here overrides
+/// the stored setting for this run only, so normal launches leave them
+/// empty and let the settings screen decide.
 @immutable
 class NativeDaemonConfig {
   const new({
@@ -27,7 +28,7 @@ class NativeDaemonConfig {
   Map<String, Object?> toJson() => {
     if (dataDir.isNotEmpty) 'dataDir': dataDir,
     if (downloadDir.isNotEmpty) 'downloadDir': downloadDir,
-    'deviceName': deviceName.isNotEmpty ? deviceName : Platform.localHostname,
+    if (deviceName.isNotEmpty) 'deviceName': deviceName,
     'discoveryLoopback': discoveryLoopback,
   };
 }

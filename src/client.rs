@@ -18,8 +18,8 @@ use uuid::Uuid;
 use crate::{
     api::DEFAULT_API_PORT,
     application::{
-        ApplicationEvent, ClipboardSnapshot, EventData, PairingSnapshot, TransferSnapshot,
-        TransferStatus,
+        ApplicationEvent, ClipboardSnapshot, EventData, PairingSnapshot, SettingsPatch,
+        SettingsSnapshot, TransferSnapshot, TransferStatus,
     },
     config::ApiToken,
     device::DeviceSnapshot,
@@ -253,6 +253,23 @@ impl ApiClient {
             .await
             .map_err(map_transport)?;
         decode_json(response, "clipboard").await
+    }
+
+    pub async fn settings(&self) -> Result<SettingsSnapshot, ClientError> {
+        self.get_json("api/v1/settings", "settings").await
+    }
+
+    pub async fn update_settings(
+        &self,
+        patch: &SettingsPatch,
+    ) -> Result<SettingsSnapshot, ClientError> {
+        let response = self
+            .authorized(self.http.patch(self.url("api/v1/settings")?))
+            .json(patch)
+            .send()
+            .await
+            .map_err(map_transport)?;
+        decode_json(response, "settings").await
     }
 
     pub async fn events(&self) -> Result<EventStream, ClientError> {

@@ -37,8 +37,8 @@ use uuid::Uuid;
 use crate::{
     application::{
         ApplicationError, ApplicationEvent, ApplicationService, ClipboardSnapshot, Command,
-        DEFAULT_MAX_TRANSFER_BYTES, PairingSnapshot, Query, QueryResult, StatusSnapshot,
-        TransferSnapshot,
+        DEFAULT_MAX_TRANSFER_BYTES, PairingSnapshot, Query, QueryResult, SettingsPatch,
+        SettingsSnapshot, StatusSnapshot, TransferSnapshot,
     },
     config::ApiToken,
     device::DeviceSnapshot,
@@ -245,6 +245,7 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
             get(get_transfer).delete(delete_transfer),
         )
         .route("/clipboard", get(get_clipboard).put(put_clipboard))
+        .route("/settings", get(get_settings).patch(patch_settings))
         .route("/events", get(get_events))
         .fallback(api_not_found)
         .method_not_allowed_fallback(method_not_allowed)
@@ -666,6 +667,31 @@ async fn put_clipboard(
     Ok(Json(clipboard))
 }
 
+async fn get_settings(State(state): State<ApiState>) -> Result<Json<SettingsSnapshot>, ApiProblem> {
+    match state
+        .application
+        .query(Query::Settings)
+        .map_err(map_error)?
+    {
+        QueryResult::Settings(settings) => Ok(Json(settings)),
+        _ => Err(ApiProblem::internal()),
+    }
+}
+
+/// Change the fields present in the body; `null` resets one to its default.
+/// The change is saved before it takes effect, and `settings.changed` is
+/// published if anything changed.
+async fn patch_settings(
+    State(state): State<ApiState>,
+    Json(patch): Json<SettingsPatch>,
+) -> Result<Json<SettingsSnapshot>, ApiProblem> {
+    let settings = state
+        .application
+        .update_settings(patch)
+        .map_err(map_error)?;
+    Ok(Json(settings))
+}
+
 async fn get_events(
     State(state): State<ApiState>,
 ) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
@@ -771,6 +797,8 @@ fn map_error(error: ApplicationError) -> ApiProblem {
             "transfer_too_large",
         ),
         ApplicationError::UnknownTransfer => ApiProblem::not_found("transfer_not_found"),
+        ApplicationError::InvalidDeviceName => ApiProblem::bad_request("invalid_device_name"),
+        ApplicationError::InvalidDownloadDir => ApiProblem::bad_request("invalid_download_dir"),
         ApplicationError::InvalidTransferState => {
             ApiProblem::new(StatusCode::CONFLICT, "Conflict", "invalid_transfer_state")
         }

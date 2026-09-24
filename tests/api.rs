@@ -443,6 +443,61 @@ async fn clipboard_get_and_put_round_trip_and_enforce_the_size_limit() {
 }
 
 #[tokio::test]
+async fn settings_can_be_read_changed_and_are_announced() {
+    let server = TestServer::start().await;
+    let mut events = server.application.event_bus().subscribe();
+
+    let initial = request(&server, "GET", "/api/v1/settings", true).await;
+    assert!(initial.starts_with("HTTP/1.1 200 OK"));
+    let initial: serde_json::Value = serde_json::from_str(body(&initial)).unwrap();
+    assert_eq!(initial["deviceName"], "Test Device");
+    assert_eq!(initial["clipboardSyncEnabled"], true);
+    assert_eq!(initial["closeToTray"], true);
+
+    let patched = request_with_body(
+        &server,
+        "PATCH",
+        "/api/v1/settings",
+        r#"{"deviceName":"Renamed","clipboardSyncEnabled":false}"#,
+    )
+    .await;
+    assert!(patched.starts_with("HTTP/1.1 200 OK"), "{patched}");
+    let patched: serde_json::Value = serde_json::from_str(body(&patched)).unwrap();
+    assert_eq!(patched["deviceName"], "Renamed");
+    assert_eq!(patched["clipboardSyncEnabled"], false);
+    assert_eq!(patched["downloadDir"], initial["downloadDir"]);
+
+    let event = timeout(Duration::from_secs(1), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        event.event,
+        EventData::SettingsChanged(ref settings) if settings.device_name == "Renamed"
+    ));
+    assert!(!server.application.clipboard_sync_enabled());
+    let status = request(&server, "GET", "/api/v1/status", true).await;
+    let status: serde_json::Value = serde_json::from_str(body(&status)).unwrap();
+    assert_eq!(status["localDevice"]["deviceName"], "Renamed");
+
+    for (patch, code) in [
+        (r#"{"deviceName":"no.dots"}"#, "invalid_device_name"),
+        (r#"{"downloadDir":"relative"}"#, "invalid_download_dir"),
+    ] {
+        let response = request_with_body(&server, "PATCH", "/api/v1/settings", patch).await;
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request"),
+            "{response}"
+        );
+        assert!(body(&response).contains(code));
+    }
+    let unknown = request_with_body(&server, "PATCH", "/api/v1/settings", r#"{"nope":1}"#).await;
+    assert!(!unknown.starts_with("HTTP/1.1 200"), "{unknown}");
+
+    server.server.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn ping_is_queued_to_a_paired_device_with_an_optional_message() {
     let server = TestServer::start().await;
     let device_id = "cccccccccccccccccccccccccccccccc";

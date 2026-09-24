@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+use super::SettingsSnapshot;
 use crate::device::DeviceSnapshot;
 
 /// Public, non-sensitive failure categories safe to return to API clients.
@@ -305,6 +306,7 @@ pub enum Query {
     Transfers,
     Transfer { transfer_id: Uuid },
     Clipboard,
+    Settings,
 }
 
 /// Typed result of an application query.
@@ -318,6 +320,7 @@ pub enum QueryResult {
     Transfers(Vec<TransferSnapshot>),
     Transfer(Option<TransferSnapshot>),
     Clipboard(ClipboardSnapshot),
+    Settings(SettingsSnapshot),
 }
 
 #[cfg(test)]

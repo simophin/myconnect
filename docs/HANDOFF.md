@@ -9,7 +9,7 @@ otherwise; items within a priority band are independent.
 ## Read first
 
 1. [`ARCHITECTURE.md`](ARCHITECTURE.md): module map, state machines, the
-   full HTTP API, the FFI embedding (§8), known gaps (§10).
+   full HTTP API, the FFI embedding (§9), known gaps (§11).
 2. [`../ui/README.md`](../ui/README.md): how to run the app, including two
    instances on one machine.
 3. [`../ui/docs/adr/`](../ui/docs/adr/README.md): why the UI is shaped the
@@ -63,6 +63,9 @@ Working and verified live (UI ↔ CLI daemon over loopback):
 - Sending a file from a device's page, a transfers view with progress,
   cancel, and open file/folder, and a notification for received files
   (item 4).
+- A settings screen (device name, download folder, clipboard sync, close
+  to tray), stored by the daemon, with renames reaching peers at once
+  (item 5).
 
 Only Linux bundles the native library. Nothing has been tested against a real
 KDE Connect install yet.
@@ -75,7 +78,7 @@ KDE Connect install yet.
 | 2 | ~~[Interop check against real KDE Connect](#2-interop-check-against-real-kde-connect)~~ **Done** | P0 | Manual + Rust fixes |
 | 3 | ~~[Keep running in the background](#3-keep-running-in-the-background-tray-and-notifications)~~ **Done** | P0 | Flutter |
 | 4 | ~~[Send files and a transfers view](#4-send-files-and-a-transfers-view)~~ **Done** | P1 | Flutter (+ small API) |
-| 5 | [Daemon settings API and screen](#5-daemon-settings-api-and-settings-screen) | P1 | Rust + Flutter |
+| 5 | ~~[Daemon settings API and screen](#5-daemon-settings-api-and-settings-screen)~~ **Done** | P1 | Rust + Flutter |
 | 6 | [OS clipboard integration](#6-os-clipboard-integration) | P1 | Rust |
 | 7 | [Automated end-to-end test](#7-automated-end-to-end-test) | P1 | Test infra |
 | 8 | [Ping: send button and receiving](#8-ping-send-button-and-receiving) | P2 | Flutter + Rust |
@@ -144,7 +147,7 @@ removes the device from the app's list without a restart.
 > restriction). Each UDP announcement from a connected peer makes us re-dial
 > and replace the session; upstream does the same (rate-limited per device),
 > so this is expected. Still open: a KDE Connect *desktop* peer, and a pass
-> through the Flutter app instead of the CLI. See ARCHITECTURE §10.
+> through the Flutter app instead of the CLI. See ARCHITECTURE §11.
 
 **Why.** Every test so far is MyConnect against MyConnect. The protocol code
 follows the research in [`archive/KDECONNECT_PROTOCOL_RESEARCH.md`](archive/KDECONNECT_PROTOCOL_RESEARCH.md),
@@ -161,11 +164,11 @@ can be done now. **Ask the user before pairing with their real devices.**
   certificate or verification errors in the log), pairing in both
   directions with matching codes, clipboard sync, file send and receive,
   ping (the phone should show a notification), and unpair (after item 1).
-- Log each failure as a gap in `ARCHITECTURE.md` §10 or fix it. Expect
+- Log each failure as a gap in `ARCHITECTURE.md` §11 or fix it. Expect
   surprises in identity fields, capability names, and payload transfer
   negotiation.
 
-**Done when.** `ARCHITECTURE.md` §10 no longer says interop is untested, or
+**Done when.** `ARCHITECTURE.md` §11 no longer says interop is untested, or
 lists precisely what doesn't work.
 
 ---
@@ -306,6 +309,34 @@ CLI shows up in the list with a working "open folder".
 ---
 
 ## 5. Daemon settings API and settings screen
+
+> **Done (2026-09-24).** `settings.json` in the data dir (`config/settings.rs`,
+> atomic like `trust.rs`) holds `deviceName`, `downloadDir`,
+> `clipboardSyncEnabled` and the UI-owned `closeToTray`; a missing field
+> means the default. `GET`/`PATCH /api/v1/settings` (a merge patch: `null`
+> resets a field, unknown fields are rejected) and a `settings.changed`
+> event. Precedence, decided: a start option (CLI flag or FFI config)
+> overrides the stored value for that run only, and a `PATCH` of that field
+> saves it and drops the override. The UI no longer sends the hostname; the
+> daemon's default name is now the host name (`gethostname`, trimmed to a
+> valid KDE Connect name) for the CLI too, instead of "MyConnect". A rename
+> reaches peers through a `watch` channel the LAN loop follows: it
+> re-encodes its identity and announces at once (a new `tests/lan.rs` test
+> fails without that announcement). Incoming transfers read the download
+> dir when they start. The CLI has `myconnect settings [--device-name ...]
+> [--download-dir ...] [--clipboard-sync true|false]`. UI: `/settings`
+> (gear on the home screen, left of Transfers), the home screen's "This
+> computer" line follows the setting, and closing the window quits when
+> `closeToTray` is off. Verified live under Xvfb against a CLI peer: the
+> default name was the host name; an invalid name showed the daemon's
+> reason in the dialog; renaming to "UI Studio" showed up in the peer's
+> `scan` right away; the name and close-to-tray survived an app restart.
+> Found and fixed there: pressing Enter in the rename dialog dropped focus,
+> so a rejected name couldn't be retyped. Not done: start on login (it can
+> now be stored as a setting), remembered manual addresses (item 9), a live
+> check of the download folder picker and of close-to-tray off (both covered
+> by tests), and a "use default folder" button (the API supports it with
+> `null`). See ARCHITECTURE §7.
 
 **Why.** Ground rule 1 means user preferences can't live in the UI. Today
 the device name, download directory and discovery mode come only from start

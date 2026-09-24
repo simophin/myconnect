@@ -7,6 +7,7 @@ import 'package:myconnect_ui/src/core/api/api_exception.dart';
 import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
+import 'package:myconnect_ui/src/core/api/models/settings.dart';
 import 'package:myconnect_ui/src/core/api/models/status.dart';
 import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 import 'package:myconnect_ui/src/core/api/sse.dart';
@@ -121,6 +122,17 @@ class MyConnectApi {
   Future<Transfer> cancelTransfer(String transferId) async => Transfer.fromJson(
     await _send(() => _dio.delete<_Json>('transfers/$transferId')),
   );
+
+  Future<DaemonSettings> settings() async =>
+      DaemonSettings.fromJson(await _get<_Json>('settings'));
+
+  /// Change the settings named in [changes], a JSON merge patch keyed by
+  /// [DaemonSettings] field names: absent fields stay as they are, and a
+  /// `null` value resets one to its default.
+  Future<DaemonSettings> updateSettings(Map<String, Object?> changes) async =>
+      DaemonSettings.fromJson(
+        await _send(() => _dio.patch<_Json>('settings', data: changes)),
+      );
 
   /// One connection to `/events`, starting with [EventStreamConnected] once
   /// the daemon accepts it. The stream ends (or errors) when the connection

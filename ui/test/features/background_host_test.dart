@@ -23,6 +23,20 @@ void main() {
     expect(daemon.shell.visible, isTrue);
   });
 
+  testWidgets('closing the window quits when close-to-tray is off', (
+    tester,
+  ) async {
+    final daemon = TestDaemon();
+    daemon.settings = daemon.settings.copyWith(closeToTray: false);
+    await pumpApp(tester, daemon);
+
+    daemon.shell.onCloseRequested!();
+    await tester.pumpAndSettle();
+
+    expect(daemon.host.stops, 1);
+    expect(daemon.shell.exited, isTrue);
+  });
+
   testWidgets('quitting from the tray stops the daemon, then exits', (
     tester,
   ) async {

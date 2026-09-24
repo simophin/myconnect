@@ -21,6 +21,9 @@ library, on a free loopback port with a per-launch token.
   menu stops it), with a desktop notification for pairing requests and
   received files that arrive while the window is hidden. Launching it again shows the running
   instance. On GNOME the tray icon needs the AppIndicator extension.
+- Settings: this computer's name as other devices see it, where received
+  files go, clipboard sync, and whether closing the window keeps the app
+  running. The daemon stores them, so they survive restarts.
 
 ## Running
 
@@ -38,8 +41,8 @@ flutter run -d linux
 | `MYCONNECT_API_URL` | Use an already-running daemon (e.g. `http://127.0.0.1:24816`) instead of starting one. |
 | `MYCONNECT_API_TOKEN` | Token for that external daemon, if it was started with `--api-token`. |
 | `MYCONNECT_DATA_DIR` | Identity/trust directory for the embedded daemon. |
-| `MYCONNECT_DOWNLOAD_DIR` | Where the embedded daemon saves received files. |
-| `MYCONNECT_DEVICE_NAME` | Name advertised to peers (defaults to the hostname). |
+| `MYCONNECT_DOWNLOAD_DIR` | Where the embedded daemon saves received files. Overrides the saved setting for this run. |
+| `MYCONNECT_DEVICE_NAME` | Name advertised to peers. Overrides the saved setting for this run; without either, the host name. |
 | `MYCONNECT_DISCOVERY_LOOPBACK` | `true` to discover only instances on this machine. |
 
 ### Two instances on one machine
@@ -87,6 +90,7 @@ lib/
     │   ├── background/          # close to tray, quit, pairing and file notifications
     │   ├── devices/             # list, details (send file), add device (scan)
     │   ├── pairing/             # outgoing pairing page, incoming prompt
+    │   ├── settings/            # settings controller and page
     │   └── transfers/           # transfers controller, page and tile
     └── shared/widgets.dart
 ```

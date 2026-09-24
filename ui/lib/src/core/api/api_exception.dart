@@ -40,6 +40,9 @@ class ApiException implements Exception {
     'transfer_not_found' => 'That transfer no longer exists.',
     'invalid_transfer_state' => 'That transfer has already finished.',
     'request_timeout' => 'MyConnect took too long to respond.',
+    'invalid_device_name' =>
+      'Use 1 to 32 characters, without . , : ; ! ? ( ) [ ] < > or quotes.',
+    'invalid_download_dir' => 'That folder can’t be used for downloads.',
     _ => 'Something went wrong ($code).',
   };
 

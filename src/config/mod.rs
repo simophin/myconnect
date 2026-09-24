@@ -1,6 +1,7 @@
-//! Persistent local identity and peer trust configuration.
+//! Persistent local identity, peer trust, and user settings.
 
 mod identity;
+mod settings;
 mod token;
 mod trust;
 
@@ -9,6 +10,7 @@ use std::path::PathBuf;
 use directories::ProjectDirs;
 
 pub use identity::{IdentityError, LocalIdentity};
+pub use settings::{SettingsError, SettingsFile, StoredSettings};
 pub use token::{ApiToken, ApiTokenError};
 pub use trust::{FilesystemTrustStore, TrustError, TrustStore, TrustedDevice};
 

@@ -28,7 +28,7 @@ The CLI and the Flutter UI talk to the daemon exclusively through the local
 HTTP API. Neither owns sockets, pairing state, trust state, or transfer
 state — that all lives inside the daemon process, behind
 `ApplicationHandle`. The UI additionally uses the FFI library, but only to
-start and stop an embedded daemon (§8); the UI's own design decisions are
+start and stop an embedded daemon (§9); the UI's own design decisions are
 recorded in [`ui/docs/adr/`](../ui/docs/adr/README.md).
 
 ## 2. Module map and dependency direction
@@ -48,16 +48,16 @@ so packet handling can be exercised without a live connection.
 | Module | File(s) | Responsibility |
 | --- | --- | --- |
 | `protocol` | `src/protocol/{mod,packet,codec,verification}.rs` | Wire packet envelope, identity/pairing body types, bounded newline-delimited JSON codec, the protocol-v8 verification-code function. No I/O. |
-| `config` | `src/config/{mod,identity,token,trust}.rs` | Local device identity (UUID + self-signed cert), the optional API bearer token (never persisted), filesystem-backed `TrustStore` of pinned peer certificates. |
+| `config` | `src/config/{mod,identity,settings,token,trust}.rs` | Local device identity (UUID + self-signed cert), the optional API bearer token (never persisted), filesystem-backed `TrustStore` of pinned peer certificates, and `settings.json` (user settings, written atomically). |
 | `transport` | `src/transport/{lan,tls,payload}.rs` | UDP discovery, TCP control-channel connect/accept, the real rustls TLS handshake and certificate pinning, and the auxiliary TLS payload connection used for file transfer. |
 | `device` | `src/device.rs` | `DeviceSnapshot`, `DeviceReachability`, and the in-memory device registry keyed by device ID. |
 | `plugins` | `src/plugins/{mod,ping,clipboard,share}.rs` | Fixed (non-dynamic) packet-type routing table for the packet families this build understands: ping, clipboard, share. Advertises capability strings for the identity packet; ping is advertised as outgoing only, since incoming pings are not handled yet. |
-| `application` | `src/application.rs`, `src/application/{state,events,service,transfer}.rs` | Orchestration: connection registry, pairing state machine, transfer state machine, clipboard sync, bounded event bus. Everything HTTP-facing is a snapshot type defined here. `RunningService` starts/stops a whole daemon (LAN + API) for the CLI and embedders. |
+| `application` | `src/application.rs`, `src/application/{state,events,service,settings,transfer}.rs` | Orchestration: connection registry, pairing state machine, transfer state machine, clipboard sync, user settings, bounded event bus. Everything HTTP-facing is a snapshot type defined here. `RunningService` starts/stops a whole daemon (LAN + API) for the CLI and embedders. |
 | `clipboard` | `src/clipboard.rs` | `ClipboardService` trait plus an in-memory implementation (no OS clipboard integration yet). |
 | `api` | `src/api.rs` | Axum HTTP transport only — translates HTTP requests to `ApplicationService` calls and snapshots back to JSON. Optional bearer-token auth, body-size limits, SSE. |
 | `client` | `src/client.rs` | Typed HTTP client used by the CLI (and any future frontend) to talk to `api`. |
 | `src/bin/myconnect` | `cli.rs`, `main.rs` | Argument parsing and daemon bootstrap only. |
-| `myconnect-ffi` | `ffi/src/lib.rs` | `cdylib` exporting `myconnect_start` / `myconnect_stop` / `myconnect_free_string` (JSON in, JSON out) so a GUI process can embed a daemon. See §8. |
+| `myconnect-ffi` | `ffi/src/lib.rs` | `cdylib` exporting `myconnect_start` / `myconnect_stop` / `myconnect_free_string` (JSON in, JSON out) so a GUI process can embed a daemon. See §9. |
 
 Adding a new packet family means adding a match arm in `plugins::mod::dispatch_incoming`
 and an entry in `plugins::capabilities()` — not registering a trait object at
@@ -163,7 +163,35 @@ States: `queued → connecting → transferring → completed | cancelled | fail
 - The only implementation today is `InMemoryClipboard`; there is no OS
   clipboard integration yet.
 
-## 7. HTTP API (`/api/v1`)
+## 7. Settings
+
+User preferences live in the daemon, in `settings.json` in the data
+directory, never in a client. Fields: `deviceName`, `downloadDir`,
+`clipboardSyncEnabled`, and `closeToTray` (owned by the UI; the daemon
+stores it without interpreting it). A field missing from the file uses its
+default: the host name (first label, trimmed to a valid KDE Connect name,
+else "MyConnect"), the platform download directory, `true`, `true`.
+
+- **Precedence.** A start option (`myconnect run --device-name` /
+  `--download-dir`, or the FFI config's `deviceName` / `downloadDir`)
+  overrides the stored value for that run only and is not saved. Changing
+  that setting through `PATCH /settings` saves it and drops the override
+  for the rest of the run. The app passes these start options only when
+  given a `--dart-define`, so normal launches use the stored settings.
+- **Changes** are validated (names follow the identity schema: 1–32
+  characters, no reserved punctuation; download directories must be
+  absolute and are created up front), saved atomically, then applied, and
+  publish `settings.changed` if anything changed. An unreadable file is
+  logged and ignored at start, then overwritten on the next change.
+- **Renaming** takes effect at once: the LAN transport watches the name,
+  re-encodes its identity for new connections, and announces it
+  immediately. Peers update the name from any identity they receive, and
+  KDE Connect re-dials on an announcement, so connected peers see the new
+  name within a moment.
+- **Download directory** is read when each incoming transfer starts, so a
+  transfer in flight finishes where it began.
+
+## 8. HTTP API (`/api/v1`)
 
 Authentication is optional. When the daemon is started with a token
 (`myconnect run --api-token`, `MYCONNECT_API_TOKEN`, or always when embedded
@@ -194,21 +222,25 @@ event stream.
 | `DELETE` | `/transfers/{transferId}` | Cancel an active transfer. |
 | `GET` | `/clipboard` | Current synchronized text and metadata. |
 | `PUT` | `/clipboard` | Set text and send to eligible paired devices. |
-| `GET` | `/events` | Server-Sent Events: `device.discovered/connected/updated/disconnected/forgotten`, `pairing.requested/updated`, `transfer.started/progress/completed/failed`, `clipboard.changed`. Not durable — clients refetch a snapshot after a gap or reconnect. |
+| `GET` | `/settings` | The settings in effect (§7). |
+| `PATCH` | `/settings` | Change the fields present in the JSON body; `null` resets one to its default, unknown fields are rejected. `400 invalid_device_name` / `invalid_download_dir` for bad values. Returns the new settings. |
+| `GET` | `/events` | Server-Sent Events: `device.discovered/connected/updated/disconnected/forgotten`, `pairing.requested/updated`, `transfer.started/progress/completed/failed`, `clipboard.changed`, `settings.changed`. Not durable — clients refetch a snapshot after a gap or reconnect. |
 
 Mutation endpoints that require network round-trips return `202` and are
 tracked through the resource's own state (poll the resource or watch
 `/events`); events are notifications, not the source of truth.
 
-## 8. Embedding (FFI)
+## 9. Embedding (FFI)
 
 `myconnect-ffi` exposes three C functions exchanging JSON strings:
 
 - `myconnect_start(config)` — config mirrors `myconnect run`
   (`dataDir`, `downloadDir`, `deviceName`, `discoveryLoopback`, `apiHost`,
   `apiPort`, `apiToken`). Defaults: loopback, port `0` (OS-chosen), and a
-  freshly generated token. Returns `{handle, apiHost, apiPort, apiToken}`
-  once the LAN transport and API are listening.
+  freshly generated token. `deviceName` and `downloadDir` override the
+  stored settings for that run (§7). Returns
+  `{handle, apiHost, apiPort, apiToken}` once the LAN transport and API are
+  listening.
 - `myconnect_stop(handle)` — graceful shutdown via `RunningService::shutdown`,
   then the instance's Tokio runtime.
 - `myconnect_free_string(ptr)` — frees any returned string.
@@ -219,7 +251,7 @@ and bundles this library (see `ui/docs/adr/0006`). The app keeps running in
 the tray with its window closed, so the embedded daemon stops only when the
 user quits (see `ui/docs/adr/0007`).
 
-## 9. Testing
+## 10. Testing
 
 Integration tests live in `tests/` and are organized by concern, not by
 phase: `protocol.rs`, `tls.rs`, `lan.rs`, `pairing.rs` / `pairing_e2e.rs`,
@@ -240,7 +272,7 @@ git diff --check
 (cd ui && flutter analyze && flutter test)
 ```
 
-## 10. Known gaps
+## 11. Known gaps
 
 Prioritized next work, with implementation notes for each item, is in
 [`HANDOFF.md`](HANDOFF.md).

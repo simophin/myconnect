@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
+import 'package:myconnect_ui/src/core/api/models/settings.dart';
 import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 
 Map<String, Object?> deviceJson({String reachability = 'connected'}) => {
@@ -100,5 +101,30 @@ void main() {
     );
     final device = Device.fromJson(deviceJson(reachability: 'sleeping'));
     expect(device.reachability, DeviceReachability.unknown);
+  });
+
+  test('decodes settings events', () {
+    final event = DaemonEvent.fromJson({
+      'type': 'settings.changed',
+      'data': {
+        'deviceName': 'Desk',
+        'downloadDir': '/home/me/Downloads',
+        'clipboardSyncEnabled': false,
+        'closeToTray': true,
+      },
+    });
+    expect(
+      event,
+      isA<SettingsChanged>().having(
+        (e) => e.settings,
+        'settings',
+        const DaemonSettings(
+          deviceName: 'Desk',
+          downloadDir: '/home/me/Downloads',
+          clipboardSyncEnabled: false,
+          closeToTray: true,
+        ),
+      ),
+    );
   });
 }

@@ -204,17 +204,19 @@ impl Drop for LanService {
 #[allow(clippy::too_many_arguments)]
 async fn run(
     config: LanConfig,
-    local: LocalDeviceInfo,
+    mut local: LocalDeviceInfo,
     application: ApplicationHandle,
     mut commands: mpsc::Receiver<Command>,
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     udp: Arc<UdpSocket>,
     tcp: TcpListener,
-    announcement: Arc<Vec<u8>>,
+    mut announcement: Arc<Vec<u8>>,
     registry: Arc<ConnectionRegistry>,
     cancellation: CancellationToken,
 ) {
+    let mut device_name = application.watch_local_device_name();
+    let mut device_name_open = true;
     let mut connections = JoinSet::new();
     let connection_limit = Arc::new(Semaphore::new(MAX_PENDING_CONNECTIONS));
     let mut announcements = interval(config.announce_interval);
@@ -234,6 +236,23 @@ async fn run(
                 }
                 Some(_) => {}
                 None => commands_open = false,
+            },
+            // A rename applies to connections made from now on; announcing
+            // it right away makes peers (KDE Connect and MyConnect alike)
+            // pick up the new name and reconnect.
+            changed = device_name.changed(), if device_name_open => match changed {
+                Ok(()) => {
+                    local.device_name = device_name.borrow_and_update().clone();
+                    let port = tcp.local_addr().map(|address| address.port());
+                    match port.map_err(LanError::Socket).and_then(|port| encode_identity(&local, port)) {
+                        Ok(bytes) => {
+                            announcement = Arc::new(bytes);
+                            announce(&udp, &config.announcement_targets, &announcement).await;
+                        }
+                        Err(error) => debug!(%error, "could not re-encode identity after rename"),
+                    }
+                }
+                Err(_) => device_name_open = false,
             },
             received = udp.recv_from(&mut datagram) => match received {
                 Ok((length, source)) => {

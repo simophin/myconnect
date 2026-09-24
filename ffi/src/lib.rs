@@ -211,18 +211,68 @@ mod tests {
     }
 
     fn get_status(port: u16, token: Option<&str>) -> String {
+        http(port, token, "GET", "/api/v1/status", "")
+    }
+
+    fn http(port: u16, token: Option<&str>, method: &str, path: &str, body: &str) -> String {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
         let authorization = token
             .map(|token| format!("Authorization: Bearer {token}\r\n"))
             .unwrap_or_default();
         write!(
             stream,
-            "GET /api/v1/status HTTP/1.1\r\nHost: localhost\r\n{authorization}Connection: close\r\n\r\n"
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{authorization}\
+             Content-Type: application/json\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            body.len()
         )
         .unwrap();
         let mut response = String::new();
         stream.read_to_string(&mut response).unwrap();
         response
+    }
+
+    fn start_in(data_dir: &std::path::Path, device_name: Option<&str>) -> (u64, u16, String) {
+        let mut config = json!({ "dataDir": data_dir, "discoveryLoopback": true });
+        if let Some(name) = device_name {
+            config["deviceName"] = json!(name);
+        }
+        let config = CString::new(config.to_string()).unwrap();
+        let started = call(unsafe { myconnect_start(config.as_ptr()) });
+        (
+            started["handle"].as_u64().expect("started instance"),
+            started["apiPort"].as_u64().unwrap() as u16,
+            started["apiToken"].as_str().unwrap().to_owned(),
+        )
+    }
+
+    #[test]
+    fn a_renamed_device_keeps_its_name_across_restarts_unless_overridden() {
+        let directory = tempfile::tempdir().unwrap();
+        let data_dir = directory.path().join("data");
+
+        let (handle, port, token) = start_in(&data_dir, None);
+        let patched = http(
+            port,
+            Some(&token),
+            "PATCH",
+            "/api/v1/settings",
+            r#"{"deviceName":"Kept Name"}"#,
+        );
+        assert!(patched.starts_with("HTTP/1.1 200"), "{patched}");
+        call(myconnect_stop(handle));
+
+        let (handle, port, token) = start_in(&data_dir, None);
+        assert!(get_status(port, Some(&token)).contains("Kept Name"));
+        call(myconnect_stop(handle));
+
+        // A start option wins for its run, without replacing the stored name.
+        let (handle, port, token) = start_in(&data_dir, Some("Flag Name"));
+        assert!(get_status(port, Some(&token)).contains("Flag Name"));
+        call(myconnect_stop(handle));
+        let (handle, port, token) = start_in(&data_dir, None);
+        assert!(get_status(port, Some(&token)).contains("Kept Name"));
+        call(myconnect_stop(handle));
     }
 
     #[test]

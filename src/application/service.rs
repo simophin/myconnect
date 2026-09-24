@@ -2,14 +2,14 @@ use std::{
     collections::{BTreeMap, HashMap},
     net::SocketAddr,
     path::PathBuf,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use bytes::Bytes;
 use thiserror::Error;
 use tokio::{
-    sync::{broadcast, mpsc},
+    sync::{broadcast, mpsc, watch},
     task::JoinHandle,
     time::{Duration, sleep},
 };
@@ -21,12 +21,13 @@ use super::{
     MAX_CLIPBOARD_TEXT_BYTES, OperationErrorCode, Pairing, PairingDirection, PairingSnapshot,
     PairingStatus, PairingTransitionError, Query, QueryResult, StatusSnapshot, Transfer,
     TransferDirection, TransferSnapshot, TransferStatus,
+    settings::{Settings, SettingsDefaults, SettingsPatch, SettingsSnapshot},
     transfer::{TransferConfig, sanitize_file_name, unique_destination},
 };
 use crate::device::DeviceRegistry;
 use crate::{
     clipboard::ClipboardService,
-    config::{LocalIdentity, TrustError, TrustStore, TrustedDevice},
+    config::{LocalIdentity, SettingsError, TrustError, TrustStore, TrustedDevice},
     device::DeviceSnapshot,
     plugins::{self, clipboard::ClipboardBody, share},
     protocol::{IdentityBody, Packet, PairingBody, verification_code},
@@ -91,6 +92,7 @@ pub trait ApplicationService: Send + Sync {
     fn forget_device(&self, device_id: &str) -> Result<(), ApplicationError>;
     fn send_ping(&self, device_id: &str, message: Option<String>) -> Result<(), ApplicationError>;
     fn set_clipboard(&self, text: String) -> Result<ClipboardSnapshot, ApplicationError>;
+    fn update_settings(&self, patch: SettingsPatch) -> Result<SettingsSnapshot, ApplicationError>;
     fn begin_outgoing_transfer(
         &self,
         device_id: &str,
@@ -145,7 +147,8 @@ struct ApplicationState {
     clipboard: ClipboardSnapshot,
     /// Whether clipboard packets are applied from, and sent to, peers at
     /// all. Disabling this only affects network synchronization; the local
-    /// snapshot remains readable and writable through the API.
+    /// snapshot remains readable and writable through the API. Mirrors the
+    /// `clipboardSyncEnabled` setting.
     clipboard_sync_enabled: bool,
 }
 
@@ -153,7 +156,12 @@ struct ApplicationState {
 #[derive(Clone)]
 pub struct ApplicationHandle {
     started_at: Instant,
-    local_device: LocalDeviceSnapshot,
+    local_device_id: Arc<str>,
+    /// Locked before, never while holding, `state`.
+    settings: Arc<Mutex<Settings>>,
+    /// The device name in effect, watched by the LAN transport so a rename
+    /// reaches peers.
+    local_device_name: Arc<watch::Sender<String>>,
     protocol_version: u8,
     local_public_key_der: Arc<Vec<u8>>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
@@ -183,10 +191,16 @@ impl ApplicationHandle {
         }
         let (commands, receiver) = mpsc::channel(command_capacity);
         let events = EventBus::new(event_capacity)?;
+        let settings = Settings::new(SettingsDefaults {
+            device_name: local_device.device_name.clone(),
+            download_dir: transfer_config.download_dir.clone(),
+        });
         Ok((
             Self {
                 started_at: Instant::now(),
-                local_device,
+                local_device_id: local_device.device_id.into(),
+                settings: Arc::new(Mutex::new(settings)),
+                local_device_name: Arc::new(watch::Sender::new(local_device.device_name)),
                 protocol_version,
                 local_public_key_der: Arc::new(local_public_key_der),
                 trust_store,
@@ -227,7 +241,74 @@ impl ApplicationHandle {
     }
 
     pub fn local_device_id(&self) -> &str {
-        &self.local_device.device_id
+        &self.local_device_id
+    }
+
+    /// The name this device currently advertises to peers.
+    pub fn local_device_name(&self) -> String {
+        self.local_device_name.borrow().clone()
+    }
+
+    /// Watch the advertised device name, which changes when the user
+    /// renames this device.
+    pub fn watch_local_device_name(&self) -> watch::Receiver<String> {
+        self.local_device_name.subscribe()
+    }
+
+    /// Replace the settings this handle was created with, e.g. with ones
+    /// backed by the settings file, and apply their runtime effects.
+    pub(crate) fn install_settings(&self, settings: Settings) {
+        let Ok(mut current) = self.settings.lock() else {
+            return;
+        };
+        *current = settings;
+        self.apply_settings(&current.snapshot());
+    }
+
+    pub fn settings(&self) -> Result<SettingsSnapshot, ApplicationError> {
+        Ok(self
+            .settings
+            .lock()
+            .map_err(|_| ApplicationError::StateUnavailable)?
+            .snapshot())
+    }
+
+    /// Validate, persist, and apply a settings change, then publish
+    /// `settings.changed` if anything changed. A new device name is
+    /// re-announced to the network by the LAN transport.
+    pub fn update_settings(
+        &self,
+        patch: SettingsPatch,
+    ) -> Result<SettingsSnapshot, ApplicationError> {
+        // Holding the lock across the file write keeps concurrent updates
+        // from saving out of order.
+        let mut settings = self
+            .settings
+            .lock()
+            .map_err(|_| ApplicationError::StateUnavailable)?;
+        let before = settings.snapshot();
+        let after = settings.update(patch)?;
+        if after != before {
+            self.apply_settings(&after);
+            self.events
+                .publish(super::EventData::SettingsChanged(after.clone()))?;
+        }
+        Ok(after)
+    }
+
+    /// Push the settings that live outside [`Settings`] to where they take
+    /// effect. The download directory is read when each transfer starts.
+    fn apply_settings(&self, settings: &SettingsSnapshot) {
+        if let Ok(mut state) = self.state.write() {
+            state.clipboard_sync_enabled = settings.clipboard_sync_enabled;
+        }
+        self.local_device_name.send_if_modified(|name| {
+            let changed = *name != settings.device_name;
+            if changed {
+                name.clone_from(&settings.device_name);
+            }
+            changed
+        });
     }
 
     pub fn discover_device(
@@ -784,9 +865,10 @@ impl ApplicationHandle {
     /// the API; it only stops incoming clipboard packets from being applied
     /// and outgoing ones from being sent.
     pub fn set_clipboard_sync_enabled(&self, enabled: bool) {
-        if let Ok(mut state) = self.state.write() {
-            state.clipboard_sync_enabled = enabled;
-        }
+        let _ = self.update_settings(SettingsPatch {
+            clipboard_sync_enabled: Some(Some(enabled)),
+            ..Default::default()
+        });
     }
 
     /// Apply a `kdeconnect.clipboard` or `kdeconnect.clipboard.connect` body
@@ -1615,18 +1697,22 @@ impl ApplicationHandle {
             },
         };
 
-        if tokio::fs::create_dir_all(&self.transfer_config.download_dir)
-            .await
-            .is_err()
-        {
+        // Read once, so the partial and the final file share a directory
+        // even if the setting changes mid-transfer.
+        let download_dir = match self.settings() {
+            Ok(settings) => settings.download_dir,
+            Err(_) => {
+                self.fail_transfer(transfer_id, OperationErrorCode::Internal);
+                self.cleanup_transfer_task(transfer_id);
+                return;
+            }
+        };
+        if tokio::fs::create_dir_all(&download_dir).await.is_err() {
             self.fail_transfer(transfer_id, OperationErrorCode::Internal);
             self.cleanup_transfer_task(transfer_id);
             return;
         }
-        let temp_path = self
-            .transfer_config
-            .download_dir
-            .join(format!(".{transfer_id}.part"));
+        let temp_path = download_dir.join(format!(".{transfer_id}.part"));
         let mut file = match tokio::fs::File::create(&temp_path).await {
             Ok(file) => file,
             Err(_) => {
@@ -1658,8 +1744,7 @@ impl ApplicationHandle {
 
         match result {
             Ok(()) => {
-                let destination =
-                    unique_destination(&self.transfer_config.download_dir, &file_name);
+                let destination = unique_destination(&download_dir, &file_name);
                 match tokio::fs::rename(&temp_path, &destination).await {
                     Ok(()) => self.complete_transfer(
                         transfer_id,
@@ -1789,7 +1874,10 @@ impl ApplicationHandle {
         StatusSnapshot {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             uptime_seconds: self.started_at.elapsed().as_secs(),
-            local_device: self.local_device.clone(),
+            local_device: LocalDeviceSnapshot {
+                device_id: self.local_device_id.to_string(),
+                device_name: self.local_device_name(),
+            },
             protocol_version: self.protocol_version,
         }
     }
@@ -1823,13 +1911,15 @@ fn fail_active_pairing(
 
 impl ApplicationService for ApplicationHandle {
     fn query(&self, query: Query) -> Result<QueryResult, ApplicationError> {
-        if query == Query::Status {
-            return Ok(QueryResult::Status(self.status()));
+        match query {
+            Query::Status => return Ok(QueryResult::Status(self.status())),
+            Query::Settings => return Ok(QueryResult::Settings(self.settings()?)),
+            _ => {}
         }
 
         let state = self.read_state()?;
         Ok(match query {
-            Query::Status => unreachable!("handled before locking state"),
+            Query::Status | Query::Settings => unreachable!("handled before locking state"),
             Query::Devices => QueryResult::Devices(state.devices.snapshot()),
             Query::Device { device_id } => QueryResult::Device(state.devices.get(&device_id)),
             Query::Pairings => QueryResult::Pairings(
@@ -1897,6 +1987,10 @@ impl ApplicationService for ApplicationHandle {
 
     fn set_clipboard(&self, text: String) -> Result<ClipboardSnapshot, ApplicationError> {
         ApplicationHandle::set_clipboard(self, text)
+    }
+
+    fn update_settings(&self, patch: SettingsPatch) -> Result<SettingsSnapshot, ApplicationError> {
+        ApplicationHandle::update_settings(self, patch)
     }
 
     fn begin_outgoing_transfer(
@@ -1975,6 +2069,12 @@ pub enum ApplicationError {
     TransferTooLarge { limit: u64 },
     #[error("unknown transfer")]
     UnknownTransfer,
+    #[error("device name must be 1 to 32 characters without reserved punctuation")]
+    InvalidDeviceName,
+    #[error("download directory must be an absolute path that can be created")]
+    InvalidDownloadDir,
+    #[error("settings could not be saved")]
+    Settings(#[source] SettingsError),
     #[error("transfer is not in a state that allows this operation")]
     InvalidTransferState,
     #[error("internal application error")]

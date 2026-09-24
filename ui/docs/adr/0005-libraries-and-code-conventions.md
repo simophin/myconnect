@@ -25,6 +25,7 @@ style, while keeping the dependency list short.
 | Tray icon | `tray_manager` | The most used tray plugin. From 0.6 it sits on `nativeapi`, and on Linux it is a D-Bus StatusNotifierItem with no libappindicator build dependency. |
 | Notifications | `flutter_local_notifications` | Widely used; covers Linux (freedesktop notifications over D-Bus), macOS and Windows, with click callbacks. |
 | File picker | `file_selector` | The Flutter team's plugin; native open dialogs on Linux (GTK, or the portal), macOS and Windows. |
+| Default device name (Rust daemon) | `gethostname` | Small, widely used crate for the host name on Linux, macOS and Windows; the standard library has no API for it. |
 | Opening files and folders | `url_launcher` | The Flutter team's plugin; opens `file:` URIs with the desktop's default app (on Linux through GIO, like `xdg-open`). |
 
 Conventions:

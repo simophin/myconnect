@@ -9,7 +9,7 @@ import 'package:myconnect_ui/src/app.dart';
 import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
-import 'package:myconnect_ui/src/core/api/models/status.dart';
+import 'package:myconnect_ui/src/core/api/models/settings.dart';
 import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 import 'package:myconnect_ui/src/core/api/myconnect_api.dart';
 import 'package:myconnect_ui/src/core/daemon/daemon_host.dart';
@@ -153,14 +153,7 @@ class TestDaemon {
     when(api.devices).thenAnswer((_) async => devices);
     when(api.pairings).thenAnswer((_) async => pairings);
     when(api.transfers).thenAnswer((_) async => transfers);
-    when(api.status).thenAnswer(
-      (_) async => const DaemonStatus(
-        version: '0.1.0',
-        uptimeSeconds: 1,
-        localDevice: LocalDevice(deviceId: 'local', deviceName: 'Desk'),
-        protocolVersion: 8,
-      ),
-    );
+    when(api.settings).thenAnswer((_) async => settings);
   }
 
   final api = MockMyConnectApi();
@@ -171,6 +164,12 @@ class TestDaemon {
   List<Device> devices = [];
   List<Pairing> pairings = [];
   List<Transfer> transfers = [];
+  DaemonSettings settings = const DaemonSettings(
+    deviceName: 'Desk',
+    downloadDir: '/home/me/Downloads',
+    clipboardSyncEnabled: true,
+    closeToTray: true,
+  );
 
   List<Override> get overrides => [
     daemonHostProvider.overrideWithValue(host),

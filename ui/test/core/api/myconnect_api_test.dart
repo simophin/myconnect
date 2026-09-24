@@ -139,6 +139,25 @@ void main() {
     expect(part.value.headers?['content-length'], ['5']);
   });
 
+  test('patches settings with only the given fields', () async {
+    final adapter = FakeAdapter(
+      (_) => json({
+        'deviceName': 'Desk',
+        'downloadDir': '/home/me/Downloads',
+        'clipboardSyncEnabled': true,
+        'closeToTray': true,
+      }),
+    );
+    final settings = await apiWith(adapter)
+        .updateSettings({'deviceName': 'Desk', 'downloadDir': null});
+
+    final request = adapter.requests.single;
+    expect(request.method, 'PATCH');
+    expect(request.uri.path, '/api/v1/settings');
+    expect(request.data, {'deviceName': 'Desk', 'downloadDir': null});
+    expect(settings.deviceName, 'Desk');
+  });
+
   test('streams events, announcing the connection first', () async {
     final adapter = FakeAdapter(
       (_) => ResponseBody.fromString(

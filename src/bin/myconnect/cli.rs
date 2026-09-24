@@ -8,8 +8,8 @@ use clap::{Parser, Subcommand};
 use myconnect::{
     api::DEFAULT_API_PORT,
     application::{
-        ApplicationEvent, ClipboardSnapshot, EventData, PairingSnapshot, RunRequest,
-        TransferSnapshot,
+        ApplicationEvent, ClipboardSnapshot, EventData, PairingSnapshot, RunRequest, SettingsPatch,
+        SettingsSnapshot, TransferSnapshot,
     },
     client::{
         API_TOKEN_ENV, ApiClient, ClipboardWatchUpdate, DeviceWatchUpdate, TransferWatchUpdate,
@@ -107,6 +107,18 @@ enum Command {
     Clipboard {
         #[command(subcommand)]
         action: ClipboardAction,
+    },
+    /// Show the daemon's settings, or change the ones given.
+    Settings {
+        /// Name this device advertises to peers.
+        #[arg(long, value_name = "NAME")]
+        device_name: Option<String>,
+        /// Absolute path where received files are saved.
+        #[arg(long, value_name = "DIRECTORY")]
+        download_dir: Option<PathBuf>,
+        /// Whether to sync the clipboard with paired devices.
+        #[arg(long, value_name = "BOOL")]
+        clipboard_sync: Option<bool>,
     },
 }
 
@@ -271,6 +283,24 @@ impl Cli {
                     })
                     .await?;
             }
+            Command::Settings {
+                device_name,
+                download_dir,
+                clipboard_sync,
+            } => {
+                let patch = SettingsPatch {
+                    device_name: device_name.map(Some),
+                    download_dir: download_dir.map(Some),
+                    clipboard_sync_enabled: clipboard_sync.map(Some),
+                    close_to_tray: None,
+                };
+                let settings = if patch == SettingsPatch::default() {
+                    client.settings().await?
+                } else {
+                    client.update_settings(&patch).await?
+                };
+                print_settings(&settings, json);
+            }
         }
         Ok(())
     }
@@ -402,6 +432,19 @@ fn print_clipboard(clipboard: &ClipboardSnapshot, json_output: bool) {
     }
 }
 
+fn print_settings(settings: &SettingsSnapshot, json_output: bool) {
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string(settings).expect("snapshot serializes")
+        );
+    } else {
+        println!("Device name: {}", settings.device_name);
+        println!("Download directory: {}", settings.download_dir.display());
+        println!("Clipboard sync: {}", settings.clipboard_sync_enabled);
+    }
+}
+
 fn print_event(event: &ApplicationEvent, json_output: bool) {
     if json_output {
         println!(
@@ -431,6 +474,7 @@ fn print_event(event: &ApplicationEvent, json_output: bool) {
             EventData::PairingRequested(pairing) | EventData::PairingUpdated(pairing) => {
                 print_pairing(pairing, false)
             }
+            EventData::SettingsChanged(settings) => print_settings(settings, false),
         }
     }
 }
@@ -483,6 +527,15 @@ mod tests {
             vec!["myconnect", "clipboard", "get"],
             vec!["myconnect", "clipboard", "set", "hello"],
             vec!["myconnect", "clipboard", "watch"],
+            vec!["myconnect", "settings"],
+            vec![
+                "myconnect",
+                "settings",
+                "--device-name",
+                "Desk",
+                "--clipboard-sync",
+                "false",
+            ],
             vec!["myconnect", "--json", "devices"],
         ];
         for arguments in cases {

@@ -1,5 +1,6 @@
 import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
+import 'package:myconnect_ui/src/core/api/models/settings.dart';
 import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 
 /// A notification from the daemon's `/events` stream.
@@ -34,6 +35,9 @@ sealed class DaemonEvent {
       'transfer.completed' ||
       'transfer.failed' => TransferChanged(
         Transfer.fromJson(data! as Map<String, Object?>),
+      ),
+      'settings.changed' => SettingsChanged(
+        DaemonSettings.fromJson(data! as Map<String, Object?>),
       ),
       _ => UnhandledEvent(type),
     };
@@ -72,6 +76,11 @@ final class PairingChanged extends DaemonEvent {
 final class TransferChanged extends DaemonEvent {
   const new(this.transfer);
   final Transfer transfer;
+}
+
+final class SettingsChanged extends DaemonEvent {
+  const new(this.settings);
+  final DaemonSettings settings;
 }
 
 /// Clipboard events, which the UI does not consume yet.

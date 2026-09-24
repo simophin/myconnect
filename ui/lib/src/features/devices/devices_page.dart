@@ -2,8 +2,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:myconnect_ui/src/core/api/models/device.dart';
-import 'package:myconnect_ui/src/core/providers.dart';
 import 'package:myconnect_ui/src/features/devices/devices_controller.dart';
+import 'package:myconnect_ui/src/features/settings/settings_controller.dart';
 import 'package:myconnect_ui/src/shared/widgets.dart';
 
 /// Home screen: the devices this computer is paired with.
@@ -13,11 +13,16 @@ class DevicesPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final devices = ref.watch(pairedDevicesProvider);
-    final localName = ref.watch(daemonStatusProvider).value?.localDevice;
+    final localName = ref.watch(settingsProvider).value?.deviceName;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Devices'),
         actions: [
+          IconButton(
+            tooltip: 'Settings',
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () => context.go('/settings'),
+          ),
           IconButton(
             tooltip: 'Transfers',
             icon: const Icon(Icons.swap_vert),
@@ -33,7 +38,7 @@ class DevicesPage extends ConsumerWidget {
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'This computer: ${localName.deviceName}',
+                      'This computer: $localName',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ),

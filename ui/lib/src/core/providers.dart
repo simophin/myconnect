@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:myconnect_ui/src/core/api/event_stream.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
-import 'package:myconnect_ui/src/core/api/models/status.dart';
 import 'package:myconnect_ui/src/core/api/myconnect_api.dart';
 import 'package:myconnect_ui/src/core/daemon/daemon_host.dart';
 import 'package:myconnect_ui/src/core/desktop/desktop_notifications.dart';
@@ -101,8 +100,3 @@ class EventStreamStateNotifier extends Notifier<EventStreamState> {
     return hub.state;
   }
 }
-
-/// This machine's identity, as the daemon reports it.
-final daemonStatusProvider = FutureProvider<DaemonStatus>(
-  (ref) async => await (await ref.watch(apiProvider.future)).status(),
-);
