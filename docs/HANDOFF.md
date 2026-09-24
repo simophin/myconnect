@@ -429,7 +429,7 @@ in both directions, without loops. Never log clipboard contents, only lengths.
 
 ## 7. Automated end-to-end test
 
-> **Done (2026-09-24), locally; there is no CI yet.** `ui/integration_test/
+> **Done (2026-09-24); CI runs it** (`.github/workflows/ci.yml`). `ui/integration_test/
 > app_test.dart` pumps `MyConnectRoot` (now shared with `main`) with the real
 > `NativeDaemonHost` and FFI library, on a fresh data dir, loopback
 > discovery and an in-memory clipboard. Only notifications are silenced. Each
@@ -571,6 +571,19 @@ unavailable, entering a peer's IP makes it appear in the Add device list.
 ---
 
 ## 10. macOS and Windows packaging
+
+> **Built, not yet run (2026-09-24).** The macOS build phase
+> (`ui/macos/build_myconnect_ffi.sh`, universal via `lipo`) and the Windows
+> CMake step exist, and `NativeBindings.open()` loads the macOS dylib from
+> `Contents/Frameworks`. The sandbox entitlements now include network
+> client and server, user-selected files and Downloads. `.github/workflows/
+> build.yml` builds all three platforms when a release is published (or by
+> hand) and attaches them to it, stamped with the tag's version, which
+> Settings shows.
+> Nobody has launched the macOS or Windows app yet: check that the daemon
+> starts, and on macOS that a download folder chosen in Settings still works
+> after a restart (the sandbox forgets it without a security-scoped
+> bookmark). Nothing is signed or notarized yet.
 
 **Why.** The long-term goal is macOS, Linux and Windows. Only Linux bundles
 `libmyconnect_ffi` today (ADR 0006).
