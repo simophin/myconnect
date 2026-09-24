@@ -58,7 +58,11 @@ Everything in the milestone works in the Linux app and was checked live.
 Against KDE Connect for Android (a Pixel 8a, from the CLI daemon), these
 work: pairing, unpairing, clipboard, file transfer both ways, and browsing
 the phone's files. Nothing has been checked against KDE Connect on a
-desktop yet. Releases build only the macOS app (`.github/workflows/build.yml`).
+desktop yet. The tray menu lists each paired device (send files, ping,
+show details); on Linux it needs a patched `cnativeapi`, vendored in
+`ui/third_party/`. Releases (`.github/workflows/build.yml`) build the
+macOS app, Debian packages for amd64 and arm64, and for tagged builds an
+Arch Linux PKGBUILD; Windows is built only locally.
 
 ## Open work
 

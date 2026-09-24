@@ -16,7 +16,7 @@ library, on a free loopback port with a per-launch token.
 - Incoming pairing requests prompt on any screen
 - Send files from a device's page, by dropping them on the window (on a
   device to send straight to it, anywhere else to choose one), or from the
-  tray menu's "Send files…"; a transfers page (and each device's recent
+  device's entry in the tray menu; a transfers page (and each device's recent
   transfers) shows progress, cancels running transfers, and opens received
   files or their folder
 - Keeps running in the tray when the window is closed (Quit from the tray
@@ -38,10 +38,22 @@ flutter run -d linux
 
 ### Installing the Linux release
 
-The Linux release is a relocatable tarball of the bundle. Unpack it where you
-want it to live and run `./install.sh` to add MyConnect to your application
-menu, with its icon, for the current user. Run it again after moving the
-folder; `./install.sh --uninstall` removes the entry.
+Each release has Debian packages for amd64 and arm64, built on Debian 12,
+so they install on Ubuntu 22.04+ and Debian 12+:
+
+```sh
+sudo apt install ./myconnect_<version>_amd64.deb
+```
+
+On Arch Linux, download the release's `PKGBUILD` into an empty directory and
+run `makepkg -si`: it repackages the release's `.deb`.
+
+Both install the bundle to `/usr/lib/myconnect`, with `myconnect_ui` on the
+`PATH` and the menu entry and icons in `/usr/share`
+(`linux/packaging/build_deb.sh`). A bundle you build yourself is
+relocatable: run its `./install.sh` to add it to your application menu for
+the current user, again after moving it, and `./install.sh --uninstall` to
+remove the entry.
 
 ### Options (`--dart-define`)
 

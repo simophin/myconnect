@@ -41,9 +41,6 @@ class _DeviceDetails extends ConsumerStatefulWidget {
   ConsumerState<_DeviceDetails> createState() => _DeviceDetailsState();
 }
 
-/// The capability a peer lists when it accepts pings.
-const _pingCapability = 'kdeconnect.ping';
-
 /// How many of this device's transfers the page lists.
 const _recentTransfers = 5;
 
@@ -120,9 +117,7 @@ class _DeviceDetailsState extends ConsumerState<_DeviceDetails> {
     final device = widget.device;
     final theme = Theme.of(context);
     final canSend = device.acceptsFiles;
-    final canPing =
-        device.isConnected &&
-        device.incomingCapabilities.contains(_pingCapability);
+    final canPing = device.acceptsPings;
     final transfers = ref
         .watch(transferListProvider(device.deviceId))
         .take(_recentTransfers)

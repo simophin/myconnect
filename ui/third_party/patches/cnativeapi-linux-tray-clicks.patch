@@ -1,0 +1,54 @@
+--- a/cxx_impl/src/platform/linux/tray_icon_linux.cpp
++++ b/cxx_impl/src/platform/linux/tray_icon_linux.cpp
+@@ -367,7 +367,15 @@
+     if (error) g_error_free(error);
+   }
+ 
++  // MyConnect patch: export the menu for any trigger, so the panel can open
++  // it on a right click. Only the `Clicked` trigger makes the item menu-only
++  // (ItemIsMenu), where the panel opens the menu on a left click as well
++  // instead of calling Activate.
+   bool ShouldExposeMenu() const {
++    return context_menu_ != nullptr && context_menu_trigger_ != ContextMenuTrigger::None;
++  }
++
++  bool IsMenuOnly() const {
+     return context_menu_ != nullptr && context_menu_trigger_ == ContextMenuTrigger::Clicked;
+   }
+ 
+@@ -380,7 +388,7 @@
+     GVariantBuilder invalidated;
+     g_variant_builder_init(&changed, G_VARIANT_TYPE("a{sv}"));
+     g_variant_builder_init(&invalidated, G_VARIANT_TYPE("as"));
+-    g_variant_builder_add(&changed, "{sv}", "ItemIsMenu", g_variant_new_boolean(expose_menu));
++    g_variant_builder_add(&changed, "{sv}", "ItemIsMenu", g_variant_new_boolean(IsMenuOnly()));
+     g_variant_builder_add(&changed, "{sv}", "Menu",
+                           g_variant_new_object_path(expose_menu ? "/StatusNotifierItem/Menu"
+                                                                 : "/"));
+@@ -445,6 +453,17 @@
+         g_strcmp0(method_name, "ContextMenu") == 0 ||
+         g_strcmp0(method_name, "Scroll") == 0) {
+       g_dbus_method_invocation_return_value(invocation, nullptr);
++      // MyConnect patch: report the panel's clicks. Activate is a primary
++      // click; ContextMenu is a secondary click on a panel that didn't find
++      // an exported menu. Calls arrive on the main context this connection
++      // was made on, the same thread the menu items report clicks from.
++      Impl* self = static_cast<Impl*>(user_data);
++      if (!self->owner_) return;
++      if (g_strcmp0(method_name, "Activate") == 0) {
++        self->owner_->Emit<TrayIconClickedEvent>(self->id_);
++      } else if (g_strcmp0(method_name, "ContextMenu") == 0) {
++        self->owner_->Emit<TrayIconRightClickedEvent>(self->id_);
++      }
+     } else {
+       g_dbus_method_invocation_return_error(invocation, G_DBUS_ERROR,
+                                              G_DBUS_ERROR_UNKNOWN_METHOD,
+@@ -500,7 +519,7 @@
+     }
+ 
+     if (g_strcmp0(property_name, "ItemIsMenu") == 0)
+-      return g_variant_new_boolean(self->ShouldExposeMenu());
++      return g_variant_new_boolean(self->IsMenuOnly());
+     if (g_strcmp0(property_name, "Menu") == 0) {
+       const bool expose_menu = self->ShouldExposeMenu();
+       return g_variant_new_object_path(expose_menu ? "/StatusNotifierItem/Menu" : "/");
