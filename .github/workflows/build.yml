@@ -1,6 +1,8 @@
-# Builds the macOS app (a universal .app in a DMG) when a release is
-# published, and attaches it to the release. It can also be run by hand
-# (Actions → Build → Run workflow), leaving the packages as run artifacts.
+# Builds the desktop app when a release is published and attaches the
+# packages to the release: a universal macOS .app in a DMG, Debian packages
+# for amd64 and arm64, and a PKGBUILD that repackages those for Arch Linux.
+# It can also be run by hand (Actions → Build → Run workflow), leaving the
+# packages as run artifacts.
 name: Build
 
 on:
@@ -28,6 +30,8 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       name: ${{ steps.version.outputs.name }}
+      deb: ${{ steps.version.outputs.deb }}
+      tag: ${{ steps.version.outputs.tag }}
       flutter-args: ${{ steps.version.outputs.flutter-args }}
     steps:
       - id: version
@@ -45,11 +49,15 @@ jobs:
               exit 1
             fi
             echo "name=$version" >> "$GITHUB_OUTPUT"
+            echo "deb=$version" >> "$GITHUB_OUTPUT"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
             # --build-name sets the Info.plist version; the define is what
             # Settings shows (the Dart side reads it on every platform).
             args="$args --build-name=$version --dart-define=MYCONNECT_VERSION=$version"
           else
             echo "name=dev-${SHA::7}" >> "$GITHUB_OUTPUT"
+            # Sorts before any release.
+            echo "deb=0.0.0~dev+${SHA::7}" >> "$GITHUB_OUTPUT"
           fi
           echo "flutter-args=$args" >> "$GITHUB_OUTPUT"
 
@@ -99,10 +107,93 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  linux:
+    name: Linux (${{ matrix.arch }})
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            flutter-arch: x64
+            runner: ubuntu-24.04
+            flutter-channel: stable
+          # Flutter publishes no Linux arm64 SDK archive, so the action clones
+          # the SDK at the version's tag instead (the master channel's way).
+          - arch: arm64
+            flutter-arch: arm64
+            runner: ubuntu-24.04-arm
+            flutter-channel: master
+    runs-on: ${{ matrix.runner }}
+    # The packages need the glibc and libraries they were built against, so
+    # build on an old system: Debian 12 is the oldest with the GLib (2.74)
+    # the tray plugin needs. The result installs on Debian 12+ and Ubuntu
+    # 22.04+.
+    container: debian:12
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - name: Install Linux build dependencies
+        working-directory: /
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git jq unzip xz-utils \
+            clang cmake ninja-build pkg-config libgtk-3-dev dpkg-dev
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ matrix.flutter-channel }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      - run: flutter build linux --release ${{ needs.version.outputs.flutter-args }}
+      - name: Package
+        run: |
+          linux/packaging/build_deb.sh \
+            build/linux/${{ matrix.flutter-arch }}/release/bundle \
+            "${{ needs.version.outputs.deb }}" ../dist
+          dpkg-deb --info ../dist/*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  arch:
+    name: Arch Linux PKGBUILD
+    # The PKGBUILD downloads the .debs from the release, so it needs a tag.
+    if: needs.version.outputs.tag != ''
+    needs: [version, linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: linux-*
+          path: debs
+          merge-multiple: true
+      - env:
+          TAG: ${{ needs.version.outputs.tag }}
+          DEB: ${{ needs.version.outputs.deb }}
+        run: |
+          mkdir dist
+          ui/linux/packaging/pkgbuild.sh "$TAG" \
+            "debs/myconnect_${DEB}_amd64.deb" "debs/myconnect_${DEB}_arm64.deb" \
+            > dist/PKGBUILD
+          cat dist/PKGBUILD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch
+          path: dist/*
+          if-no-files-found: error
+
   release:
     name: Attach to release
     if: github.event_name == 'release'
-    needs: macos
+    needs: [macos, linux, arch]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
