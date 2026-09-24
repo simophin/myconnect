@@ -85,6 +85,12 @@ way. `tool/integration_test.sh` runs it under `xvfb-run` and
 `dbus-run-session` so nothing opens on your desktop; `flutter test
 integration_test -d linux` also works on a desktop session.
 
+The app and tray icons are drawn in `icon/app_icon.svg`, with a simplified
+`icon/app_icon_small.svg` for 32 px and below. After editing either, run
+`tool/generate_icons.sh` (needs `rsvg-convert` and ImageMagick 7) to
+re-render the macOS icon set, the Windows `.ico`, the Linux window icon and
+`assets/tray_icon.png`, and commit the results.
+
 Layout:
 
 ```text
