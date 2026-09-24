@@ -299,6 +299,35 @@ async fn expired_pair_request_timestamp_is_ignored() {
 }
 
 #[tokio::test]
+async fn pair_request_within_ordinary_clock_drift_is_accepted() {
+    // Seen against a real phone whose clock was two minutes ahead: KDE
+    // Connect tolerates up to 30 minutes of skew, well beyond the 30-second
+    // pairing timeout.
+    for skew in [-120, 120] {
+        let mut harness = harness();
+        harness.application.handle_peer_packet(
+            &harness.peer_id,
+            Packet::from_body(
+                0,
+                "kdeconnect.pair",
+                &PairingBody {
+                    pair: true,
+                    timestamp: Some(unix_seconds() + skew),
+                    extra: Map::new(),
+                },
+            )
+            .unwrap(),
+        );
+
+        let EventData::PairingRequested(pairing) = next_pairing_event(&mut harness.events).await
+        else {
+            panic!("expected a pairing.requested event for skew {skew}");
+        };
+        assert_eq!(pairing.direction, PairingDirection::Incoming);
+    }
+}
+
+#[tokio::test]
 async fn clock_skewed_pair_request_is_ignored() {
     let mut harness = harness();
     let far_future_timestamp = unix_seconds() + 3600;

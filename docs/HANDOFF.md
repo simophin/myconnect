@@ -67,7 +67,7 @@ KDE Connect install yet.
 | # | Item | Priority | Mostly |
 | --- | --- | --- | --- |
 | 1 | ~~[Tell the peer when unpairing](#1-tell-the-peer-when-unpairing)~~ **Done** | P0 | Rust |
-| 2 | [Interop check against real KDE Connect](#2-interop-check-against-real-kde-connect) | P0 | Manual + Rust fixes |
+| 2 | ~~[Interop check against real KDE Connect](#2-interop-check-against-real-kde-connect)~~ **Done** | P0 | Manual + Rust fixes |
 | 3 | [Keep running in the background](#3-keep-running-in-the-background-tray-and-notifications) | P0 | Flutter |
 | 4 | [Send files and a transfers view](#4-send-files-and-a-transfers-view) | P1 | Flutter (+ small API) |
 | 5 | [Daemon settings API and screen](#5-daemon-settings-api-and-settings-screen) | P1 | Rust + Flutter |
@@ -125,6 +125,21 @@ removes the device from the app's list without a restart.
 ---
 
 ## 2. Interop check against real KDE Connect
+
+> **Done (2026-09-24), against KDE Connect for Android.** Checked with the CLI
+> daemon (real LAN, separate data dir) against the owner's Pixel 8a. Every
+> step works both ways except ping from the phone, which is item 8. Fixed along
+> the way: `ApiClient::send_file` didn't set the file part's `Content-Length`
+> header, so `myconnect send` always failed with `missing_declared_size`.
+> Incoming pair requests were checked against the 30 s pairing timeout
+> instead of KDE Connect's 1800 s clock-skew tolerance, so a phone whose clock
+> was 2 minutes off couldn't pair with us. Dropped pair requests and received
+> packet types are now logged at debug level. The phone only sends its
+> clipboard when the user taps "Send clipboard" (an Android 10+
+> restriction). Each UDP announcement from a connected peer makes us re-dial
+> and replace the session; upstream does the same (rate-limited per device),
+> so this is expected. Still open: a KDE Connect *desktop* peer, and a pass
+> through the Flutter app instead of the CLI. See ARCHITECTURE §10.
 
 **Why.** Every test so far is MyConnect against MyConnect. The protocol code
 follows the research in [`archive/KDECONNECT_PROTOCOL_RESEARCH.md`](archive/KDECONNECT_PROTOCOL_RESEARCH.md),

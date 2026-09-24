@@ -15,8 +15,8 @@ cancellation, and a versioned local HTTP API that the CLI and the Flutter
 desktop UI ([`ui/`](ui/README.md)) use exclusively — no frontend touches KDE
 Connect sockets or state directly.
 
-Manual interoperability testing against a real KDE Connect (Android/desktop)
-installation has not yet been performed; see
+Pairing, clipboard sync and file transfer have been checked manually against
+KDE Connect for Android, but not yet against KDE Connect on desktop; see
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#10-known-gaps) for the current
 list of gaps, and [`docs/HANDOFF.md`](docs/HANDOFF.md) for what to build
 next.

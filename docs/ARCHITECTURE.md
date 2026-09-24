@@ -112,6 +112,10 @@ States: `requested → awaiting_confirmation → accepted | rejected | expired |
   session from a paired peer removes its trust, sets `paired: false`, and
   publishes `device.updated`; the connection stays open (as in KDE
   Connect), so the device remains reachable and can be paired again.
+- An incoming request's `timestamp` (seconds) must be within 30 minutes of
+  the local clock, as in KDE Connect; requests without one, or further off,
+  are dropped. This tolerance is separate from the 30-second pairing
+  timeout: real devices routinely drift by more than 30 seconds.
 - Verification codes, certificates, and private keys never appear in a
   pairing snapshot or in logs.
 
@@ -231,9 +235,17 @@ git diff --check
 Prioritized next work, with implementation notes for each item, is in
 [`HANDOFF.md`](HANDOFF.md).
 
-- No manual interoperability check against a real KDE Connect
-  (Android/desktop) implementation has been performed in this environment.
-  Everything above is verified against this codebase's own peers only.
+- Interoperability was checked manually on 2026-09-24 against KDE Connect
+  for Android (Pixel 8a, protocol v8) over a real LAN, using the CLI daemon.
+  Working in both directions: discovery, TLS handshake, pairing with
+  matching verification codes, unpairing, clipboard (the phone sends only
+  when the user taps "Send clipboard", an Android 10+ restriction), and file
+  transfer (3 MB, byte-identical). Ping to the phone works; ping from the
+  phone is dropped (next item). Not yet checked against KDE Connect on
+  desktop, and not from the Flutter app (the app embeds the same daemon).
+  Two bugs found by the check are fixed: the CLI's upload omitted the file
+  part's `Content-Length` header, and incoming pair requests were dropped
+  when the clocks differed by more than 30 seconds.
 - Ping is outgoing only: incoming `kdeconnect.ping` packets are dropped and
   not advertised in `incomingCapabilities`.
 - No OS clipboard backend, no Bluetooth transport, no multi-file/directory

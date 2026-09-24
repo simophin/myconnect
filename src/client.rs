@@ -6,6 +6,7 @@ use futures_core::Stream;
 use futures_util::StreamExt;
 use reqwest::{
     Client, Response, StatusCode, Url,
+    header::{CONTENT_LENGTH, HeaderMap, HeaderValue},
     multipart::{Form, Part},
 };
 use serde::{Deserialize, Serialize};
@@ -208,7 +209,13 @@ impl ApiClient {
             .ok_or(ClientError::InvalidFileName)?
             .to_owned();
         let stream = ReaderStream::new(file);
+        // The daemon checks the declared size before streaming, and reads it
+        // from the part's own Content-Length header, which
+        // `stream_with_length` does not set.
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_LENGTH, HeaderValue::from(length));
         let part = Part::stream_with_length(reqwest::Body::wrap_stream(stream), length)
+            .headers(headers)
             .file_name(file_name)
             .mime_str("application/octet-stream")
             .map_err(ClientError::Build)?;

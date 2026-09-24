@@ -243,6 +243,13 @@ async fn start_transfer(headers: HeaderMap, body: Bytes) -> (StatusCode, Json<Tr
         body.windows(b"streamed body".len())
             .any(|window| window == b"streamed body")
     );
+    // The daemon rejects a file part without its own Content-Length header.
+    let part_length = format!("content-length: {}\r\n", b"streamed body".len());
+    assert!(
+        body.to_ascii_lowercase()
+            .windows(part_length.len())
+            .any(|window| window == part_length.as_bytes())
+    );
     assert!(
         body.windows(device().device_id.len())
             .any(|window| window == device().device_id.as_bytes())

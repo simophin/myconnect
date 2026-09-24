@@ -37,6 +37,11 @@ use crate::{
 
 /// How long a pairing session may remain non-terminal before it expires.
 pub const PAIRING_TIMEOUT: Duration = Duration::from_secs(30);
+/// How far an incoming pair request's timestamp may be from our clock, in
+/// seconds. Matches KDE Connect's `ALLOWED_TIMESTAMP_TIME_DIFFERENCE_SECONDS`:
+/// ordinary clock drift between devices is far larger than the pairing
+/// timeout, so the timeout can't double as the skew limit.
+pub const PAIRING_TIMESTAMP_TOLERANCE_SECS: u64 = 1800;
 /// Bounded capacity of the channel used to forward HTTP multipart chunks to
 /// the outgoing payload connection. Small on purpose: the HTTP handler and
 /// the network writer stay coupled by backpressure instead of one side
@@ -612,8 +617,10 @@ impl ApplicationHandle {
     /// only if the sending device is currently paired; unpaired connections
     /// cannot trigger any other behavior.
     pub fn handle_peer_packet(&self, device_id: &str, packet: Packet) {
+        tracing::debug!(device_id, packet_type = %packet.packet_type, "packet received");
         if packet.packet_type == "kdeconnect.pair" {
             let Ok(body) = packet.body_as::<PairingBody>() else {
+                tracing::debug!(device_id, "dropping malformed pair packet");
                 return;
             };
             self.handle_pair_body(device_id, body, unix_seconds());
@@ -1023,12 +1030,17 @@ impl ApplicationHandle {
 
     fn begin_incoming_pairing(&self, device_id: &str, body: PairingBody, received_at: i64) {
         let Some(timestamp) = body.timestamp else {
+            tracing::debug!(device_id, "dropping pair request without a timestamp");
             return;
         };
-        // Reject expired requests and implausible clock skew alike: both
-        // manifest as the declared timestamp being outside the pairing
-        // window relative to our local clock.
-        if (received_at - timestamp).unsigned_abs() > PAIRING_TIMEOUT.as_secs() {
+        // Reject stale requests and implausible clock skew alike, as KDE
+        // Connect does ("Device clocks are out of sync").
+        if (received_at - timestamp).unsigned_abs() > PAIRING_TIMESTAMP_TOLERANCE_SECS {
+            tracing::debug!(
+                device_id,
+                skew_secs = received_at - timestamp,
+                "dropping pair request: device clocks are out of sync"
+            );
             return;
         }
 
@@ -1040,9 +1052,11 @@ impl ApplicationHandle {
                 return;
             }
             let Some(device) = state.devices.get(device_id) else {
+                tracing::debug!(device_id, "dropping pair request from an unknown device");
                 return;
             };
             let Some(connection) = state.connections.get(device_id).cloned() else {
+                tracing::debug!(device_id, "dropping pair request without a connection");
                 return;
             };
             let Ok(peer_spki) = subject_public_key_info(&connection.certificate_der) else {
