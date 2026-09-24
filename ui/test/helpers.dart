@@ -1,14 +1,19 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:myconnect_ui/src/app.dart';
 import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
 import 'package:myconnect_ui/src/core/api/models/status.dart';
 import 'package:myconnect_ui/src/core/api/myconnect_api.dart';
 import 'package:myconnect_ui/src/core/daemon/daemon_host.dart';
+import 'package:myconnect_ui/src/core/desktop/desktop_notifications.dart';
+import 'package:myconnect_ui/src/core/desktop/desktop_shell.dart';
 import 'package:myconnect_ui/src/core/providers.dart';
 
 class MockMyConnectApi extends Mock implements MyConnectApi;
@@ -22,6 +27,59 @@ class FakeDaemonHost implements DaemonHost {
 
   @override
   Future<void> stop() async => stops++;
+}
+
+class FakeDesktopShell implements DesktopShell {
+  VoidCallback? onCloseRequested;
+  VoidCallback? onShowRequested;
+  VoidCallback? onQuitRequested;
+  bool visible = true;
+  bool focused = true;
+  bool exited = false;
+
+  @override
+  Future<void> start({
+    required VoidCallback onCloseRequested,
+    required VoidCallback onShowRequested,
+    required VoidCallback onQuitRequested,
+  }) async {
+    this.onCloseRequested = onCloseRequested;
+    this.onShowRequested = onShowRequested;
+    this.onQuitRequested = onQuitRequested;
+  }
+
+  @override
+  Future<void> showWindow() async => visible = focused = true;
+
+  @override
+  Future<void> hideWindow() async => visible = focused = false;
+
+  @override
+  Future<bool> isWindowFocused() async => focused;
+
+  @override
+  Future<void> exit() async => exited = true;
+}
+
+class FakeDesktopNotifications implements DesktopNotifications {
+  VoidCallback? onActivated;
+
+  /// Notifications currently shown, by id.
+  final shown = <int, String>{};
+
+  @override
+  Future<void> start({required VoidCallback onActivated}) async =>
+      this.onActivated = onActivated;
+
+  @override
+  Future<void> show({
+    required int id,
+    required String title,
+    required String body,
+  }) async => shown[id] = body;
+
+  @override
+  Future<void> cancel(int id) async => shown.remove(id);
 }
 
 Device device({
@@ -79,12 +137,16 @@ class TestDaemon {
 
   final api = MockMyConnectApi();
   final host = FakeDaemonHost();
+  final shell = FakeDesktopShell();
+  final notifications = FakeDesktopNotifications();
   final events = StreamController<DaemonEvent>.broadcast();
   List<Device> devices = [];
   List<Pairing> pairings = [];
 
   List<Override> get overrides => [
     daemonHostProvider.overrideWithValue(host),
+    desktopShellProvider.overrideWithValue(shell),
+    desktopNotificationsProvider.overrideWithValue(notifications),
     apiProvider.overrideWith((ref) async => api),
     daemonEventsProvider.overrideWith((ref) {
       final hub = DaemonEventHub(events.stream);
@@ -98,4 +160,13 @@ class TestDaemon {
     events.add(event);
     await pumpEventQueue();
   }
+}
+
+/// Run the whole app against [daemon].
+Future<TestDaemon> pumpApp(WidgetTester tester, TestDaemon daemon) async {
+  await tester.pumpWidget(
+    ProviderScope(overrides: daemon.overrides, child: const MyConnectApp()),
+  );
+  await tester.pumpAndSettle();
+  return daemon;
 }

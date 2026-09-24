@@ -52,7 +52,8 @@ The `ffi/` crate (`myconnect-ffi`, a `cdylib`) exports exactly:
   not justify `ffigen`.
 - The daemon's lifetime is tied to the app: it stops when the app exits
   (`AppLifecycleListener.onExitRequested`) or when the `ProviderScope` is
-  disposed. A hard kill skips graceful shutdown; the OS still reclaims
+  disposed. (Since [0007](0007-keep-running-in-the-tray.md), closing the
+  window no longer exits the app; the tray's Quit does.) A hard kill skips graceful shutdown; the OS still reclaims
   sockets, but partial `.part` downloads may be left behind.
 - The HTTP API gained optional authentication for this: a token is
   enforced only when the daemon is started with one (the CLI defaults to

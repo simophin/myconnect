@@ -6,10 +6,22 @@ import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/status.dart';
 import 'package:myconnect_ui/src/core/api/myconnect_api.dart';
 import 'package:myconnect_ui/src/core/daemon/daemon_host.dart';
+import 'package:myconnect_ui/src/core/desktop/desktop_notifications.dart';
+import 'package:myconnect_ui/src/core/desktop/desktop_shell.dart';
 
 /// Which daemon this UI drives. Overridden in tests.
 final daemonHostProvider = Provider<DaemonHost>(
   (ref) => DaemonHost.fromEnvironment(),
+);
+
+/// The native window and tray. Overridden in tests.
+final desktopShellProvider = Provider<DesktopShell>(
+  (ref) => NativeDesktopShell(),
+);
+
+/// Desktop notifications. Overridden in tests.
+final desktopNotificationsProvider = Provider<DesktopNotifications>(
+  (ref) => LocalDesktopNotifications(),
 );
 
 /// The running daemon's endpoint. Starting the app starts the daemon;

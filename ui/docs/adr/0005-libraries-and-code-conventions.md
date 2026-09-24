@@ -21,6 +21,9 @@ style, while keeping the dependency list short.
 | Logging | `logging` | Hierarchical loggers, printed in debug builds. |
 | Lints | `very_good_analysis` | Strict; exceptions are listed with reasons in `analysis_options.yaml`. |
 | Test doubles | `mocktail` | Mocks without codegen. |
+| Window control | `window_manager` | The standard desktop window plugin: intercepts close, hides, shows and focuses on Linux, macOS and Windows. See [0007](0007-keep-running-in-the-tray.md). |
+| Tray icon | `tray_manager` | The most used tray plugin. From 0.6 it sits on `nativeapi`, and on Linux it is a D-Bus StatusNotifierItem with no libappindicator build dependency. |
+| Notifications | `flutter_local_notifications` | Widely used; covers Linux (freedesktop notifications over D-Bus), macOS and Windows, with click callbacks. |
 
 Conventions:
 

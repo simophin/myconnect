@@ -14,6 +14,10 @@ library, on a free loopback port with a per-launch token.
 - Add device: scan for nearby devices and start pairing, with the
   verification code and outcome
 - Incoming pairing requests prompt on any screen
+- Keeps running in the tray when the window is closed (Quit from the tray
+  menu stops it), with a desktop notification for pairing requests that
+  arrive while the window is hidden. Launching it again shows the running
+  instance. On GNOME the tray icon needs the AppIndicator extension.
 
 ## Running
 
@@ -69,13 +73,15 @@ Layout:
 lib/
 ├── main.dart
 └── src/
-    ├── app.dart                 # MaterialApp, theme, daemon shutdown on exit
+    ├── app.dart                 # MaterialApp, theme
     ├── core/
     │   ├── api/                 # dio client, SSE parsing, reconnecting stream, models
     │   ├── daemon/              # DaemonHost: FFI-embedded or external daemon
+    │   ├── desktop/             # window + tray, desktop notifications
     │   ├── routing/router.dart
     │   └── providers.dart       # host → endpoint → api → event hub
     ├── features/
+    │   ├── background/          # close to tray, quit, pairing notifications
     │   ├── devices/             # list, details, add device (scan)
     │   └── pairing/             # outgoing pairing page, incoming prompt
     └── shared/widgets.dart

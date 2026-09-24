@@ -207,7 +207,9 @@ tracked through the resource's own state (poll the resource or watch
 
 Errors come back as `{"error": "..."}`; panics are caught at the boundary.
 The embedder then uses only the HTTP API. The Linux Flutter build compiles
-and bundles this library (see `ui/docs/adr/0006`).
+and bundles this library (see `ui/docs/adr/0006`). The app keeps running in
+the tray with its window closed, so the embedded daemon stops only when the
+user quits (see `ui/docs/adr/0007`).
 
 ## 9. Testing
 

@@ -13,6 +13,7 @@ editing it.
 | [0004](0004-riverpod-for-state-and-dependency-injection.md) | Riverpod 3 (without codegen) for state and dependency injection | Accepted |
 | [0005](0005-libraries-and-code-conventions.md) | Library choices and code conventions | Accepted |
 | [0006](0006-build-the-rust-core-from-the-platform-build.md) | Build and bundle the Rust core from the platform build | Accepted (Linux) |
+| [0007](0007-keep-running-in-the-tray.md) | Keep running in the tray when the window closes | Accepted |
 
 Template for new records:
 

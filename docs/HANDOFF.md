@@ -58,6 +58,8 @@ Working and verified live (UI ↔ CLI daemon over loopback):
   is resolved elsewhere or expires.
 - An embedded daemon started through FFI on a free port with a per-launch
   token, and a "reconnecting" banner if the event stream drops.
+- Close to tray, tray Show and Quit, pairing-request notifications, and a
+  single instance on Linux (item 3).
 
 Only Linux bundles the native library. Nothing has been tested against a real
 KDE Connect install yet.
@@ -68,7 +70,7 @@ KDE Connect install yet.
 | --- | --- | --- | --- |
 | 1 | ~~[Tell the peer when unpairing](#1-tell-the-peer-when-unpairing)~~ **Done** | P0 | Rust |
 | 2 | ~~[Interop check against real KDE Connect](#2-interop-check-against-real-kde-connect)~~ **Done** | P0 | Manual + Rust fixes |
-| 3 | [Keep running in the background](#3-keep-running-in-the-background-tray-and-notifications) | P0 | Flutter |
+| 3 | ~~[Keep running in the background](#3-keep-running-in-the-background-tray-and-notifications)~~ **Done** | P0 | Flutter |
 | 4 | [Send files and a transfers view](#4-send-files-and-a-transfers-view) | P1 | Flutter (+ small API) |
 | 5 | [Daemon settings API and screen](#5-daemon-settings-api-and-settings-screen) | P1 | Rust + Flutter |
 | 6 | [OS clipboard integration](#6-os-clipboard-integration) | P1 | Rust |
@@ -166,6 +168,26 @@ lists precisely what doesn't work.
 ---
 
 ## 3. Keep running in the background (tray and notifications)
+
+> **Done (2026-09-24), on Linux.** Closing the window hides it
+> (`window_manager`). The tray icon (`tray_manager` 0.7, a D-Bus
+> StatusNotifierItem, so no libappindicator) offers Show and Quit, and Quit
+> stops the daemon before the process exits. Pairing requests that arrive
+> while the window is unfocused raise a notification
+> (`flutter_local_notifications`). The notification is withdrawn when the
+> request is resolved, and clicking it brings the window back with the
+> prompt. The Linux runner is a unique `GApplication`, so a second launch
+> shows the running window and exits. The policy is in
+> `lib/src/features/background/background_host.dart`; the plugins sit behind
+> `DesktopShell` and `DesktopNotifications` (`lib/src/core/desktop/`), faked
+> in widget tests. Verified live under Xvfb with a private D-Bus session, a
+> stand-in notification server and a stand-in tray host: close, then a CLI
+> pairing request, a notification, click, prompt, cancel from the CLI (the
+> notification closes), a second launch, then tray Show and Quit (API and LAN
+> ports closed, the peer sees the device unavailable). See ADR 0007. Not done:
+> start on login (it needs item 5's settings), a Windows single-instance
+> mutex (item 10), and a check on a real desktop panel (KDE, or GNOME with
+> the extension). Items 4 and 8 can notify through `desktopNotificationsProvider`.
 
 **Why.** The daemon lives inside the app process (ADR 0002). Closing the
 window currently exits the app, which stops the daemon, so devices lose

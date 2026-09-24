@@ -1,23 +1,13 @@
 import 'dart:async';
 
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:mocktail/mocktail.dart';
-import 'package:myconnect_ui/src/app.dart';
 import 'package:myconnect_ui/src/core/api/api_exception.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
 
 import '../helpers.dart';
-
-Future<TestDaemon> pumpApp(WidgetTester tester, TestDaemon daemon) async {
-  await tester.pumpWidget(
-    ProviderScope(overrides: daemon.overrides, child: const MyConnectApp()),
-  );
-  await tester.pumpAndSettle();
-  return daemon;
-}
 
 void main() {
   testWidgets('home lists paired devices only', (tester) async {
