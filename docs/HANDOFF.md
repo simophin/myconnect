@@ -22,7 +22,8 @@ the detail behind each feature and the traps found along the way.
 
 ## Ground rules (set by the project owner)
 
-- **The UI is dumb.** It persists nothing and reads/writes only through the
+- **The UI is dumb.** It persists nothing but the main window's placement
+  (ADR 0009), and reads/writes only through the
   HTTP API. If a feature needs data the API doesn't have, add the endpoint
   (and, if the data changes over time, an event) in Rust first.
 - **Every resource needs a snapshot endpoint and events.** The UI loads a
@@ -121,8 +122,9 @@ macOS app has only an ad-hoc signature. A Flutter build hook
 - Widgets that `await` a mutation must capture the router or messenger
   beforehand, because an event can unmount them mid-await (see
   `device_detail_page.dart`). Apply the same care to new screens.
-- `--dart-define` reads live only in `DaemonHost.fromEnvironment`, with an
-  ignore for `avoid_redundant_argument_values`. Never run `dart fix` on
+- `--dart-define` reads live only in `daemon_host.dart`
+  (`DaemonHost.fromEnvironment` and `dataDirOverride`), with an ignore for
+  `avoid_redundant_argument_values`. Never run `dart fix` on
   that file without checking the diff.
 - In debug builds the DEBUG banner covers the rightmost app bar action,
   which on the home screen is the Transfers button (at about x 1244–1268,

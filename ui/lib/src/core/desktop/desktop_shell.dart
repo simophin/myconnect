@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:logging/logging.dart';
+import 'package:myconnect_ui/src/core/desktop/window_placement.dart';
+import 'package:screen_retriever/screen_retriever.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -34,7 +37,9 @@ final class TrayMenuSeparator extends TrayMenuEntry {
 /// closing or quitting means, and what the tray menu holds, is decided by
 /// `BackgroundHost`.
 abstract interface class DesktopShell {
-  /// Take over the window's close button and show the tray icon.
+  /// Take over the window's close button, show the tray icon, and put the
+  /// window back as it was last left: in the same place, and hidden if the
+  /// app was quit with the window closed.
   ///
   /// [onCloseRequested] replaces closing the window. [onTrayClicked] is a
   /// primary click on the tray icon, where the platform reports one; the
@@ -55,11 +60,24 @@ abstract interface class DesktopShell {
   Future<bool> isWindowFocused();
 
   /// Remove the tray icon and close the window for good, ending the process.
+  /// The window's placement is saved first, for the next launch.
   Future<void> exit();
 }
 
-/// [DesktopShell] over `window_manager` and `tray_manager`.
+/// [DesktopShell] over `window_manager` and `tray_manager`. It keeps the
+/// window's placement in [placements] as it changes, and puts the window
+/// back that way on the next launch.
 class NativeDesktopShell with WindowListener implements DesktopShell {
+  new({required this.placements});
+
+  final WindowPlacementStore placements;
+
+  /// The placement as last seen. [WindowPlacement.bounds] is kept from
+  /// before the window was hidden, maximized or minimized.
+  WindowPlacement _placement = const WindowPlacement(visible: true);
+  Timer? _saveTimer;
+  bool _exiting = false;
+
   // Held for as long as the icon should show: a collected TrayIcon removes
   // itself from the tray.
   TrayIcon? _tray;
@@ -78,6 +96,49 @@ class NativeDesktopShell with WindowListener implements DesktopShell {
     await windowManager.setPreventClose(true);
     _tray = _createTray(onClicked: onTrayClicked);
     _applyMenu();
+
+    final saved = await placements.load();
+    // Without a tray icon, a hidden window could only come back by
+    // launching the app again.
+    final show = (saved?.visible ?? true) || _tray == null;
+    _placement = WindowPlacement(
+      visible: show,
+      bounds: saved?.bounds,
+      maximized: saved?.maximized ?? false,
+    );
+    await _restorePlacement();
+    // The window starts hidden (see the Linux runner); this shows it.
+    if (show) await showWindow();
+  }
+
+  /// Put the hidden window where [_placement] says, or centre it at that
+  /// size if the spot is no longer on any screen.
+  Future<void> _restorePlacement() async {
+    try {
+      if (_placement.bounds case final bounds?) {
+        final displays = await screenRetriever.getAllDisplays();
+        final screens = [
+          for (final display in displays)
+            (display.visiblePosition ?? Offset.zero) &
+                (display.visibleSize ?? display.size),
+        ];
+        if (fitsOnScreen(bounds, screens)) {
+          await windowManager.setBounds(bounds);
+        } else {
+          await windowManager.setSize(bounds.size);
+          await windowManager.center();
+        }
+      }
+      if (_placement.maximized) await windowManager.maximize();
+    } on Object catch (error) {
+      _log.warning('Could not restore the window placement: $error');
+    }
+  }
+
+  /// Stop following the window, e.g. when a test's app is torn down.
+  void dispose() {
+    _saveTimer?.cancel();
+    windowManager.removeListener(this);
   }
 
   @override
@@ -90,7 +151,44 @@ class NativeDesktopShell with WindowListener implements DesktopShell {
   void onWindowClose() => _onCloseRequested?.call();
 
   @override
+  void onWindowEvent(String eventName) {
+    if (_exiting || eventName == 'close') return;
+    // Moves and resizes arrive continuously while dragging.
+    _saveTimer?.cancel();
+    _saveTimer = Timer(
+      const Duration(milliseconds: 500),
+      () => unawaited(_savePlacement()),
+    );
+  }
+
+  /// Read the window's placement, and save it if it changed.
+  Future<void> _savePlacement() async {
+    final WindowPlacement placement;
+    try {
+      final visible = await windowManager.isVisible();
+      final maximized = await windowManager.isMaximized();
+      // A hidden window can report a stale position, and a maximized or
+      // minimized one isn't where it goes back to.
+      final normal =
+          visible && !maximized && !await windowManager.isMinimized();
+      placement = WindowPlacement(
+        visible: visible,
+        maximized: maximized,
+        bounds: normal ? await windowManager.getBounds() : _placement.bounds,
+      );
+    } on Object catch (error) {
+      _log.warning('Could not read the window placement: $error');
+      return;
+    }
+    if (placement == _placement) return;
+    _placement = placement;
+    await placements.save(placement);
+  }
+
+  @override
   Future<void> showWindow() async {
+    // Some window managers place a window afresh each time it is mapped.
+    if (!await windowManager.isVisible()) await _restorePlacement();
     await windowManager.show();
     await windowManager.focus();
   }
@@ -103,6 +201,10 @@ class NativeDesktopShell with WindowListener implements DesktopShell {
 
   @override
   Future<void> exit() async {
+    // Hidden or showing, as the user left it: the next launch does the same.
+    _saveTimer?.cancel();
+    await _savePlacement();
+    _exiting = true;
     _tray?.dispose();
     _tray = null;
     _menu?.dispose();

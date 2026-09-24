@@ -1,6 +1,6 @@
 # 0001. The UI is a stateless client of the daemon's HTTP API
 
-- Status: Accepted
+- Status: Accepted; window placement excepted by [0009](0009-remember-the-main-window-placement.md)
 - Date: 2026-09-24
 
 ## Context

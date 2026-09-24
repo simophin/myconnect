@@ -7,16 +7,26 @@ import 'package:myconnect_ui/src/core/api/myconnect_api.dart';
 import 'package:myconnect_ui/src/core/daemon/daemon_host.dart';
 import 'package:myconnect_ui/src/core/desktop/desktop_notifications.dart';
 import 'package:myconnect_ui/src/core/desktop/desktop_shell.dart';
+import 'package:myconnect_ui/src/core/desktop/window_placement.dart';
 
 /// Which daemon this UI drives. Overridden in tests.
 final daemonHostProvider = Provider<DaemonHost>(
   (ref) => DaemonHost.fromEnvironment(),
 );
 
-/// The native window and tray. Overridden in tests.
-final desktopShellProvider = Provider<DesktopShell>(
-  (ref) => NativeDesktopShell(),
+/// Where the main window's placement is saved. Overridden in tests.
+final windowPlacementStoreProvider = Provider<WindowPlacementStore>(
+  (ref) => WindowPlacementStore.fromEnvironment(),
 );
+
+/// The native window and tray. Overridden in tests.
+final desktopShellProvider = Provider<DesktopShell>((ref) {
+  final shell = NativeDesktopShell(
+    placements: ref.watch(windowPlacementStoreProvider),
+  );
+  ref.onDispose(shell.dispose);
+  return shell;
+});
 
 /// Desktop notifications. Overridden in tests.
 final desktopNotificationsProvider = Provider<DesktopNotifications>(
