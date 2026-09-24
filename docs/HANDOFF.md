@@ -62,7 +62,9 @@ Working and verified live (UI ↔ CLI daemon over loopback):
   single instance on Linux (item 3).
 - Sending a file from a device's page, a transfers view with progress,
   cancel, and open file/folder, and a notification for received files
-  (item 4).
+  (item 4). Files dropped on the window, or picked from the tray menu's
+  "Send files…", go to the device they were dropped on or to one chosen in
+  a dialog.
 - A settings screen (device name, download folder, clipboard sync, close
   to tray), stored by the daemon, with renames reaching peers at once
   (item 5).
@@ -262,6 +264,20 @@ API port stops listening).
 > drag-and-drop onto a device (`desktop_drop`), sending several files at
 > once (the API takes one file per request), and a live check of the
 > received-file notification (it is covered by a widget test).
+>
+> **Later (2026-09-24):** drag-and-drop and several files at once are
+> done, in the UI only: `FileDropZone` (`features/send/`, `desktop_drop`)
+> sends files dropped on a device tile or page straight to it, and asks
+> which device for a drop anywhere else; "Send file" and the tray's new
+> "Send files…" pick several files. Files go one request at a time, in
+> order. The tray icon itself can't take drops: StatusNotifierItem (Linux)
+> and the Windows notification area have no drop support, and only macOS's
+> `NSStatusItem` could, through native code. Verified live under Xvfb
+> against a CLI peer, with a GTK drag source driven by XTest: a drop on the
+> peer's tile, two files dropped on empty space and sent through the dialog,
+> and the tray entry (clicked through `com.canonical.dbusmenu.Event` on the
+> private bus) all arrived byte-identical. Not checked: a drop from a real
+> file manager, macOS and Windows.
 
 **Why.** File transfer is a core feature and the API already supports it end
 to end; only the UI is missing.

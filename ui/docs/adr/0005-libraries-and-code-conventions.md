@@ -27,6 +27,7 @@ style, while keeping the dependency list short.
 | Tray icon | `tray_manager` | The most used tray plugin. From 0.6 it sits on `nativeapi`, and on Linux it is a D-Bus StatusNotifierItem with no libappindicator build dependency. |
 | Notifications | `flutter_local_notifications` | Widely used; covers Linux (freedesktop notifications over D-Bus), macOS and Windows, with click callbacks. |
 | File picker | `file_selector` | The Flutter team's plugin; native open dialogs on Linux (GTK, or the portal), macOS and Windows. |
+| Dropping files on the window | `desktop_drop` | The widely used drop plugin (MixinNetwork) for Linux, macOS and Windows. Every `DropTarget` receives every drop inside its bounds, even on covered pages, so the app has one window-wide target (`FileDropZone`) that hit-tests for the device under the pointer. Tray icons can't take drops on Linux (StatusNotifierItem) or Windows, so the tray offers *Send files…* instead. |
 | Default device name (Rust daemon) | `gethostname` | Small, widely used crate for the host name on Linux, macOS and Windows; the standard library has no API for it. |
 | Opening files and folders | `url_launcher` | The Flutter team's plugin; opens `file:` URIs with the desktop's default app (on Linux through GIO, like `xdg-open`). |
 | Desktop clipboard (Rust daemon) | `arboard` | The standard cross-platform clipboard crate (maintained by 1Password), covering X11, Wayland (with the `wayland-data-control` feature), macOS and Windows. Default features are off, so it doesn't pull in image support. |

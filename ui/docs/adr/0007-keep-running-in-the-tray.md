@@ -16,7 +16,8 @@ launch must not start a second daemon: it would fight the first for UDP
 
 - **Closing hides; only Quit exits.** `window_manager` takes over the close
   button (`setPreventClose`) and the window is hidden instead. A tray icon
-  (`tray_manager`) offers *Show MyConnect* and *Quit*. Quit stops the daemon
+  (`tray_manager`) offers *Show MyConnect*, *Send files…* (which shows the
+  window, then asks for files and a device) and *Quit*. Quit stops the daemon
   first, then destroys the window, which ends the process.
 - **The policy lives in Dart, the mechanics behind interfaces.**
   `BackgroundHost` (`features/background/`) decides what close, show, quit

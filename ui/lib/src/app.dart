@@ -5,6 +5,7 @@ import 'package:myconnect_ui/src/core/daemon/daemon_gate.dart';
 import 'package:myconnect_ui/src/core/routing/router.dart';
 import 'package:myconnect_ui/src/features/background/background_host.dart';
 import 'package:myconnect_ui/src/features/pairing/incoming_pairing_prompt.dart';
+import 'package:myconnect_ui/src/features/send/file_drop_zone.dart';
 
 /// The app inside its `ProviderScope`, as `main` runs it.
 class MyConnectRoot extends StatelessWidget {
@@ -37,7 +38,9 @@ class MyConnectApp extends ConsumerWidget {
       darkTheme: ThemeData(colorSchemeSeed: seed, brightness: Brightness.dark),
       routerConfig: ref.watch(routerProvider),
       builder: (context, child) => BackgroundHost(
-        child: DaemonGate(child: IncomingPairingPrompt(child: child!)),
+        child: DaemonGate(
+          child: FileDropZone(child: IncomingPairingPrompt(child: child!)),
+        ),
       ),
     );
   }

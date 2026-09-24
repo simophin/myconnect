@@ -14,9 +14,11 @@ library, on a free loopback port with a per-launch token.
 - Add device: scan for nearby devices, or add one by IP address, and start
   pairing, with the verification code and outcome
 - Incoming pairing requests prompt on any screen
-- Send a file from a device's page; a transfers page (and each device's
-  recent transfers) shows progress, cancels running transfers, and opens
-  received files or their folder
+- Send files from a device's page, by dropping them on the window (on a
+  device to send straight to it, anywhere else to choose one), or from the
+  tray menu's "Send files…"; a transfers page (and each device's recent
+  transfers) shows progress, cancels running transfers, and opens received
+  files or their folder
 - Keeps running in the tray when the window is closed (Quit from the tray
   menu stops it), with a desktop notification for pairing requests and
   received files that arrive while the window is hidden. Launching it again shows the running
@@ -102,6 +104,7 @@ lib/
     │   ├── background/          # close to tray, quit, pairing and file notifications
     │   ├── devices/             # list, details (send file), add device (scan)
     │   ├── pairing/             # outgoing pairing page, incoming prompt
+    │   ├── send/                # window-wide file drop, choose-a-device dialog
     │   ├── settings/            # settings controller and page
     │   └── transfers/           # transfers controller, page and tile
     └── shared/widgets.dart

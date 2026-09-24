@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
 import 'package:material_ui/material_ui.dart';
@@ -9,6 +10,7 @@ import 'package:myconnect_ui/src/core/api/models/pairing.dart';
 import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 import 'package:myconnect_ui/src/core/providers.dart';
 import 'package:myconnect_ui/src/features/pairing/pairings_controller.dart';
+import 'package:myconnect_ui/src/features/send/send_files.dart';
 import 'package:myconnect_ui/src/features/settings/settings_controller.dart';
 import 'package:myconnect_ui/src/features/transfers/transfers_controller.dart';
 
@@ -18,7 +20,8 @@ final _log = Logger('BackgroundHost');
 /// is closed.
 ///
 /// Closing the window only hides it, unless the user turned off the
-/// `closeToTray` setting; the tray menu shows it again or quits. Quitting is
+/// `closeToTray` setting; the tray menu shows it again, sends files, or
+/// quits. Quitting is
 /// the one path that stops the daemon. While the window is
 /// hidden or unfocused, incoming pairing requests, received files and pings
 /// raise a notification that brings the window back. A ping over a focused
@@ -73,6 +76,7 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
       await shell.start(
         onCloseRequested: () => unawaited(_close()),
         onShowRequested: () => unawaited(shell.showWindow()),
+        onSendFilesRequested: () => unawaited(_sendFiles()),
         onQuitRequested: () => unawaited(_quit()),
       );
     } on Object catch (error) {
@@ -97,6 +101,19 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
     } else {
       await _quit();
     }
+  }
+
+  /// Show the window, then ask for files and where to send them.
+  Future<void> _sendFiles() async {
+    await ref.read(desktopShellProvider).showWindow();
+    final files = await openFiles(confirmButtonText: 'Next');
+    if (files.isEmpty || !mounted) return;
+    // No navigator while the daemon is starting or failed to start.
+    final context = navigatorContext(ref);
+    if (context == null || !context.mounted) return;
+    await confirmAndSendFiles(context, ref, [
+      for (final file in files) file.path,
+    ]);
   }
 
   Future<void> _stopDaemon() async {

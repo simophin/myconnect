@@ -33,6 +33,7 @@ class FakeDaemonHost implements DaemonHost {
 class FakeDesktopShell implements DesktopShell {
   VoidCallback? onCloseRequested;
   VoidCallback? onShowRequested;
+  VoidCallback? onSendFilesRequested;
   VoidCallback? onQuitRequested;
   bool visible = true;
   bool focused = true;
@@ -42,10 +43,12 @@ class FakeDesktopShell implements DesktopShell {
   Future<void> start({
     required VoidCallback onCloseRequested,
     required VoidCallback onShowRequested,
+    required VoidCallback onSendFilesRequested,
     required VoidCallback onQuitRequested,
   }) async {
     this.onCloseRequested = onCloseRequested;
     this.onShowRequested = onShowRequested;
+    this.onSendFilesRequested = onSendFilesRequested;
     this.onQuitRequested = onQuitRequested;
   }
 
