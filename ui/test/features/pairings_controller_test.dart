@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
@@ -61,4 +63,36 @@ void main() {
       PairingStatus.accepted,
     );
   });
+
+  test(
+    'a start response that arrives after the outcome does not undo it',
+    () async {
+      final started = Completer<Pairing>();
+      when(() => daemon.api.startPairing(any()))
+          .thenAnswer((_) => started.future);
+      await container.read(pairingsProvider.future);
+
+      final start = container.read(pairingsProvider.notifier).start('device');
+      await daemon.emit(
+        PairingChanged(
+          pairing(
+            direction: PairingDirection.outgoing,
+            status: PairingStatus.accepted,
+          ),
+        ),
+      );
+      started.complete(
+        pairing(
+          direction: PairingDirection.outgoing,
+          status: PairingStatus.requested,
+        ),
+      );
+
+      expect((await start).status, PairingStatus.accepted);
+      expect(
+        container.read(pairingProvider('p1'))!.status,
+        PairingStatus.accepted,
+      );
+    },
+  );
 }

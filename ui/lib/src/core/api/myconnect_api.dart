@@ -7,6 +7,7 @@ import 'package:myconnect_ui/src/core/api/api_exception.dart';
 import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
+import 'package:myconnect_ui/src/core/api/models/remote_file.dart';
 import 'package:myconnect_ui/src/core/api/models/settings.dart';
 import 'package:myconnect_ui/src/core/api/models/status.dart';
 import 'package:myconnect_ui/src/core/api/models/transfer.dart';
@@ -94,30 +95,102 @@ class MyConnectApi {
           .map((json) => Transfer.fromJson(json! as _Json))
           .toList();
 
+  /// List a directory on a paired device, or, without a [path], the storage
+  /// it shares. The first call opens a session with the device, which can
+  /// take a few seconds.
+  Future<DirectoryListing> listFiles(String deviceId, {String? path}) async =>
+      DirectoryListing.fromJson(
+        await _send(
+          () => _dio.get<_Json>(
+            _files(deviceId),
+            queryParameters: {'path': ?path},
+          ),
+        ),
+      );
+
+  /// A file's content, for a preview.
+  Future<Uint8List> fileContent(String deviceId, String path) => _send(
+    () => _dio.get<Uint8List>(
+      '${_files(deviceId)}/content',
+      queryParameters: {'path': path},
+      options: Options(responseType: ResponseType.bytes),
+    ),
+  );
+
+  /// Save a file from the device into the download folder, as an incoming
+  /// transfer.
+  Future<Transfer> downloadFile(String deviceId, String path) async =>
+      Transfer.fromJson(
+        await _send(
+          () => _dio.post<_Json>(
+            '${_files(deviceId)}/download',
+            data: {'path': path},
+          ),
+        ),
+      );
+
+  /// Upload the local file at [localPath] into [directory] on the device.
+  /// Like [sendFile], this completes at the end of the upload.
+  Future<Transfer> uploadFile(
+    String deviceId,
+    String directory,
+    String localPath,
+  ) async {
+    // The daemon reads the directory before the file.
+    final form = FormData()
+      ..fields.add(MapEntry('path', directory))
+      ..files.add(MapEntry('file', await _filePart(localPath)));
+    return Transfer.fromJson(
+      await _send(
+        () => _dio.post<_Json>(
+          '${_files(deviceId)}/upload',
+          data: form,
+          options: Options(receiveTimeout: Duration.zero),
+        ),
+      ),
+    );
+  }
+
+  Future<RemoteFile> createDirectory(String deviceId, String path) async =>
+      RemoteFile.fromJson(
+        await _send(
+          () => _dio.post<_Json>(
+            '${_files(deviceId)}/directories',
+            data: {'path': path},
+          ),
+        ),
+      );
+
+  /// Move or rename a file or directory. Fails with `file_exists` rather
+  /// than replacing anything.
+  Future<RemoteFile> moveFile(String deviceId, String from, String to) async =>
+      RemoteFile.fromJson(
+        await _send(
+          () => _dio.post<_Json>(
+            '${_files(deviceId)}/move',
+            data: {'from': from, 'to': to},
+          ),
+        ),
+      );
+
+  /// Delete a file, or a directory and everything in it.
+  Future<void> deleteFile(String deviceId, String path) => _send(
+    () => _dio.delete<void>(_files(deviceId), queryParameters: {'path': path}),
+  );
+
+  String _files(String deviceId) =>
+      'devices/${Uri.encodeComponent(deviceId)}/files';
+
   /// Send the file at [path] to a paired, connected device.
   ///
   /// The daemon answers only once the whole file has been streamed to the
   /// peer, so this completes at the end of the upload; follow progress
   /// through `transfer.*` events meanwhile.
   Future<Transfer> sendFile(String deviceId, String path) async {
-    final file = File(path);
-    final length = await file.length();
-    // The daemon reads `deviceId` before the file, and takes the file's
-    // declared size from its part's Content-Length header.
+    // The daemon reads `deviceId` before the file.
     final form = FormData()
       ..fields.add(MapEntry('deviceId', deviceId))
-      ..files.add(
-        MapEntry(
-          'file',
-          await MultipartFile.fromFile(
-            path,
-            filename: file.uri.pathSegments.last,
-            headers: {
-              'content-length': ['$length'],
-            },
-          ),
-        ),
-      );
+      ..files.add(MapEntry('file', await _filePart(path)));
     return Transfer.fromJson(
       await _send(
         () => _dio.post<_Json>(
@@ -165,6 +238,20 @@ class MyConnectApi {
     yield* response.stream
         .transform(sseDataTransformer<Uint8List>())
         .map((data) => DaemonEvent.fromJson(jsonDecode(data) as _Json));
+  }
+
+  /// The file at [path] as an upload part. The daemon takes the file's
+  /// declared size from the part's Content-Length header.
+  static Future<MultipartFile> _filePart(String path) async {
+    final file = File(path);
+    final length = await file.length();
+    return await MultipartFile.fromFile(
+      path,
+      filename: file.uri.pathSegments.last,
+      headers: {
+        'content-length': ['$length'],
+      },
+    );
   }
 
   Future<T> _get<T>(String path) => _send(() => _dio.get<T>(path));

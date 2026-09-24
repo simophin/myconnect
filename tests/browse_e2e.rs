@@ -1,0 +1,633 @@
+//! End-to-end file browsing: a real daemon (LAN transport, application core
+//! and HTTP API) pairs with a fake KDE Connect for Android over loopback,
+//! asks it to serve its files, and lists, downloads, uploads, creates,
+//! moves and deletes them over SFTP through the API client.
+//!
+//! The fake phone is `tests/support/fake_phone.rs`. It follows Android's
+//! server as read from its source; the real thing has not been exercised
+//! here.
+
+mod support;
+
+use std::{
+    net::{Ipv4Addr, SocketAddr},
+    path::PathBuf,
+    sync::{Arc, atomic::Ordering},
+    time::Duration,
+};
+
+use futures_util::StreamExt;
+use myconnect::{
+    api::{ApiServer, ApiServerConfig},
+    application::{
+        ApplicationHandle, ApplicationService, FileKind, LocalDeviceSnapshot, Query, QueryResult,
+        TransferConfig, TransferDirection, TransferSnapshot, TransferStatus,
+    },
+    client::{ApiClient, ClientError},
+    clipboard::InMemoryClipboard,
+    config::{FilesystemTrustStore, LocalIdentity, TrustStore},
+    device::DeviceReachability,
+    plugins,
+    protocol::DeviceType,
+    transport::{
+        lan::{LanConfig, LanService, LocalDeviceInfo, TCP_PORT_RANGE},
+        tls::subject_public_key_info,
+    },
+};
+use support::fake_phone::{BrowseReply, FakePhone, FakePhoneConfig};
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+const INTERNAL: &str = "/storage/emulated/0";
+const SD_CARD: &str = "/storage/sdcard";
+
+struct Harness {
+    desktop: ApplicationHandle,
+    phone: FakePhone,
+    phone_id: String,
+    client: ApiClient,
+    download_dir: PathBuf,
+    /// The phone's storage on disk; `INTERNAL` is `storage.join(&INTERNAL[1..])`.
+    storage: PathBuf,
+    _lan: LanService,
+    _api: ApiServer,
+    _desktop_dir: tempfile::TempDir,
+    _phone_dir: tempfile::TempDir,
+}
+
+impl Harness {
+    fn phone_path(&self, path: &str) -> PathBuf {
+        self.storage.join(path.trim_start_matches('/'))
+    }
+
+    async fn wait_for_transfer(&self, transfer_id: Uuid) -> TransferSnapshot {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let transfer = self.client.transfer(transfer_id).await.unwrap();
+                if matches!(
+                    transfer.status,
+                    TransferStatus::Completed | TransferStatus::Failed | TransferStatus::Cancelled
+                ) {
+                    return transfer;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("transfer finishes")
+    }
+}
+
+fn free_udp_addr() -> SocketAddr {
+    let socket = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    socket.local_addr().unwrap()
+}
+
+fn test_config(bind: SocketAddr, target: SocketAddr) -> LanConfig {
+    LanConfig::default()
+        .with_discovery_bind(bind)
+        .with_announcement_targets(vec![target])
+        .with_tcp_bind(Ipv4Addr::LOCALHOST, TCP_PORT_RANGE)
+        .with_announce_interval(Duration::from_millis(50))
+        .with_timeouts(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+        )
+}
+
+async fn wait_for_device(
+    application: &ApplicationHandle,
+    device_id: &str,
+    accept: impl Fn(&myconnect::device::DeviceSnapshot) -> bool,
+) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let QueryResult::Device(Some(device)) = application
+                .query(Query::Device {
+                    device_id: device_id.into(),
+                })
+                .unwrap()
+                && accept(&device)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("device reaches the expected state");
+}
+
+async fn harness(reply: BrowseReply, wrong_host_key: bool) -> Harness {
+    let desktop_dir = tempfile::tempdir().unwrap();
+    let phone_dir = tempfile::tempdir().unwrap();
+    let download_dir = desktop_dir.path().join("downloads");
+    let storage = phone_dir.path().join("storage-root");
+    std::fs::create_dir_all(storage.join(&INTERNAL[1..]).join("DCIM")).unwrap();
+    std::fs::create_dir_all(storage.join(&SD_CARD[1..])).unwrap();
+    std::fs::write(
+        storage.join(&INTERNAL[1..]).join("notes.txt"),
+        b"hello phone",
+    )
+    .unwrap();
+    std::fs::write(
+        storage.join(&INTERNAL[1..]).join("DCIM").join("photo.jpg"),
+        pattern(3 * 1024 * 1024 + 17),
+    )
+    .unwrap();
+
+    let identity = Arc::new(LocalIdentity::load_or_create(desktop_dir.path()).unwrap());
+    let desktop_id = identity.device_id().to_owned();
+    let trust_store: Arc<dyn TrustStore + Send + Sync> =
+        Arc::new(FilesystemTrustStore::new(desktop_dir.path()));
+    let (desktop, commands) = ApplicationHandle::new(
+        LocalDeviceSnapshot {
+            device_id: desktop_id.clone(),
+            device_name: "Desktop".into(),
+        },
+        8,
+        subject_public_key_info(identity.certificate_der()).unwrap(),
+        trust_store.clone(),
+        InMemoryClipboard::shared(),
+        32,
+        256,
+        identity.clone(),
+        TransferConfig::new(download_dir.clone()),
+    )
+    .unwrap();
+
+    let phone = FakePhone::start(FakePhoneConfig {
+        data_dir: phone_dir.path().join("identity"),
+        storage: storage.clone(),
+        reply,
+        wrong_host_key,
+        desktop_id: Some(desktop_id.clone()),
+        discovery_bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+    })
+    .await;
+    let phone_id = phone.device_id.clone();
+
+    let capabilities = plugins::capabilities();
+    let lan = LanService::start(
+        test_config(free_udp_addr(), phone.discovery_addr()),
+        LocalDeviceInfo {
+            device_id: desktop_id.clone(),
+            device_name: "Desktop".into(),
+            device_type: DeviceType::Desktop,
+            incoming_capabilities: capabilities.incoming,
+            outgoing_capabilities: capabilities.outgoing,
+        },
+        desktop.clone(),
+        commands,
+        identity,
+        trust_store,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    wait_for_device(&desktop, &phone_id, |device| {
+        device.reachability == DeviceReachability::Connected
+    })
+    .await;
+    desktop.start_outgoing_pairing(&phone_id).unwrap();
+    wait_for_device(&desktop, &phone_id, |device| device.paired).await;
+
+    let api = ApiServer::start(
+        ApiServerConfig::new(0).unwrap(),
+        Arc::new(desktop.clone()),
+        None,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let client = ApiClient::new(&format!("http://{}", api.local_addr()), None).unwrap();
+
+    Harness {
+        desktop,
+        phone,
+        phone_id,
+        client,
+        download_dir,
+        storage,
+        _lan: lan,
+        _api: api,
+        _desktop_dir: desktop_dir,
+        _phone_dir: phone_dir,
+    }
+}
+
+fn android_roots() -> BrowseReply {
+    BrowseReply::Serve(vec![
+        (INTERNAL.into(), "All files".into()),
+        (SD_CARD.into(), "SD card".into()),
+    ])
+}
+
+/// Bytes that differ at every offset, so a misplaced chunk shows.
+fn pattern(length: usize) -> Vec<u8> {
+    (0..length).map(|index| (index % 251) as u8).collect()
+}
+
+fn failure_code(error: ClientError) -> String {
+    match error {
+        ClientError::OperationFailed { code, .. } => code,
+        other => panic!("expected an API problem, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn roots_and_directories_are_listed_over_one_key_authenticated_session() {
+    let harness = harness(android_roots(), false).await;
+
+    let roots = harness
+        .client
+        .list_files(&harness.phone_id, None)
+        .await
+        .unwrap();
+    assert_eq!(roots.path, None);
+    let names: Vec<_> = roots
+        .entries
+        .iter()
+        .map(|entry| (entry.name.as_str(), entry.path.as_str(), entry.kind))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("All files", INTERNAL, FileKind::Directory),
+            ("SD card", SD_CARD, FileKind::Directory),
+        ]
+    );
+
+    let internal = harness
+        .client
+        .list_files(&harness.phone_id, Some(&format!("{INTERNAL}/")))
+        .await
+        .unwrap();
+    assert_eq!(internal.path.as_deref(), Some(INTERNAL));
+    let entries: Vec<_> = internal
+        .entries
+        .iter()
+        .map(|entry| (entry.name.as_str(), entry.kind, entry.size))
+        .collect();
+    assert_eq!(
+        entries,
+        [
+            ("DCIM", FileKind::Directory, None),
+            ("notes.txt", FileKind::File, Some(11)),
+        ]
+    );
+    assert!(internal.entries[1].modified_at.is_some());
+
+    let dcim = harness
+        .client
+        .list_files(&harness.phone_id, Some(&format!("{INTERNAL}/DCIM")))
+        .await
+        .unwrap();
+    assert_eq!(dcim.entries[0].path, format!("{INTERNAL}/DCIM/photo.jpg"));
+
+    // One offer and one SSH session served all three listings, and the
+    // desktop signed in with its paired key rather than the password.
+    let log = &harness.phone.log;
+    assert_eq!(log.browse_requests.load(Ordering::SeqCst), 1);
+    assert_eq!(log.sftp_sessions.load(Ordering::SeqCst), 1);
+    assert_eq!(log.key_logins.load(Ordering::SeqCst), 1);
+    assert_eq!(log.password_logins.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn files_are_downloaded_as_transfers_and_streamed_as_content() {
+    let harness = harness(android_roots(), false).await;
+    let photo = format!("{INTERNAL}/DCIM/photo.jpg");
+
+    let started = harness
+        .client
+        .download_file(&harness.phone_id, &photo)
+        .await
+        .unwrap();
+    assert_eq!(started.direction, TransferDirection::Incoming);
+    assert_eq!(started.file_name, "photo.jpg");
+    assert_eq!(started.total_bytes, 3 * 1024 * 1024 + 17);
+    let finished = harness.wait_for_transfer(started.id).await;
+    assert_eq!(finished.status, TransferStatus::Completed);
+    let saved = finished.saved_path.unwrap();
+    assert_eq!(saved, harness.download_dir.join("photo.jpg"));
+    assert_eq!(
+        std::fs::read(&saved).unwrap(),
+        pattern(3 * 1024 * 1024 + 17)
+    );
+
+    // A second copy doesn't replace the first.
+    let again = harness
+        .client
+        .download_file(&harness.phone_id, &photo)
+        .await
+        .unwrap();
+    let again = harness.wait_for_transfer(again.id).await;
+    assert_eq!(
+        again.saved_path.unwrap(),
+        harness.download_dir.join("photo (1).jpg")
+    );
+
+    let mut content = harness
+        .client
+        .file_content(&harness.phone_id, &format!("{INTERNAL}/notes.txt"))
+        .await
+        .unwrap();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = content.next().await {
+        bytes.extend_from_slice(&chunk.unwrap());
+    }
+    assert_eq!(bytes, b"hello phone");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn uploads_never_replace_an_existing_file() {
+    let harness = harness(android_roots(), false).await;
+    let local = harness._desktop_dir.path().join("notes.txt");
+    std::fs::write(&local, pattern(200_000)).unwrap();
+
+    let upload = harness
+        .client
+        .upload_file(&harness.phone_id, INTERNAL, &local)
+        .await
+        .unwrap();
+    assert_eq!(upload.direction, TransferDirection::Outgoing);
+    // `notes.txt` already exists on the phone.
+    assert_eq!(upload.file_name, "notes (1).txt");
+    let upload = harness.wait_for_transfer(upload.id).await;
+    assert_eq!(upload.status, TransferStatus::Completed);
+    assert_eq!(
+        std::fs::read(harness.phone_path(&format!("{INTERNAL}/notes (1).txt"))).unwrap(),
+        pattern(200_000)
+    );
+    assert_eq!(
+        std::fs::read(harness.phone_path(&format!("{INTERNAL}/notes.txt"))).unwrap(),
+        b"hello phone"
+    );
+
+    let empty = harness._desktop_dir.path().join("empty.bin");
+    std::fs::write(&empty, b"").unwrap();
+    let upload = harness
+        .client
+        .upload_file(&harness.phone_id, SD_CARD, &empty)
+        .await
+        .unwrap();
+    assert_eq!(
+        harness.wait_for_transfer(upload.id).await.status,
+        TransferStatus::Completed
+    );
+    assert_eq!(
+        std::fs::read(harness.phone_path(&format!("{SD_CARD}/empty.bin"))).unwrap(),
+        b""
+    );
+
+    // A small file, so the whole request is sent before the daemon answers.
+    let into_file = harness
+        .client
+        .upload_file(&harness.phone_id, &format!("{INTERNAL}/notes.txt"), &empty)
+        .await
+        .unwrap_err();
+    assert_eq!(failure_code(into_file), "not_a_directory");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn directories_are_created_moved_and_deleted_without_clobbering() {
+    let harness = harness(android_roots(), false).await;
+    let client = &harness.client;
+    let phone = harness.phone_id.as_str();
+    let trip = format!("{INTERNAL}/Trip");
+
+    let created = client.create_directory(phone, &trip).await.unwrap();
+    assert_eq!(created.name, "Trip");
+    assert_eq!(created.kind, FileKind::Directory);
+    assert_eq!(
+        failure_code(client.create_directory(phone, &trip).await.unwrap_err()),
+        "file_exists"
+    );
+
+    let moved = client
+        .move_file(
+            phone,
+            &format!("{INTERNAL}/notes.txt"),
+            &format!("{trip}/notes.txt"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(moved.path, format!("{trip}/notes.txt"));
+    assert_eq!(moved.size, Some(11));
+    std::fs::write(harness.phone_path(&format!("{INTERNAL}/other.txt")), b"x").unwrap();
+    assert_eq!(
+        failure_code(
+            client
+                .move_file(
+                    phone,
+                    &format!("{INTERNAL}/other.txt"),
+                    &format!("{trip}/notes.txt")
+                )
+                .await
+                .unwrap_err()
+        ),
+        "file_exists"
+    );
+
+    client
+        .create_directory(phone, &format!("{trip}/Day 1"))
+        .await
+        .unwrap();
+    std::fs::write(harness.phone_path(&format!("{trip}/Day 1/a.jpg")), b"a").unwrap();
+    client.delete_file(phone, &trip).await.unwrap();
+    assert!(!harness.phone_path(&trip).exists());
+    client
+        .delete_file(phone, &format!("{INTERNAL}/other.txt"))
+        .await
+        .unwrap();
+    assert!(
+        !harness
+            .phone_path(&format!("{INTERNAL}/other.txt"))
+            .exists()
+    );
+
+    // The storage roots stay put.
+    assert_eq!(
+        failure_code(client.delete_file(phone, INTERNAL).await.unwrap_err()),
+        "invalid_path"
+    );
+    assert_eq!(
+        failure_code(
+            client
+                .move_file(phone, SD_CARD, "/elsewhere")
+                .await
+                .unwrap_err()
+        ),
+        "invalid_path"
+    );
+    assert!(harness.phone_path(INTERNAL).is_dir());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bad_paths_are_rejected_with_specific_errors() {
+    let harness = harness(android_roots(), false).await;
+    let client = &harness.client;
+    let phone = harness.phone_id.as_str();
+
+    for path in ["relative", "/storage/emulated/0/../../etc"] {
+        assert_eq!(
+            failure_code(client.list_files(phone, Some(path)).await.unwrap_err()),
+            "invalid_path",
+            "{path}"
+        );
+    }
+    assert!(matches!(
+        client
+            .list_files(phone, Some(&format!("{INTERNAL}/missing")))
+            .await
+            .unwrap_err(),
+        ClientError::NotFound(_)
+    ));
+    assert_eq!(
+        failure_code(
+            client
+                .list_files(phone, Some(&format!("{INTERNAL}/notes.txt")))
+                .await
+                .unwrap_err()
+        ),
+        "not_a_directory"
+    );
+    assert_eq!(
+        failure_code(
+            client
+                .download_file(phone, &format!("{INTERNAL}/DCIM"))
+                .await
+                .unwrap_err()
+        ),
+        "is_a_directory"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_phone_that_refuses_reports_why() {
+    let harness = harness(
+        BrowseReply::Refuse("No storage locations configured".into()),
+        false,
+    )
+    .await;
+
+    let error = harness
+        .client
+        .list_files(&harness.phone_id, None)
+        .await
+        .unwrap_err();
+    assert_eq!(failure_code(error), "files_unavailable");
+    // The reason reaches the API response too.
+    let response = reqwest::get(format!(
+        "http://{}/api/v1/devices/{}/files",
+        harness._api.local_addr(),
+        harness.phone_id
+    ))
+    .await
+    .unwrap();
+    let problem: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(problem["detail"], "No storage locations configured");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_without_the_paired_key_is_refused() {
+    let harness = harness(android_roots(), true).await;
+
+    let error = harness
+        .client
+        .list_files(&harness.phone_id, Some(INTERNAL))
+        .await
+        .unwrap_err();
+    assert_eq!(failure_code(error), "files_host_key_mismatch");
+    // Nothing was sent to the impostor: no login was attempted.
+    let log = &harness.phone.log;
+    assert_eq!(log.key_logins.load(Ordering::SeqCst), 0);
+    assert_eq!(log.password_logins.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stopped_server_or_a_lost_device_ends_the_session() {
+    let harness = harness(android_roots(), false).await;
+    let log = harness.phone.log.clone();
+    harness
+        .client
+        .list_files(&harness.phone_id, Some(INTERNAL))
+        .await
+        .unwrap();
+
+    // Android restarts its server when the plugin reloads; the next request
+    // asks for a new offer and opens a new session.
+    harness.phone.announce_server_stopped().await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            harness
+                .client
+                .list_files(&harness.phone_id, Some(INTERNAL))
+                .await
+                .unwrap();
+            if log.browse_requests.load(Ordering::SeqCst) == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("a new session is opened");
+    assert_eq!(log.sftp_sessions.load(Ordering::SeqCst), 2);
+    // The old session's connection was closed, not left open.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while log.open_connections.load(Ordering::SeqCst) != 1 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the stale connection closes");
+
+    let Harness {
+        desktop,
+        phone,
+        phone_id,
+        client,
+        ..
+    } = harness;
+    phone.stop().await;
+    wait_for_device(&desktop, &phone_id, |device| {
+        device.reachability != DeviceReachability::Connected
+    })
+    .await;
+    assert_eq!(
+        failure_code(client.list_files(&phone_id, None).await.unwrap_err()),
+        "device_not_connected"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_upload_leaves_nothing_behind() {
+    let harness = harness(android_roots(), false).await;
+    let (transfer, sender) = harness
+        .desktop
+        .begin_file_upload(&harness.phone_id, INTERNAL, "partial.bin", 1_000_000)
+        .await
+        .unwrap();
+    sender
+        .send(bytes::Bytes::from(pattern(1000)))
+        .await
+        .unwrap();
+    assert!(
+        harness
+            .phone_path(&format!("{INTERNAL}/partial.bin"))
+            .exists()
+    );
+
+    harness.desktop.cancel_transfer(transfer.id).unwrap();
+    let finished = harness.wait_for_transfer(transfer.id).await;
+    assert_eq!(finished.status, TransferStatus::Cancelled);
+    assert!(
+        !harness
+            .phone_path(&format!("{INTERNAL}/partial.bin"))
+            .exists()
+    );
+    drop(sender);
+}

@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:myconnect_ui/src/features/devices/add_device_page.dart';
 import 'package:myconnect_ui/src/features/devices/device_detail_page.dart';
 import 'package:myconnect_ui/src/features/devices/devices_page.dart';
+import 'package:myconnect_ui/src/features/files/files_page.dart';
 import 'package:myconnect_ui/src/features/pairing/pairing_page.dart';
 import 'package:myconnect_ui/src/features/settings/settings_page.dart';
 import 'package:myconnect_ui/src/features/transfers/transfers_page.dart';
@@ -20,6 +21,13 @@ final routerProvider = Provider<GoRouter>((ref) {
             path: 'devices/:deviceId',
             builder: (context, state) =>
                 DeviceDetailPage(deviceId: state.pathParameters['deviceId']!),
+            routes: [
+              GoRoute(
+                path: 'files',
+                builder: (context, state) =>
+                    FilesPage(deviceId: state.pathParameters['deviceId']!),
+              ),
+            ],
           ),
           GoRoute(
             path: 'transfers',

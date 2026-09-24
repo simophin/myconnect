@@ -2,4 +2,5 @@
 
 pub mod lan;
 pub mod payload;
+pub mod sftp;
 pub mod tls;

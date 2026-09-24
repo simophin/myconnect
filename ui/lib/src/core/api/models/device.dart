@@ -14,6 +14,10 @@ enum DeviceReachability { discovered, connected, unavailable, unknown }
 /// The capability a peer lists when it accepts files.
 const shareCapability = 'kdeconnect.share.request';
 
+/// The capability a peer lists when it can share its own files for
+/// browsing (KDE Connect for Android does).
+const browseCapability = 'kdeconnect.sftp.request';
+
 /// The capability a peer lists when it accepts pings.
 const pingCapability = 'kdeconnect.ping';
 
@@ -44,6 +48,10 @@ abstract class Device with _$Device {
   /// Whether a file sent now would be accepted.
   bool get acceptsFiles =>
       isConnected && incomingCapabilities.contains(shareCapability);
+
+  /// Whether the device's own files can be browsed now.
+  bool get sharesFiles =>
+      paired && isConnected && incomingCapabilities.contains(browseCapability);
 
   /// Whether a ping sent now would be accepted.
   bool get acceptsPings =>

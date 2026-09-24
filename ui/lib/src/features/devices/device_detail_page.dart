@@ -145,6 +145,13 @@ class _DeviceDetailsState extends ConsumerState<_DeviceDetails> {
               label: const Text('Send file'),
             ),
             FilledButton.tonalIcon(
+              onPressed: device.sharesFiles
+                  ? () => context.go('/devices/${device.deviceId}/files')
+                  : null,
+              icon: const Icon(Icons.folder_open),
+              label: const Text('Browse files'),
+            ),
+            FilledButton.tonalIcon(
               onPressed: canPing ? _ping : null,
               icon: const Icon(Icons.notifications_active_outlined),
               label: const Text('Ping'),

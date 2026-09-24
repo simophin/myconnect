@@ -7,6 +7,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use futures_util::future::BoxFuture;
 use thiserror::Error;
 use tokio::{
     sync::{broadcast, mpsc, watch},
@@ -21,6 +22,7 @@ use super::{
     MAX_CLIPBOARD_TEXT_BYTES, OperationErrorCode, Pairing, PairingDirection, PairingSnapshot,
     PairingStatus, PairingTransitionError, Query, QueryResult, ReceivedPing, StatusSnapshot,
     Transfer, TransferDirection, TransferSnapshot, TransferStatus,
+    files::{DirectoryListing, FileEntry},
     settings::{Settings, SettingsDefaults, SettingsPatch, SettingsSnapshot},
     transfer::{TransferConfig, sanitize_file_name, unique_destination},
 };
@@ -36,6 +38,10 @@ use crate::{
         tls::{PeerPin, TlsMaterial, subject_public_key_info},
     },
 };
+
+mod browse;
+
+pub use browse::RemoteFileContent;
 
 /// How long a pairing session may remain non-terminal before it expires.
 pub const PAIRING_TIMEOUT: Duration = Duration::from_secs(30);
@@ -101,6 +107,44 @@ pub trait ApplicationService: Send + Sync {
         declared_size: u64,
     ) -> Result<(TransferSnapshot, mpsc::Sender<Bytes>), ApplicationError>;
     fn cancel_transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, ApplicationError>;
+    fn list_files(
+        &self,
+        device_id: String,
+        path: Option<String>,
+    ) -> BoxFuture<'static, Result<DirectoryListing, ApplicationError>>;
+    fn open_remote_file(
+        &self,
+        device_id: String,
+        path: String,
+    ) -> BoxFuture<'static, Result<RemoteFileContent, ApplicationError>>;
+    fn begin_file_download(
+        &self,
+        device_id: String,
+        path: String,
+    ) -> BoxFuture<'static, Result<TransferSnapshot, ApplicationError>>;
+    fn begin_file_upload(
+        &self,
+        device_id: String,
+        directory: String,
+        file_name: String,
+        declared_size: u64,
+    ) -> BoxFuture<'static, Result<(TransferSnapshot, mpsc::Sender<Bytes>), ApplicationError>>;
+    fn create_remote_directory(
+        &self,
+        device_id: String,
+        path: String,
+    ) -> BoxFuture<'static, Result<FileEntry, ApplicationError>>;
+    fn move_remote_file(
+        &self,
+        device_id: String,
+        from: String,
+        to: String,
+    ) -> BoxFuture<'static, Result<FileEntry, ApplicationError>>;
+    fn delete_remote_file(
+        &self,
+        device_id: String,
+        path: String,
+    ) -> BoxFuture<'static, Result<(), ApplicationError>>;
 }
 
 /// A live, TLS-authenticated control-channel connection to a peer, as
@@ -172,6 +216,7 @@ pub struct ApplicationHandle {
     state: Arc<RwLock<ApplicationState>>,
     commands: mpsc::Sender<Command>,
     events: EventBus,
+    browsing: Arc<browse::Browsing>,
 }
 
 impl ApplicationHandle {
@@ -224,6 +269,7 @@ impl ApplicationHandle {
                 })),
                 commands,
                 events,
+                browsing: Arc::default(),
             },
             receiver,
         ))
@@ -442,6 +488,7 @@ impl ApplicationHandle {
         for cancellation in transfer_cancellations {
             cancellation.cancel();
         }
+        self.close_browse_session(device_id);
         if had_connection {
             let _ = self.mark_device_disconnected(device_id);
         }
@@ -509,6 +556,7 @@ impl ApplicationHandle {
         if let Some(cancellation) = cancellation {
             cancellation.cancel();
         }
+        self.close_browse_session(device_id);
         if let Some(snapshot) = failed_pairing {
             let _ = self
                 .events
@@ -788,6 +836,9 @@ impl ApplicationHandle {
             // this build only ever transfers one file per transfer
             // resource, so there is nothing to reconcile them against.
             Ok(plugins::IncomingPluginPacket::ShareRequestUpdate(_)) => {}
+            Ok(plugins::IncomingPluginPacket::Sftp(body)) => {
+                self.handle_sftp_reply(device_id, body)
+            }
             Err(_) => {}
         }
     }
@@ -1136,6 +1187,7 @@ impl ApplicationHandle {
         if let Ok(mut state) = self.state.write() {
             let _ = state.devices.set_paired(device_id, false);
         }
+        self.close_browse_session(device_id);
         self.publish_device_update(device_id);
     }
 
@@ -2069,6 +2121,76 @@ impl ApplicationService for ApplicationHandle {
     fn cancel_transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, ApplicationError> {
         ApplicationHandle::cancel_transfer(self, transfer_id)
     }
+
+    fn list_files(
+        &self,
+        device_id: String,
+        path: Option<String>,
+    ) -> BoxFuture<'static, Result<DirectoryListing, ApplicationError>> {
+        let handle = self.clone();
+        Box::pin(async move { handle.list_files(&device_id, path).await })
+    }
+
+    fn open_remote_file(
+        &self,
+        device_id: String,
+        path: String,
+    ) -> BoxFuture<'static, Result<RemoteFileContent, ApplicationError>> {
+        let handle = self.clone();
+        Box::pin(async move { handle.open_remote_file(&device_id, &path).await })
+    }
+
+    fn begin_file_download(
+        &self,
+        device_id: String,
+        path: String,
+    ) -> BoxFuture<'static, Result<TransferSnapshot, ApplicationError>> {
+        let handle = self.clone();
+        Box::pin(async move { handle.begin_file_download(&device_id, &path).await })
+    }
+
+    fn begin_file_upload(
+        &self,
+        device_id: String,
+        directory: String,
+        file_name: String,
+        declared_size: u64,
+    ) -> BoxFuture<'static, Result<(TransferSnapshot, mpsc::Sender<Bytes>), ApplicationError>> {
+        let handle = self.clone();
+        Box::pin(async move {
+            handle
+                .begin_file_upload(&device_id, &directory, &file_name, declared_size)
+                .await
+        })
+    }
+
+    fn create_remote_directory(
+        &self,
+        device_id: String,
+        path: String,
+    ) -> BoxFuture<'static, Result<FileEntry, ApplicationError>> {
+        let handle = self.clone();
+        Box::pin(async move { handle.create_remote_directory(&device_id, &path).await })
+    }
+
+    fn move_remote_file(
+        &self,
+        device_id: String,
+        from: String,
+        to: String,
+    ) -> BoxFuture<'static, Result<FileEntry, ApplicationError>> {
+        let handle = self.clone();
+        Box::pin(async move { handle.move_remote_file(&device_id, &from, &to).await })
+    }
+
+    fn delete_remote_file(
+        &self,
+        device_id: String,
+        path: String,
+    ) -> BoxFuture<'static, Result<(), ApplicationError>> {
+        let handle = self.clone();
+        Box::pin(async move { handle.delete_remote_file(&device_id, &path).await })
+    }
 }
 
 fn unix_millis() -> u64 {
@@ -2143,6 +2265,26 @@ pub enum ApplicationError {
     Settings(#[source] SettingsError),
     #[error("transfer is not in a state that allows this operation")]
     InvalidTransferState,
+    #[error("remote path must be absolute, without `.` or `..` segments")]
+    InvalidRemotePath,
+    #[error("the device isn't sharing its files")]
+    RemoteFilesUnavailable { reason: Option<String> },
+    #[error("no such file or directory on the device")]
+    RemoteFileNotFound,
+    #[error("a file or directory of that name already exists on the device")]
+    RemoteFileExists,
+    #[error("the device denied access to that file or directory")]
+    RemotePermissionDenied,
+    #[error("not a directory")]
+    NotADirectory,
+    #[error("is a directory")]
+    IsADirectory,
+    #[error("the device's file server doesn't hold the device's paired key")]
+    RemoteHostKeyMismatch,
+    #[error("browsing the device's files failed")]
+    RemoteFilesFailed,
+    #[error("the device took too long to answer")]
+    RemoteFilesTimedOut,
     #[error("internal application error")]
     Internal,
 }

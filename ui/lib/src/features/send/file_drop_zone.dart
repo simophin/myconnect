@@ -5,6 +5,7 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/features/devices/devices_controller.dart';
 import 'package:myconnect_ui/src/features/pairing/pairings_controller.dart';
 import 'package:myconnect_ui/src/features/send/send_files.dart';
@@ -33,29 +34,41 @@ class FileDragNotifier extends Notifier<FileDrag?> {
   void end() => state = null;
 }
 
-/// Marks [child] as the place to drop files for [deviceId].
+/// Marks [child] as the place to drop files for [deviceId]: sent to it, or,
+/// with a [directory], uploaded into that folder on it.
 ///
 /// Only [FileDropZone] receives the drop; it finds the device under the
 /// pointer by hit testing, so a covered page never takes a drop meant for
 /// the one on top.
 class FileDropTarget extends StatelessWidget {
-  const new({required this.deviceId, required this.child, super.key});
+  const new({
+    required this.deviceId,
+    required this.child,
+    this.directory,
+    super.key,
+  });
 
   final String deviceId;
+  final String? directory;
   final Widget child;
 
   @override
   Widget build(BuildContext context) => MetaData(
-    metaData: _DropDestination(deviceId),
+    metaData: _DropDestination(deviceId, directory),
     behavior: HitTestBehavior.translucent,
     child: child,
   );
 }
 
 class _DropDestination {
-  const new(this.deviceId);
+  const new(this.deviceId, this.directory);
 
   final String deviceId;
+  final String? directory;
+
+  /// Whether [device] would take the files now.
+  bool accepts(Device device) =>
+      directory == null ? device.acceptsFiles : device.sharesFiles;
 }
 
 /// Accepts files dropped anywhere on the window and sends them: straight to
@@ -75,16 +88,21 @@ class FileDropZone extends ConsumerStatefulWidget {
 
 class _FileDropZoneState extends ConsumerState<FileDropZone> {
   void _hover(Offset position) {
-    final device = switch (_deviceAt(position)) {
-      final id? => ref.read(deviceProvider(id)),
+    final destination = _destinationAt(position);
+    final device = switch (destination) {
+      _DropDestination(:final deviceId) => ref.read(deviceProvider(deviceId)),
       null => null,
     };
     ref
         .read(fileDragProvider.notifier)
-        .hover(device != null && device.acceptsFiles ? device.deviceId : null);
+        .hover(
+          device != null && destination!.accepts(device)
+              ? device.deviceId
+              : null,
+        );
   }
 
-  String? _deviceAt(Offset position) {
+  _DropDestination? _destinationAt(Offset position) {
     final result = HitTestResult();
     WidgetsBinding.instance.hitTestInView(
       result,
@@ -93,9 +111,9 @@ class _FileDropZoneState extends ConsumerState<FileDropZone> {
     );
     for (final entry in result.path) {
       if (entry.target case RenderMetaData(
-        metaData: _DropDestination(:final deviceId),
+        metaData: final _DropDestination destination,
       )) {
-        return deviceId;
+        return destination;
       }
     }
     return null;
@@ -119,13 +137,23 @@ class _FileDropZoneState extends ConsumerState<FileDropZone> {
       }
       return;
     }
-    final deviceId = _deviceAt(details.globalPosition);
-    await confirmAndSendFiles(
-      context,
-      ref,
-      files,
-      to: deviceId == null ? null : ref.read(deviceProvider(deviceId)),
-    );
+    final destination = _destinationAt(details.globalPosition);
+    final device = switch (destination) {
+      _DropDestination(:final deviceId) => ref.read(deviceProvider(deviceId)),
+      null => null,
+    };
+    if (destination?.directory case final directory?
+        when device != null && device.sharesFiles) {
+      await uploadFiles(
+        ProviderScope.containerOf(context),
+        ScaffoldMessenger.of(context),
+        device.deviceId,
+        directory,
+        files,
+      );
+      return;
+    }
+    await confirmAndSendFiles(context, ref, files, to: device);
   }
 
   @override

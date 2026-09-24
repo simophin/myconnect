@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:myconnect_ui/src/core/api/api_exception.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
+import 'package:myconnect_ui/src/core/api/models/remote_file.dart';
 import 'package:myconnect_ui/src/core/api/myconnect_api.dart';
 import 'package:myconnect_ui/src/core/daemon/daemon_host.dart';
 
@@ -137,6 +138,126 @@ void main() {
     expect(part.key, 'file');
     expect(part.value.filename, 'notes.txt');
     expect(part.value.headers?['content-length'], ['5']);
+  });
+
+  test('lists storage, then a folder by its path', () async {
+    final adapter = FakeAdapter(
+      (options) => json({
+        'path': options.queryParameters['path'],
+        'entries': [
+          {
+            'name': 'notes.txt',
+            'path': '/storage/emulated/0/notes.txt',
+            'kind': 'file',
+            'size': 5,
+            'modifiedAt': 1,
+          },
+          {'name': 'Link', 'path': '/l', 'kind': 'a_new_kind'},
+        ],
+      }),
+    );
+    final api = apiWith(adapter);
+
+    await api.listFiles('dev ice');
+    final listing = await api.listFiles('dev ice', path: '/storage/emulated/0');
+
+    final [roots, folder] = adapter.requests;
+    expect(roots.uri.path, '/api/v1/devices/dev%20ice/files');
+    expect(roots.uri.queryParameters, isEmpty);
+    expect(folder.uri.queryParameters, {'path': '/storage/emulated/0'});
+    expect(listing.path, '/storage/emulated/0');
+    expect(listing.entries.first.size, 5);
+    expect(listing.entries.last.kind, FileKind.unknown);
+  });
+
+  test('uploads into a folder as path, then the file part', () async {
+    final directory = await Directory.systemTemp.createTemp('myconnect_test');
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/photo.jpg')..writeAsStringSync('jpg');
+    final adapter = FakeAdapter(
+      (_) => json({
+        'id': 't1',
+        'deviceId': 'device',
+        'deviceName': 'Phone',
+        'direction': 'outgoing',
+        'status': 'completed',
+        'fileName': 'photo.jpg',
+        'totalBytes': 3,
+        'transferredBytes': 3,
+        'createdAt': 1,
+        'updatedAt': 2,
+      }, status: 202),
+    );
+
+    await apiWith(adapter).uploadFile('device', '/sdcard/DCIM', file.path);
+
+    final request = adapter.requests.single;
+    expect(request.path, 'devices/device/files/upload');
+    final form = request.data as FormData;
+    expect(form.fields.single.key, 'path');
+    expect(form.fields.single.value, '/sdcard/DCIM');
+    expect(form.files.single.value.headers?['content-length'], ['3']);
+  });
+
+  test('changes files by path', () async {
+    final adapter = FakeAdapter(
+      (options) => switch (options.method) {
+        'DELETE' => ResponseBody.fromString('', 204),
+        _ when options.path.endsWith('/download') => json({
+          'id': 't1',
+          'deviceId': 'device',
+          'deviceName': 'Phone',
+          'direction': 'incoming',
+          'status': 'queued',
+          'fileName': 'b.txt',
+          'totalBytes': 3,
+          'transferredBytes': 0,
+          'createdAt': 1,
+          'updatedAt': 1,
+        }, status: 202),
+        _ => json({'name': 'b', 'path': '/a/b', 'kind': 'directory'}),
+      },
+    );
+    final api = apiWith(adapter);
+
+    await api.createDirectory('device', '/a/b');
+    await api.moveFile('device', '/a/c', '/a/b');
+    await api.deleteFile('device', '/a/b');
+    await api.downloadFile('device', '/a/b.txt');
+
+    final [create, move, delete, download] = adapter.requests;
+    expect(create.uri.path, '/api/v1/devices/device/files/directories');
+    expect(create.data, {'path': '/a/b'});
+    expect(move.uri.path, '/api/v1/devices/device/files/move');
+    expect(move.data, {'from': '/a/c', 'to': '/a/b'});
+    expect(delete.method, 'DELETE');
+    expect(delete.uri.queryParameters, {'path': '/a/b'});
+    expect(download.uri.path, '/api/v1/devices/device/files/download');
+    expect(download.data, {'path': '/a/b.txt'});
+  });
+
+  test("keeps the peer's explanation from a problem", () async {
+    final adapter = FakeAdapter(
+      (_) => json(
+        {
+          'type': 'about:blank',
+          'title': 'Conflict',
+          'status': 409,
+          'code': 'files_unavailable',
+          'detail': 'No permission',
+        },
+        status: 409,
+        type: 'application/problem+json',
+      ),
+    );
+    await expectLater(
+      apiWith(adapter).listFiles('device'),
+      throwsA(
+        isA<ApiException>()
+            .having((e) => e.detail, 'detail', 'No permission')
+            .having((e) => e.message, 'message', contains('(No permission)')),
+      ),
+    );
   });
 
   test('pings a device by id', () async {
