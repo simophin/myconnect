@@ -557,8 +557,9 @@ unavailable, entering a peer's IP makes it appear in the Add device list.
 > CMake step exist, and `NativeBindings.open()` loads the macOS dylib from
 > `Contents/Frameworks`. The sandbox entitlements now include network
 > client and server, user-selected files and Downloads. `.github/workflows/
-> build.yml` builds all three platforms on every push to main (temporarily;
-> releases only once stable) and attaches them to published releases.
+> build.yml` builds all three platforms when a release is published (or by
+> hand) and attaches them to it, stamped with the tag's version, which
+> Settings shows.
 > Nobody has launched the macOS or Windows app yet: check that the daemon
 > starts, and on macOS that a download folder chosen in Settings still works
 > after a restart (the sandbox forgets it without a security-scoped
