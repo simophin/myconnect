@@ -8,6 +8,7 @@ environment:
   sdk: ^3.13.1
 
 dependencies:
+  desktop_drop: ^0.8.4
   dio: ^5.11.1
   ffi: ^2.2.0
   file_selector: ^1.1.0
@@ -40,3 +41,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/tray_icon.png
+    - assets/tray_icon_template.png

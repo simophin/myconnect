@@ -62,7 +62,9 @@ Working and verified live (UI ↔ CLI daemon over loopback):
   single instance on Linux (item 3).
 - Sending a file from a device's page, a transfers view with progress,
   cancel, and open file/folder, and a notification for received files
-  (item 4).
+  (item 4). Files dropped on the window, or picked from the tray menu's
+  "Send files…", go to the device they were dropped on or to one chosen in
+  a dialog.
 - A settings screen (device name, download folder, clipboard sync, close
   to tray), stored by the daemon, with renames reaching peers at once
   (item 5).
@@ -227,6 +229,9 @@ and no single-instance guard.
   confusing second identity if the data dir differs.
 - *Start on login* (optional): an autostart `.desktop` entry on Linux. It is
   a UI setting that has to live in the daemon (item 5), per ground rule 1.
+  Base it on the entry `install.sh` writes to
+  `~/.local/share/applications` (from `ui/linux/packaging/`), which has the
+  bundle's absolute `Exec` path.
 
 **Pitfalls.** Keep daemon shutdown on the real quit path, and keep the
 `ProviderScope` alive while the window is hidden, since disposing it stops the
@@ -262,6 +267,20 @@ API port stops listening).
 > drag-and-drop onto a device (`desktop_drop`), sending several files at
 > once (the API takes one file per request), and a live check of the
 > received-file notification (it is covered by a widget test).
+>
+> **Later (2026-09-24):** drag-and-drop and several files at once are
+> done, in the UI only: `FileDropZone` (`features/send/`, `desktop_drop`)
+> sends files dropped on a device tile or page straight to it, and asks
+> which device for a drop anywhere else; "Send file" and the tray's new
+> "Send files…" pick several files. Files go one request at a time, in
+> order. The tray icon itself can't take drops: StatusNotifierItem (Linux)
+> and the Windows notification area have no drop support, and only macOS's
+> `NSStatusItem` could, through native code. Verified live under Xvfb
+> against a CLI peer, with a GTK drag source driven by XTest: a drop on the
+> peer's tile, two files dropped on empty space and sent through the dialog,
+> and the tray entry (clicked through `com.canonical.dbusmenu.Event` on the
+> private bus) all arrived byte-identical. Not checked: a drop from a real
+> file manager, macOS and Windows.
 
 **Why.** File transfer is a core feature and the API already supports it end
 to end; only the UI is missing.
@@ -577,9 +596,12 @@ unavailable, entering a peer's IP makes it appear in the Add device list.
 > CMake step exist, and `NativeBindings.open()` loads the macOS dylib from
 > `Contents/Frameworks`. The sandbox entitlements now include network
 > client and server, user-selected files and Downloads. `.github/workflows/
-> build.yml` builds all three platforms when a release is published (or by
-> hand) and attaches them to it, stamped with the tag's version, which
-> Settings shows.
+> build.yml` builds only macOS (a universal `MyConnect.app` in a DMG) when a
+> release is published (or by hand) and attaches it, stamped with the tag's
+> version, which Settings shows. Linux and Windows packages were dropped from
+> the release build for now; the app still builds for them locally.
+> The app has only an ad-hoc signature: users allow it once in System
+> Settings → Privacy & Security, then it opens with a double-click.
 > Nobody has launched the macOS or Windows app yet: check that the daemon
 > starts, and on macOS that a download folder chosen in Settings still works
 > after a restart (the sandbox forgets it without a security-scoped
@@ -648,14 +670,21 @@ against an external daemon (`--dart-define=MYCONNECT_API_URL=...`).
 
 ## Verifying in the real app
 
+Isolate every run as [`../CLAUDE.md`](../CLAUDE.md) describes: fresh
+temporary data and download dirs, a free port, loopback discovery, and a
+private display and D-Bus session.
+
 ```sh
+dir=$(mktemp -d)
 # peer
-cargo run -- --api-port 25011 run --discovery-loopback \
-  --data-dir /tmp/peer --device-name "CLI Peer"
+cargo run -- --api-port "$port" run --discovery-loopback \
+  --data-dir "$dir/peer" --download-dir "$dir/peer-downloads" \
+  --device-name "CLI Peer"
 # app (separate identity, loopback only)
 cd ui && flutter run -d linux \
   --dart-define=MYCONNECT_DISCOVERY_LOOPBACK=true \
-  --dart-define=MYCONNECT_DATA_DIR=/tmp/ui \
+  --dart-define=MYCONNECT_DATA_DIR="$dir/ui" \
+  --dart-define=MYCONNECT_DOWNLOAD_DIR="$dir/ui-downloads" \
   --dart-define=MYCONNECT_DEVICE_NAME="UI Desktop"
 ```
 

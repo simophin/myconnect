@@ -91,23 +91,23 @@ impl SystemClipboard {
                 .name("myconnect-clipboard".into())
                 .spawn(move || {
                     // Opened here because the clipboard may not be `Send`.
-                    let backend = match open() {
-                        Ok(backend) => {
-                            let _ = opened.send(Ok(()));
-                            backend
-                        }
+                    let mut worker = match open() {
+                        Ok(backend) => Worker {
+                            backend,
+                            current,
+                            changes,
+                            poll_interval,
+                        },
                         Err(error) => {
                             let _ = opened.send(Err(error));
                             return;
                         }
                     };
-                    Worker {
-                        backend,
-                        current,
-                        changes,
-                        poll_interval,
-                    }
-                    .run(request_receiver);
+                    // Read what is already there before `spawn` returns, so
+                    // anything copied after it returns is reported.
+                    let last = worker.backend.read().ok().flatten();
+                    let _ = opened.send(Ok(()));
+                    worker.run(last, request_receiver);
                 })
                 .map_err(|error| ClipboardError::System(error.to_string()))?
         };
@@ -174,9 +174,9 @@ struct Worker<B> {
 }
 
 impl<B: TextBackend> Worker<B> {
-    fn run(mut self, requests: mpsc::Receiver<Request>) {
-        // Seeded without being reported: see `SystemClipboard`.
-        let mut last = self.backend.read().ok().flatten();
+    /// Poll and write until stopped. `last` is the text on the clipboard at
+    /// start, which is not reported: see `SystemClipboard`.
+    fn run(mut self, mut last: Option<String>, requests: mpsc::Receiver<Request>) {
         self.remember(&last);
         let mut failing = false;
         let mut next_poll = Instant::now() + self.poll_interval;

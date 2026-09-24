@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- The tin cans redrawn for 32 px and below: bigger cans, no ribs or
+       shading, and a thicker string with a single wave, so the shapes
+       survive being a few pixels wide. -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#14222C"/>
+  <!-- A rim, so the dark tile keeps its edge on dark panels and taskbars;
+       thicker than the full drawing's so it survives at tray size. -->
+  <rect x="11" y="11" width="234" height="234" rx="53" fill="none" stroke="#FFFFFF" stroke-opacity="0.22" stroke-width="6"/>
+  <g transform="rotate(-20 128 128)">
+    <path d="M98 128H112Q120 106 128 128T144 128H158" fill="none" stroke="#FFB224" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M38 86L100 100V156L38 170Z" fill="#E8ECEF"/>
+    <ellipse cx="38" cy="128" rx="15" ry="42" fill="#E8ECEF"/>
+    <ellipse cx="38" cy="128" rx="8" ry="31" fill="#0B151C"/>
+    <path d="M218 86L156 100V156L218 170Z" fill="#E8ECEF"/>
+    <ellipse cx="218" cy="128" rx="15" ry="42" fill="#E8ECEF"/>
+    <ellipse cx="218" cy="128" rx="8" ry="31" fill="#0B151C"/>
+  </g>
+</svg>

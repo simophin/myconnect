@@ -342,11 +342,11 @@ class _PickFile extends FileSelectorPlatform {
   final String path;
 
   @override
-  Future<XFile?> openFile({
+  Future<List<XFile>> openFiles({
     List<XTypeGroup>? acceptedTypeGroups,
     String? initialDirectory,
     String? confirmButtonText,
-  }) async => XFile(path);
+  }) async => [XFile(path)];
 }
 
 /// Notifications recorded instead of shown.

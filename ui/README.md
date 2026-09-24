@@ -14,9 +14,11 @@ library, on a free loopback port with a per-launch token.
 - Add device: scan for nearby devices, or add one by IP address, and start
   pairing, with the verification code and outcome
 - Incoming pairing requests prompt on any screen
-- Send a file from a device's page; a transfers page (and each device's
-  recent transfers) shows progress, cancels running transfers, and opens
-  received files or their folder
+- Send files from a device's page, by dropping them on the window (on a
+  device to send straight to it, anywhere else to choose one), or from the
+  tray menu's "Send files…"; a transfers page (and each device's recent
+  transfers) shows progress, cancels running transfers, and opens received
+  files or their folder
 - Keeps running in the tray when the window is closed (Quit from the tray
   menu stops it), with a desktop notification for pairing requests and
   received files that arrive while the window is hidden. Launching it again shows the running
@@ -33,6 +35,13 @@ the core, see [ADR 0006](docs/adr/0006-build-the-rust-core-from-the-platform-bui
 ```sh
 flutter run -d linux
 ```
+
+### Installing the Linux release
+
+The Linux release is a relocatable tarball of the bundle. Unpack it where you
+want it to live and run `./install.sh` to add MyConnect to your application
+menu, with its icon, for the current user. Run it again after moving the
+folder; `./install.sh --uninstall` removes the entry.
 
 ### Options (`--dart-define`)
 
@@ -85,6 +94,15 @@ way. `tool/integration_test.sh` runs it under `xvfb-run` and
 `dbus-run-session` so nothing opens on your desktop; `flutter test
 integration_test -d linux` also works on a desktop session.
 
+The app and tray icons are drawn in `icon/app_icon.svg`, with a simplified
+`icon/app_icon_small.svg` for 32 px and below, and
+`icon/tray_icon_template.svg`, a black-on-transparent version for the macOS
+menu bar, which macOS tints for light and dark mode. After editing any of
+them, run `tool/generate_icons.sh` (needs `rsvg-convert` and ImageMagick 7)
+to re-render the macOS icon set, the Windows `.ico`, the Linux hicolor icons
+in `linux/packaging/` and the tray icons in `assets/`, and commit the
+results.
+
 Layout:
 
 ```text
@@ -102,6 +120,7 @@ lib/
     │   ├── background/          # close to tray, quit, pairing and file notifications
     │   ├── devices/             # list, details (send file), add device (scan)
     │   ├── pairing/             # outgoing pairing page, incoming prompt
+    │   ├── send/                # window-wide file drop, choose-a-device dialog
     │   ├── settings/            # settings controller and page
     │   └── transfers/           # transfers controller, page and tile
     └── shared/widgets.dart

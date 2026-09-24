@@ -11,6 +11,9 @@ enum DeviceType { desktop, laptop, phone, tablet, tv, unknown }
 @JsonEnum(fieldRename: FieldRename.snake)
 enum DeviceReachability { discovered, connected, unavailable, unknown }
 
+/// The capability a peer lists when it accepts files.
+const shareCapability = 'kdeconnect.share.request';
+
 /// Mirror of the daemon's `DeviceSnapshot`.
 @freezed
 abstract class Device with _$Device {
@@ -34,4 +37,8 @@ abstract class Device with _$Device {
   factory fromJson(Map<String, Object?> json) => _$DeviceFromJson(json);
 
   bool get isConnected => reachability == DeviceReachability.connected;
+
+  /// Whether a file sent now would be accepted.
+  bool get acceptsFiles =>
+      isConnected && incomingCapabilities.contains(shareCapability);
 }

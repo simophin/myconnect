@@ -12,11 +12,13 @@ final _log = Logger('DesktopShell');
 abstract interface class DesktopShell {
   /// Take over the window's close button and show the tray icon.
   ///
-  /// [onCloseRequested] replaces closing the window; [onShowRequested] and
-  /// [onQuitRequested] are the tray menu's entries.
+  /// [onCloseRequested] replaces closing the window; [onShowRequested],
+  /// [onSendFilesRequested] and [onQuitRequested] are the tray menu's
+  /// entries.
   Future<void> start({
     required VoidCallback onCloseRequested,
     required VoidCallback onShowRequested,
+    required VoidCallback onSendFilesRequested,
     required VoidCallback onQuitRequested,
   });
 
@@ -42,13 +44,18 @@ class NativeDesktopShell with WindowListener implements DesktopShell {
   Future<void> start({
     required VoidCallback onCloseRequested,
     required VoidCallback onShowRequested,
+    required VoidCallback onSendFilesRequested,
     required VoidCallback onQuitRequested,
   }) async {
     _onCloseRequested = onCloseRequested;
     await windowManager.ensureInitialized();
     windowManager.addListener(this);
     await windowManager.setPreventClose(true);
-    _tray = _createTray(onShow: onShowRequested, onQuit: onQuitRequested);
+    _tray = _createTray(
+      onShow: onShowRequested,
+      onSendFiles: onSendFilesRequested,
+      onQuit: onQuitRequested,
+    );
   }
 
   @override
@@ -78,6 +85,7 @@ class NativeDesktopShell with WindowListener implements DesktopShell {
 
   static TrayIcon? _createTray({
     required VoidCallback onShow,
+    required VoidCallback onSendFiles,
     required VoidCallback onQuit,
   }) {
     final tray = TrayIcon.create();
@@ -86,11 +94,20 @@ class NativeDesktopShell with WindowListener implements DesktopShell {
       _log.warning('No tray icon on this system');
       return null;
     }
-    tray
-      ..icon = ImageAsset.fromAsset('assets/tray_icon.png')
-      ..setTooltip('MyConnect');
+    // The macOS menu bar wants a template image, which it tints to suit a
+    // light or dark menu bar. Elsewhere the tray shows the icon as drawn,
+    // on its own tile so it stands out on light and dark panels alike.
+    if (defaultTargetPlatform == TargetPlatform.macOS) {
+      tray
+        ..icon = ImageAsset.fromAsset('assets/tray_icon_template.png')
+        ..isIconTemplate = true;
+    } else {
+      tray.icon = ImageAsset.fromAsset('assets/tray_icon.png');
+    }
+    tray.setTooltip('MyConnect');
     menu
       ..addItem(_item('Show MyConnect', onShow))
+      ..addItem(_item('Send files…', onSendFiles))
       ..addSeparator()
       ..addItem(_item('Quit', onQuit));
     tray
