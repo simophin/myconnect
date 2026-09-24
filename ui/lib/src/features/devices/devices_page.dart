@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/features/devices/devices_controller.dart';
+import 'package:myconnect_ui/src/features/send/file_drop_zone.dart';
 import 'package:myconnect_ui/src/features/settings/settings_controller.dart';
 import 'package:myconnect_ui/src/shared/widgets.dart';
 
@@ -67,23 +68,31 @@ class DevicesPage extends ConsumerWidget {
   }
 }
 
-class _DeviceTile extends StatelessWidget {
+class _DeviceTile extends ConsumerWidget {
   const new(this.device);
 
   final Device device;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = Theme.of(context).colorScheme;
-    return ListTile(
-      leading: Icon(
-        deviceIcon(device.deviceType),
-        color: device.isConnected ? colors.primary : colors.outline,
+    final dropping = ref.watch(
+      fileDragProvider.select((drag) => drag?.deviceId == device.deviceId),
+    );
+    return FileDropTarget(
+      deviceId: device.deviceId,
+      child: ListTile(
+        leading: Icon(
+          dropping ? Icons.upload_file : deviceIcon(device.deviceType),
+          color: device.isConnected ? colors.primary : colors.outline,
+        ),
+        title: Text(device.deviceName),
+        subtitle: Text(dropping ? 'Drop to send' : reachabilityLabel(device)),
+        trailing: const Icon(Icons.chevron_right),
+        selected: dropping,
+        selectedTileColor: colors.primaryContainer,
+        onTap: () => context.go('/devices/${device.deviceId}'),
       ),
-      title: Text(device.deviceName),
-      subtitle: Text(reachabilityLabel(device)),
-      trailing: const Icon(Icons.chevron_right),
-      onTap: () => context.go('/devices/${device.deviceId}'),
     );
   }
 }

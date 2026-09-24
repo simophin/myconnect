@@ -5,6 +5,8 @@ import 'package:material_ui/material_ui.dart';
 import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/providers.dart';
 import 'package:myconnect_ui/src/features/devices/devices_controller.dart';
+import 'package:myconnect_ui/src/features/send/file_drop_zone.dart';
+import 'package:myconnect_ui/src/features/send/send_files.dart';
 import 'package:myconnect_ui/src/features/transfers/transfer_tile.dart';
 import 'package:myconnect_ui/src/features/transfers/transfers_controller.dart';
 import 'package:myconnect_ui/src/shared/widgets.dart';
@@ -21,7 +23,11 @@ class DeviceDetailPage extends ConsumerWidget {
       appBar: AppBar(title: Text(device?.deviceName ?? 'Device')),
       body: device == null
           ? const Center(child: Text('This device is no longer known.'))
-          : _DeviceDetails(device),
+          // Files dropped anywhere on the page go to this device.
+          : FileDropTarget(
+              deviceId: device.deviceId,
+              child: _DeviceDetails(device),
+            ),
     );
   }
 }
@@ -35,9 +41,6 @@ class _DeviceDetails extends ConsumerStatefulWidget {
   ConsumerState<_DeviceDetails> createState() => _DeviceDetailsState();
 }
 
-/// The capability a peer lists when it accepts files.
-const _shareCapability = 'kdeconnect.share.request';
-
 /// The capability a peer lists when it accepts pings.
 const _pingCapability = 'kdeconnect.ping';
 
@@ -47,20 +50,18 @@ const _recentTransfers = 5;
 class _DeviceDetailsState extends ConsumerState<_DeviceDetails> {
   bool _busy = false;
 
-  Future<void> _sendFile() async {
-    final file = await openFile(confirmButtonText: 'Send');
-    if (file == null || !mounted) return;
-    // The upload outlives this page if the user navigates away, or if the
+  Future<void> _sendFiles() async {
+    final files = await openFiles(confirmButtonText: 'Send');
+    if (files.isEmpty || !mounted) return;
+    // The uploads outlive this page if the user navigates away, or if the
     // device drops and unmounts it, so report errors through a messenger
     // captured now.
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      await ref
-          .read(transfersProvider.notifier)
-          .send(widget.device.deviceId, file.path);
-    } on Object catch (error) {
-      messenger.showSnackBar(SnackBar(content: Text(describeError(error))));
-    }
+    await sendFiles(
+      ref.read(transfersProvider.notifier),
+      ScaffoldMessenger.of(context),
+      widget.device,
+      [for (final file in files) file.path],
+    );
   }
 
   Future<void> _ping() async {
@@ -118,9 +119,7 @@ class _DeviceDetailsState extends ConsumerState<_DeviceDetails> {
   Widget build(BuildContext context) {
     final device = widget.device;
     final theme = Theme.of(context);
-    final canSend =
-        device.isConnected &&
-        device.incomingCapabilities.contains(_shareCapability);
+    final canSend = device.acceptsFiles;
     final canPing =
         device.isConnected &&
         device.incomingCapabilities.contains(_pingCapability);
@@ -146,7 +145,7 @@ class _DeviceDetailsState extends ConsumerState<_DeviceDetails> {
           runSpacing: 8,
           children: [
             FilledButton.icon(
-              onPressed: canSend ? _sendFile : null,
+              onPressed: canSend ? _sendFiles : null,
               icon: const Icon(Icons.upload_file),
               label: const Text('Send file'),
             ),
