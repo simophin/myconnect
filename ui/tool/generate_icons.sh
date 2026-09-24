@@ -73,3 +73,8 @@ cp "$full" "$hicolor/scalable/apps/$app_id.svg"
 # shows it at 16 to 24 px, so it uses the small drawing.
 render "$small" 64 "$tmp/tray.png"
 magick "$tmp/tray.png" "${png_opts[@]}" assets/tray_icon.png
+
+# macOS menu bar: a template image, which macOS tints for a light or dark
+# menu bar. Shown at 18 pt, so 36 px is sharp on Retina.
+render icon/tray_icon_template.svg 36 "$tmp/template.png"
+magick "$tmp/template.png" "${png_opts[@]}" assets/tray_icon_template.png

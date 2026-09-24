@@ -93,10 +93,13 @@ way. `tool/integration_test.sh` runs it under `xvfb-run` and
 integration_test -d linux` also works on a desktop session.
 
 The app and tray icons are drawn in `icon/app_icon.svg`, with a simplified
-`icon/app_icon_small.svg` for 32 px and below. After editing either, run
-`tool/generate_icons.sh` (needs `rsvg-convert` and ImageMagick 7) to
-re-render the macOS icon set, the Windows `.ico`, the Linux hicolor icons in
-`linux/packaging/` and `assets/tray_icon.png`, and commit the results.
+`icon/app_icon_small.svg` for 32 px and below, and
+`icon/tray_icon_template.svg`, a black-on-transparent version for the macOS
+menu bar, which macOS tints for light and dark mode. After editing any of
+them, run `tool/generate_icons.sh` (needs `rsvg-convert` and ImageMagick 7)
+to re-render the macOS icon set, the Windows `.ico`, the Linux hicolor icons
+in `linux/packaging/` and the tray icons in `assets/`, and commit the
+results.
 
 Layout:
 

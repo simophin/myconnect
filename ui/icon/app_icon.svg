@@ -13,6 +13,9 @@
     </linearGradient>
   </defs>
   <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#tile)"/>
+  <!-- A faint rim, so the dark tile keeps its edge on dark docks, panels
+       and taskbars. -->
+  <rect x="9.25" y="9.25" width="237.5" height="237.5" rx="54.75" fill="none" stroke="#FFFFFF" stroke-opacity="0.16" stroke-width="2.5"/>
   <g transform="rotate(-20 128 128)">
     <path d="M92 128H104Q110 116 116 128T128 128T140 128T152 128H164" fill="none" stroke="#FFB224" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
 
