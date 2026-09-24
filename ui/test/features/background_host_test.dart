@@ -122,4 +122,23 @@ void main() {
 
     expect(daemon.notifications.shown.values, ['photo.jpg from Pixel']);
   });
+
+  testWidgets('a ping notifies while hidden and shows a snackbar otherwise', (
+    tester,
+  ) async {
+    final daemon = await pumpApp(tester, TestDaemon());
+
+    daemon.events.add(
+      const PingReceived(deviceId: 'a', deviceName: 'Pixel', message: 'hi'),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Pixel: hi'), findsOneWidget);
+    expect(daemon.notifications.shown, isEmpty);
+
+    daemon.shell.onCloseRequested!();
+    await tester.pumpAndSettle();
+    daemon.events.add(const PingReceived(deviceId: 'a', deviceName: 'Pixel'));
+    await tester.pumpAndSettle();
+    expect(daemon.notifications.shown.values, ['Ping!']);
+  });
 }

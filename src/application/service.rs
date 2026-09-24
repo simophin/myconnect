@@ -19,8 +19,8 @@ use uuid::Uuid;
 use super::{
     ApplicationEvent, ClipboardSnapshot, Command, EventBus, EventBusError, LocalDeviceSnapshot,
     MAX_CLIPBOARD_TEXT_BYTES, OperationErrorCode, Pairing, PairingDirection, PairingSnapshot,
-    PairingStatus, PairingTransitionError, Query, QueryResult, StatusSnapshot, Transfer,
-    TransferDirection, TransferSnapshot, TransferStatus,
+    PairingStatus, PairingTransitionError, Query, QueryResult, ReceivedPing, StatusSnapshot,
+    Transfer, TransferDirection, TransferSnapshot, TransferStatus,
     settings::{Settings, SettingsDefaults, SettingsPatch, SettingsSnapshot},
     transfer::{TransferConfig, sanitize_file_name, unique_destination},
 };
@@ -740,17 +740,32 @@ impl ApplicationHandle {
             return;
         }
 
-        let paired = self
+        let Some(device) = self
             .state
             .read()
             .ok()
             .and_then(|state| state.devices.get(device_id))
-            .is_some_and(|device| device.paired);
-        if !paired {
+            .filter(|device| device.paired)
+        else {
             return;
-        }
+        };
 
         match plugins::dispatch_incoming(&packet) {
+            Ok(plugins::IncomingPluginPacket::Ping(body)) => {
+                // Only the presence of a message is logged, never its text.
+                tracing::debug!(
+                    device_id,
+                    has_message = body.message.is_some(),
+                    "ping received"
+                );
+                let _ = self
+                    .events
+                    .publish(super::EventData::PingReceived(ReceivedPing {
+                        device_id: device.device_id,
+                        device_name: device.device_name,
+                        message: body.message,
+                    }));
+            }
             Ok(plugins::IncomingPluginPacket::Clipboard(body)) => {
                 self.handle_clipboard(device_id, body, None)
             }
@@ -2268,16 +2283,42 @@ mod tests {
         assert_eq!(sent.packet_type, plugins::ping::PACKET_TYPE);
         let body: plugins::ping::PingBody = sent.body_as().unwrap();
         assert_eq!(body.message.as_deref(), Some("hello"));
+    }
 
-        // Incoming pings are not handled yet: one from a paired peer is
-        // dropped without disturbing the connection.
-        let incoming = plugins::ping::build_packet(2_u64, Some("pong".into())).unwrap();
-        handle.handle_peer_packet(device_id, incoming);
-        handle.send_ping(device_id, None).unwrap();
+    #[test]
+    fn pings_from_paired_devices_are_published_and_others_are_dropped() {
+        let (handle, _commands) = handle();
+        let paired_id = "740bd4b9b4184ee497d6caf1da8151be";
+        let unpaired_id = "850bd4b9b4184ee497d6caf1da8151be";
+        handle
+            .discover_device(&make_identity(paired_id, Vec::new()), true, 1)
+            .unwrap();
+        handle
+            .discover_device(&make_identity(unpaired_id, Vec::new()), false, 1)
+            .unwrap();
+        let mut events = handle.subscribe();
+
+        let ping = |message: Option<&str>| {
+            plugins::ping::build_packet(2_u64, message.map(str::to_owned)).unwrap()
+        };
+        let mut received = || match events.try_recv().unwrap().event {
+            super::super::EventData::PingReceived(ping) => ping,
+            other => panic!("unexpected event {other:?}"),
+        };
+        // The test bus holds one event, so check each ping as it lands.
+        handle.handle_peer_packet(unpaired_id, ping(Some("ignored")));
+        handle.handle_peer_packet(paired_id, ping(Some("pong")));
         assert_eq!(
-            rx.try_recv().unwrap().packet_type,
-            plugins::ping::PACKET_TYPE
+            received(),
+            ReceivedPing {
+                device_id: paired_id.into(),
+                device_name: "Peer".into(),
+                message: Some("pong".into()),
+            }
         );
+        handle.handle_peer_packet(paired_id, ping(None));
+        assert_eq!(received().message, None);
+        assert!(events.try_recv().is_err());
     }
 
     fn unpair_packet() -> Packet {

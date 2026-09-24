@@ -39,6 +39,7 @@ sealed class DaemonEvent {
       'settings.changed' => SettingsChanged(
         DaemonSettings.fromJson(data! as Map<String, Object?>),
       ),
+      'ping.received' => PingReceived.fromJson(data! as Map<String, Object?>),
       _ => UnhandledEvent(type),
     };
   }
@@ -81,6 +82,22 @@ final class TransferChanged extends DaemonEvent {
 final class SettingsChanged extends DaemonEvent {
   const new(this.settings);
   final DaemonSettings settings;
+}
+
+/// A paired device pinged this computer. Pings are one-off notifications:
+/// there is no snapshot to refetch, so one missed during a gap is gone.
+final class PingReceived extends DaemonEvent {
+  const new({required this.deviceId, required this.deviceName, this.message});
+
+  factory fromJson(Map<String, Object?> json) => PingReceived(
+    deviceId: json['deviceId']! as String,
+    deviceName: json['deviceName']! as String,
+    message: json['message'] as String?,
+  );
+
+  final String deviceId;
+  final String deviceName;
+  final String? message;
 }
 
 /// Clipboard events, which the UI does not consume yet.

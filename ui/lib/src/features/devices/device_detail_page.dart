@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:myconnect_ui/src/core/api/models/device.dart';
+import 'package:myconnect_ui/src/core/providers.dart';
 import 'package:myconnect_ui/src/features/devices/devices_controller.dart';
 import 'package:myconnect_ui/src/features/transfers/transfer_tile.dart';
 import 'package:myconnect_ui/src/features/transfers/transfers_controller.dart';
@@ -37,6 +38,9 @@ class _DeviceDetails extends ConsumerStatefulWidget {
 /// The capability a peer lists when it accepts files.
 const _shareCapability = 'kdeconnect.share.request';
 
+/// The capability a peer lists when it accepts pings.
+const _pingCapability = 'kdeconnect.ping';
+
 /// How many of this device's transfers the page lists.
 const _recentTransfers = 5;
 
@@ -54,6 +58,20 @@ class _DeviceDetailsState extends ConsumerState<_DeviceDetails> {
       await ref
           .read(transfersProvider.notifier)
           .send(widget.device.deviceId, file.path);
+    } on Object catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(describeError(error))));
+    }
+  }
+
+  Future<void> _ping() async {
+    // The device can drop, and unmount this page, before the call returns.
+    final messenger = ScaffoldMessenger.of(context);
+    final device = widget.device;
+    try {
+      await (await ref.read(apiProvider.future)).ping(device.deviceId);
+      messenger.showSnackBar(
+        SnackBar(content: Text('Pinged ${device.deviceName}.')),
+      );
     } on Object catch (error) {
       messenger.showSnackBar(SnackBar(content: Text(describeError(error))));
     }
@@ -103,6 +121,9 @@ class _DeviceDetailsState extends ConsumerState<_DeviceDetails> {
     final canSend =
         device.isConnected &&
         device.incomingCapabilities.contains(_shareCapability);
+    final canPing =
+        device.isConnected &&
+        device.incomingCapabilities.contains(_pingCapability);
     final transfers = ref
         .watch(transferListProvider(device.deviceId))
         .take(_recentTransfers)
@@ -120,13 +141,21 @@ class _DeviceDetailsState extends ConsumerState<_DeviceDetails> {
         _Fact('Type', device.deviceType.name),
         _Fact('Protocol version', '${device.protocolVersion}'),
         const SizedBox(height: 16),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: FilledButton.icon(
-            onPressed: canSend ? _sendFile : null,
-            icon: const Icon(Icons.upload_file),
-            label: const Text('Send file'),
-          ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FilledButton.icon(
+              onPressed: canSend ? _sendFile : null,
+              icon: const Icon(Icons.upload_file),
+              label: const Text('Send file'),
+            ),
+            FilledButton.tonalIcon(
+              onPressed: canPing ? _ping : null,
+              icon: const Icon(Icons.notifications_active_outlined),
+              label: const Text('Ping'),
+            ),
+          ],
         ),
         if (transfers.isNotEmpty) ...[
           const SizedBox(height: 16),

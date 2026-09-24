@@ -68,6 +68,8 @@ Working and verified live (UI ↔ CLI daemon over loopback):
   (item 5).
 - The desktop clipboard synced with peers, in both directions (item 6).
 - End-to-end tests of the real app against a CLI peer (item 7).
+- Ping both ways: a Ping button on the device page, and received pings as a
+  snackbar or a notification (item 8).
 
 Only Linux bundles the native library. Nothing has been tested against a real
 KDE Connect install yet.
@@ -83,7 +85,7 @@ KDE Connect install yet.
 | 5 | ~~[Daemon settings API and screen](#5-daemon-settings-api-and-settings-screen)~~ **Done** | P1 | Rust + Flutter |
 | 6 | ~~[OS clipboard integration](#6-os-clipboard-integration)~~ **Done** | P1 | Rust |
 | 7 | ~~[Automated end-to-end test](#7-automated-end-to-end-test)~~ **Done** | P1 | Test infra |
-| 8 | [Ping: send button and receiving](#8-ping-send-button-and-receiving) | P2 | Flutter + Rust |
+| 8 | ~~[Ping: send button and receiving](#8-ping-send-button-and-receiving)~~ **Done** | P2 | Flutter + Rust |
 | 9 | [Add device by IP address](#9-add-device-by-ip-address) | P2 | Rust + Flutter |
 | 10 | [macOS and Windows packaging](#10-macos-and-windows-packaging) | P2 | Build |
 
@@ -474,6 +476,26 @@ CI.
 ---
 
 ## 8. Ping: send button and receiving
+
+> **Done (2026-09-24).** `kdeconnect.ping` is now advertised as incoming
+> too, and dispatched (paired devices only) to a new `ping.received` event
+> carrying `{deviceId, deviceName, message?}`; the message text is never
+> logged. It is a one-off notification, so, unlike the resources, it has no
+> snapshot endpoint (noted in ARCHITECTURE §8). The CLI's event printer
+> formats it, but no CLI command watches for pings yet. UI: a "Ping"
+> button on the device page, enabled when the device is connected and
+> lists `kdeconnect.ping`, with "Pinged <name>." on success and the existing
+> `ApiException` messages on failure. `BackgroundHost` follows the event hub
+> directly and shows a received ping as a snackbar ("<name>: <message>", or
+> "Ping!") over a focused window, or a notification otherwise. Tests: unit
+> tests for dispatch and the event, `tests/ping_e2e.rs` now pings both ways
+> between two MyConnect peers, widget tests for the button and both receive
+> paths, and a real-app integration test that pings the CLI peer (checked
+> on its `/events`) and shows the peer's ping back. Not done: sending a
+> ping with a message from the app, and a recheck of phone-to-app pings
+> against KDE Connect for Android (item 2 saw them dropped before this).
+> Snackbars queue, so a received ping right after "Pinged <name>." waits
+> for that one to close.
 
 **Why.** It's a cheap, visible "is it working?" feature, and it's what KDE
 Connect users expect.

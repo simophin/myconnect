@@ -125,6 +125,31 @@ void main() {
     expect(sendButton().onPressed, isNull);
   });
 
+  testWidgets('a connected device that takes pings can be pinged', (
+    tester,
+  ) async {
+    FilledButton pingButton() =>
+        tester.widget(find.widgetWithText(FilledButton, 'Ping'));
+    final daemon = TestDaemon()..devices = [device(name: 'Pixel')];
+    when(() => daemon.api.ping(any())).thenAnswer((_) async {});
+    await pumpApp(tester, daemon);
+    await tester.tap(find.text('Pixel'));
+    await tester.pumpAndSettle();
+    expect(pingButton().onPressed, isNull);
+
+    daemon.events.add(
+      DeviceChanged(
+        device(name: 'Pixel', incomingCapabilities: ['kdeconnect.ping']),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Ping'));
+    await tester.pumpAndSettle();
+
+    verify(() => daemon.api.ping(device().deviceId)).called(1);
+    expect(find.text('Pinged Pixel.'), findsOneWidget);
+  });
+
   testWidgets('the transfers page shows progress and cancels', (tester) async {
     final daemon = TestDaemon()
       ..transfers = [

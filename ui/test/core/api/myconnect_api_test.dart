@@ -139,6 +139,15 @@ void main() {
     expect(part.value.headers?['content-length'], ['5']);
   });
 
+  test('pings a device by id', () async {
+    final adapter = FakeAdapter((_) => ResponseBody.fromString('', 202));
+    await apiWith(adapter).ping('device');
+
+    final request = adapter.requests.single;
+    expect(request.method, 'POST');
+    expect(request.uri.path, '/api/v1/devices/device/ping');
+  });
+
   test('patches settings with only the given fields', () async {
     final adapter = FakeAdapter(
       (_) => json({

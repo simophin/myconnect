@@ -127,4 +127,29 @@ void main() {
       ),
     );
   });
+
+  test('decodes ping events, with and without a message', () {
+    final withMessage = DaemonEvent.fromJson({
+      'type': 'ping.received',
+      'data': {
+        'deviceId': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'deviceName': 'Phone',
+        'message': 'hello',
+      },
+    });
+    expect(
+      withMessage,
+      isA<PingReceived>()
+          .having((e) => e.deviceName, 'deviceName', 'Phone')
+          .having((e) => e.message, 'message', 'hello'),
+    );
+    final plain = DaemonEvent.fromJson({
+      'type': 'ping.received',
+      'data': {
+        'deviceId': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'deviceName': 'Phone',
+      },
+    });
+    expect((plain as PingReceived).message, isNull);
+  });
 }

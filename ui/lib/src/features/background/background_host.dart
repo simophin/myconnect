@@ -4,6 +4,7 @@ import 'dart:ui';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
 import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 import 'package:myconnect_ui/src/core/providers.dart';
@@ -19,8 +20,9 @@ final _log = Logger('BackgroundHost');
 /// Closing the window only hides it, unless the user turned off the
 /// `closeToTray` setting; the tray menu shows it again or quits. Quitting is
 /// the one path that stops the daemon. While the window is
-/// hidden or unfocused, incoming pairing requests and received files raise a
-/// notification that brings the window back.
+/// hidden or unfocused, incoming pairing requests, received files and pings
+/// raise a notification that brings the window back. A ping over a focused
+/// window shows a snackbar instead.
 ///
 /// Sits above everything else so the tray works even if the daemon failed to
 /// start, and so it lives as long as the `ProviderScope` does.
@@ -42,9 +44,18 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
   final _pairingNotifications = <String, int?>{};
   int _nextNotificationId = 1;
 
+  StreamSubscription<DaemonEvent>? _events;
+
   @override
   void initState() {
     super.initState();
+    // Pings have no snapshot to watch, so follow the event stream directly.
+    ref.listenManual(daemonEventsProvider, (_, hub) {
+      unawaited(_events?.cancel());
+      _events = hub.events.listen((event) {
+        if (event is PingReceived) unawaited(_showPing(event));
+      });
+    }, fireImmediately: true);
     // An exit the OS asks for (e.g. quitting from the macOS menu bar) rather
     // than a window close, which the shell intercepts.
     _lifecycle = AppLifecycleListener(
@@ -161,8 +172,25 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
     }
   }
 
+  Future<void> _showPing(PingReceived ping) async {
+    final text = switch (ping.message) {
+      final message? when message.isNotEmpty => message,
+      _ => 'Ping!',
+    };
+    if (await ref.read(desktopShellProvider).isWindowFocused()) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(SnackBar(content: Text('${ping.deviceName}: $text')));
+      return;
+    }
+    await ref
+        .read(desktopNotificationsProvider)
+        .show(id: _nextNotificationId++, title: ping.deviceName, body: text);
+  }
+
   @override
   void dispose() {
+    unawaited(_events?.cancel());
     _lifecycle.dispose();
     super.dispose();
   }

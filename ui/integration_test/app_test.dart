@@ -44,7 +44,10 @@ void main() {
   });
 
   /// Start the app on a fresh identity and wait for its empty home screen.
-  Future<void> launchApp(WidgetTester tester) async {
+  Future<void> launchApp(
+    WidgetTester tester, {
+    DesktopNotifications? notifications,
+  }) async {
     final host = NativeDaemonHost(
       config: NativeDaemonConfig(
         dataDir: '${appDir.path}/data',
@@ -64,7 +67,7 @@ void main() {
           daemonHostProvider.overrideWithValue(host),
           // Keep test runs off the desktop's notification area.
           desktopNotificationsProvider.overrideWithValue(
-            _SilentNotifications(),
+            notifications ?? _SilentNotifications(),
           ),
         ],
       ),
@@ -191,6 +194,39 @@ void main() {
     );
   });
 
+  testWidgets('pings the peer and shows its ping back', (tester) async {
+    final notifications = _SilentNotifications();
+    await launchApp(tester, notifications: notifications);
+    final appId = await pairWithPeer(tester);
+
+    final received = (await peer.events()).firstWhere(
+      (event) => event['type'] == 'ping.received',
+    );
+    await tester.tap(find.text(peerName));
+    final ping = find.ancestor(
+      of: find.text('Ping'),
+      matching: find.bySubtype<ButtonStyleButton>(),
+    );
+    await pumpUntilEnabled(tester, ping);
+    await tester.tap(ping);
+    final data =
+        (await received.timeout(const Duration(seconds: 20)))['data']! as Map;
+    expect(data['deviceName'], appName);
+    await pumpUntil(tester, find.text('Pinged $peerName.'));
+
+    await peer.post('/devices/$appId/ping', {'message': 'hello app'});
+    // A snackbar if the window has focus, a notification otherwise; which
+    // one depends on the display the test runs on.
+    await _pumpWhile(
+      tester,
+      () =>
+          find.text('$peerName: hello app').evaluate().isEmpty &&
+          !notifications.shown.contains('hello app'),
+      'Timed out waiting for the ping from the peer',
+      const Duration(seconds: 20),
+    );
+  });
+
   testWidgets('sends a file to the peer and receives one back', (tester) async {
     await launchApp(tester);
     final appId = await pairWithPeer(tester);
@@ -313,7 +349,10 @@ class _PickFile extends FileSelectorPlatform {
   }) async => XFile(path);
 }
 
+/// Notifications recorded instead of shown.
 class _SilentNotifications implements DesktopNotifications {
+  final shown = <String>[];
+
   @override
   Future<void> start({required VoidCallback onActivated}) async {}
 
@@ -322,7 +361,7 @@ class _SilentNotifications implements DesktopNotifications {
     required int id,
     required String title,
     required String body,
-  }) async {}
+  }) async => shown.add(body);
 
   @override
   Future<void> cancel(int id) async {}

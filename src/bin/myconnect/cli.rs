@@ -481,6 +481,10 @@ fn print_event(event: &ApplicationEvent, json_output: bool) {
                 print_pairing(pairing, false)
             }
             EventData::SettingsChanged(settings) => print_settings(settings, false),
+            EventData::PingReceived(ping) => match &ping.message {
+                Some(message) => println!("Ping from {}: {message}", ping.device_name),
+                None => println!("Ping from {}", ping.device_name),
+            },
         }
     }
 }

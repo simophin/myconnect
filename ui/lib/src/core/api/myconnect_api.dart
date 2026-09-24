@@ -57,6 +57,11 @@ class MyConnectApi {
     () => _dio.delete<void>('devices/${Uri.encodeComponent(deviceId)}'),
   );
 
+  /// Ping a paired, connected device that accepts pings.
+  Future<void> ping(String deviceId) => _send(
+    () => _dio.post<void>('devices/${Uri.encodeComponent(deviceId)}/ping'),
+  );
+
   Future<List<Pairing>> pairings() async =>
       (await _get<List<Object?>>('pairings'))
           .map((json) => Pairing.fromJson(json! as _Json))

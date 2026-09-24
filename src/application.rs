@@ -39,7 +39,7 @@ pub use settings::{SettingsDefaults, SettingsPatch, SettingsSnapshot};
 pub use state::{
     ClipboardSnapshot, Command, LocalDeviceSnapshot, MAX_CLIPBOARD_TEXT_BYTES, OperationErrorCode,
     Pairing, PairingDirection, PairingSnapshot, PairingStatus, PairingTransitionError, Query,
-    QueryResult, StatusSnapshot, Transfer, TransferDirection, TransferProgressError,
+    QueryResult, ReceivedPing, StatusSnapshot, Transfer, TransferDirection, TransferProgressError,
     TransferSnapshot, TransferStatus, TransferTransitionError,
 };
 pub use transfer::{DEFAULT_MAX_TRANSFER_BYTES, FileNameError, TransferConfig};

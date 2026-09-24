@@ -115,6 +115,20 @@ class CliPeer {
   Future<List<Map<String, Object?>>> transfers() async =>
       ((await get('/transfers'))! as List<Object?>).cast();
 
+  /// Subscribe to the peer's `/events`. Completes once subscribed, with the
+  /// events that follow as `{type, data, ...}` maps.
+  Future<Stream<Map<String, Object?>>> events() async {
+    final request = await _http.getUrl(
+      Uri.parse('http://127.0.0.1:$port/api/v1/events'),
+    );
+    final response = await request.close();
+    return response
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .where((line) => line.startsWith('data:'))
+        .map((line) => jsonDecode(line.substring(5)) as Map<String, Object?>);
+  }
+
   /// Send [file] to [deviceId] with `myconnect send`, the way a user would.
   Future<void> sendFile(String deviceId, File file) async {
     final result = await Process.run(cli, [

@@ -1,8 +1,7 @@
-//! End-to-end outgoing ping: a ping sent through the application reaches a
-//! paired KDE Connect peer over the TLS control connection, and capability
-//! filtering refuses to ping a peer that never advertised receiving pings.
-//! Incoming pings are not handled yet, so MyConnect itself advertises ping
-//! as outgoing only and two MyConnect instances cannot ping each other.
+//! End-to-end ping: a ping sent through the application reaches a paired
+//! KDE Connect peer over the TLS control connection, and two paired
+//! MyConnect instances can ping each other, with the receiver publishing a
+//! `ping.received` event.
 
 use std::{
     net::{Ipv4Addr, SocketAddr},
@@ -12,8 +11,8 @@ use std::{
 
 use myconnect::{
     application::{
-        ApplicationError, ApplicationHandle, ApplicationService, Command, LocalDeviceSnapshot,
-        Query, QueryResult,
+        ApplicationError, ApplicationHandle, ApplicationService, Command, EventData,
+        LocalDeviceSnapshot, Query, QueryResult, ReceivedPing,
     },
     clipboard::InMemoryClipboard,
     config::{FilesystemTrustStore, LocalIdentity, TrustStore, TrustedDevice},
@@ -73,7 +72,7 @@ fn peer(name: &str) -> Peer {
 }
 
 /// A `LocalDeviceInfo` advertising exactly what production code does via
-/// `plugins::capabilities()`: ping outgoing only.
+/// `plugins::capabilities()`.
 fn local_production(device_id: &str, name: &str) -> LocalDeviceInfo {
     let capabilities = plugins::capabilities();
     LocalDeviceInfo {
@@ -271,7 +270,7 @@ async fn ping_reaches_a_paired_kde_connect_peer_over_tls() {
         .await
         .unwrap();
 
-    // Our identity advertises ping as something we send, not receive.
+    // Our identity advertises ping both ways.
     let inner: Value = serde_json::from_str(&read_line(&mut tls_stream).await).unwrap();
     assert_eq!(inner["body"]["deviceId"], json!(local_id));
     let advertises = |field: &str| {
@@ -281,7 +280,7 @@ async fn ping_reaches_a_paired_kde_connect_peer_over_tls() {
             .contains(&json!(plugins::ping::PACKET_TYPE))
     };
     assert!(advertises("outgoingCapabilities"));
-    assert!(!advertises("incomingCapabilities"));
+    assert!(advertises("incomingCapabilities"));
 
     wait_for_reachability(
         &local_peer.application,
@@ -303,7 +302,7 @@ async fn ping_reaches_a_paired_kde_connect_peer_over_tls() {
 }
 
 #[tokio::test]
-async fn myconnect_peers_refuse_to_ping_each_other_until_incoming_ping_is_supported() {
+async fn paired_myconnect_peers_ping_each_other() {
     let a = peer("Peer A");
     let b = peer("Peer B");
     let a_id = a.identity.device_id().to_owned();
@@ -345,14 +344,41 @@ async fn myconnect_peers_refuse_to_ping_each_other_until_incoming_ping_is_suppor
 
     pair(&a.application, &b.application, &a_id, &b_id).await;
 
-    // Paired and connected, but B never advertised `kdeconnect.ping` in its
-    // incoming capabilities, so sending must be refused with a typed
-    // rejection rather than silently dropped or delivered anyway.
-    assert!(matches!(
-        a.application
-            .send_ping(&b_id, Some("should not send".into())),
-        Err(ApplicationError::UnsupportedByPeer)
-    ));
+    let mut b_events = b.application.subscribe();
+    a.application
+        .send_ping(&b_id, Some("hello B".into()))
+        .unwrap();
+    let received = timeout(Duration::from_secs(3), async {
+        loop {
+            if let EventData::PingReceived(ping) = b_events.recv().await.unwrap().event {
+                return ping;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        received,
+        ReceivedPing {
+            device_id: a_id.clone(),
+            device_name: "Peer A".into(),
+            message: Some("hello B".into()),
+        }
+    );
+
+    let mut a_events = a.application.subscribe();
+    b.application.send_ping(&a_id, None).unwrap();
+    let received = timeout(Duration::from_secs(3), async {
+        loop {
+            if let EventData::PingReceived(ping) = a_events.recv().await.unwrap().event {
+                return ping;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(received.device_id, b_id);
+    assert_eq!(received.message, None);
 
     a_service.shutdown().await.unwrap();
     b_service.shutdown().await.unwrap();

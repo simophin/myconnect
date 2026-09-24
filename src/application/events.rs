@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::broadcast;
 
-use super::{ClipboardSnapshot, PairingSnapshot, SettingsSnapshot, TransferSnapshot};
+use super::{ClipboardSnapshot, PairingSnapshot, ReceivedPing, SettingsSnapshot, TransferSnapshot};
 use crate::device::DeviceSnapshot;
 
 /// Data carried by an application event.
@@ -42,6 +42,8 @@ pub enum EventData {
     ClipboardChanged(ClipboardSnapshot),
     #[serde(rename = "settings.changed")]
     SettingsChanged(SettingsSnapshot),
+    #[serde(rename = "ping.received")]
+    PingReceived(ReceivedPing),
 }
 
 impl EventData {
@@ -60,6 +62,7 @@ impl EventData {
             Self::TransferFailed(_) => "transfer.failed",
             Self::ClipboardChanged(_) => "clipboard.changed",
             Self::SettingsChanged(_) => "settings.changed",
+            Self::PingReceived(_) => "ping.received",
         }
     }
 }

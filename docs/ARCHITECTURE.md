@@ -51,7 +51,7 @@ so packet handling can be exercised without a live connection.
 | `config` | `src/config/{mod,identity,settings,token,trust}.rs` | Local device identity (UUID + self-signed cert), the optional API bearer token (never persisted), filesystem-backed `TrustStore` of pinned peer certificates, and `settings.json` (user settings, written atomically). |
 | `transport` | `src/transport/{lan,tls,payload}.rs` | UDP discovery, TCP control-channel connect/accept, the real rustls TLS handshake and certificate pinning, and the auxiliary TLS payload connection used for file transfer. |
 | `device` | `src/device.rs` | `DeviceSnapshot`, `DeviceReachability`, and the in-memory device registry keyed by device ID. |
-| `plugins` | `src/plugins/{mod,ping,clipboard,share}.rs` | Fixed (non-dynamic) packet-type routing table for the packet families this build understands: ping, clipboard, share. Advertises capability strings for the identity packet; ping is advertised as outgoing only, since incoming pings are not handled yet. |
+| `plugins` | `src/plugins/{mod,ping,clipboard,share}.rs` | Fixed (non-dynamic) packet-type routing table for the packet families this build understands: ping, clipboard, share. Advertises capability strings for the identity packet, all in both directions. |
 | `application` | `src/application.rs`, `src/application/{state,events,service,settings,transfer}.rs` | Orchestration: connection registry, pairing state machine, transfer state machine, clipboard sync, user settings, bounded event bus. Everything HTTP-facing is a snapshot type defined here. `RunningService` starts/stops a whole daemon (LAN + API) for the CLI and embedders. |
 | `clipboard` | `src/clipboard.rs`, `src/clipboard/system.rs` | `ClipboardService` trait, the desktop clipboard (`SystemClipboard`, over `arboard`) and an in-memory implementation (§6). |
 | `api` | `src/api.rs` | Axum HTTP transport only — translates HTTP requests to `ApplicationService` calls and snapshots back to JSON. Optional bearer-token auth, body-size limits, SSE. |
@@ -238,7 +238,7 @@ event stream.
 | `PUT` | `/clipboard` | Set text and send to eligible paired devices. |
 | `GET` | `/settings` | The settings in effect (§7). |
 | `PATCH` | `/settings` | Change the fields present in the JSON body; `null` resets one to its default, unknown fields are rejected. `400 invalid_device_name` / `invalid_download_dir` for bad values. Returns the new settings. |
-| `GET` | `/events` | Server-Sent Events: `device.discovered/connected/updated/disconnected/forgotten`, `pairing.requested/updated`, `transfer.started/progress/completed/failed`, `clipboard.changed`, `settings.changed`. Not durable — clients refetch a snapshot after a gap or reconnect. |
+| `GET` | `/events` | Server-Sent Events: `device.discovered/connected/updated/disconnected/forgotten`, `pairing.requested/updated`, `transfer.started/progress/completed/failed`, `clipboard.changed`, `settings.changed`, `ping.received` (`{deviceId, deviceName, message?}` from a paired device; a one-off notification with no snapshot endpoint, so one missed during a gap is simply lost). Not durable — clients refetch a snapshot after a gap or reconnect. |
 
 Mutation endpoints that require network round-trips return `202` and are
 tracked through the resource's own state (poll the resource or watch
@@ -297,13 +297,12 @@ Prioritized next work, with implementation notes for each item, is in
   matching verification codes, unpairing, clipboard (the phone sends only
   when the user taps "Send clipboard", an Android 10+ restriction), and file
   transfer (3 MB, byte-identical). Ping to the phone works; ping from the
-  phone is dropped (next item). Not yet checked against KDE Connect on
+  phone was dropped at the time and is handled now (`ping.received`), but
+  that direction has not been rechecked against the phone. Not yet checked against KDE Connect on
   desktop, and not from the Flutter app (the app embeds the same daemon).
   Two bugs found by the check are fixed: the CLI's upload omitted the file
   part's `Content-Length` header, and incoming pair requests were dropped
   when the clocks differed by more than 30 seconds.
-- Ping is outgoing only: incoming `kdeconnect.ping` packets are dropped and
-  not advertised in `incomingCapabilities`.
 - The desktop clipboard was checked live on X11 only (two daemons on
   separate Xvfb displays), not on a Wayland compositor. Compositors without
   data-control (e.g. GNOME) fall back to XWayland, which is untested.
