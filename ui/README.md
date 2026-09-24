@@ -34,6 +34,13 @@ the core, see [ADR 0006](docs/adr/0006-build-the-rust-core-from-the-platform-bui
 flutter run -d linux
 ```
 
+### Installing the Linux release
+
+The Linux release is a relocatable tarball of the bundle. Unpack it where you
+want it to live and run `./install.sh` to add MyConnect to your application
+menu, with its icon, for the current user. Run it again after moving the
+folder; `./install.sh --uninstall` removes the entry.
+
 ### Options (`--dart-define`)
 
 | Define | Effect |
@@ -88,8 +95,8 @@ integration_test -d linux` also works on a desktop session.
 The app and tray icons are drawn in `icon/app_icon.svg`, with a simplified
 `icon/app_icon_small.svg` for 32 px and below. After editing either, run
 `tool/generate_icons.sh` (needs `rsvg-convert` and ImageMagick 7) to
-re-render the macOS icon set, the Windows `.ico`, the Linux window icon and
-`assets/tray_icon.png`, and commit the results.
+re-render the macOS icon set, the Windows `.ico`, the Linux hicolor icons in
+`linux/packaging/` and `assets/tray_icon.png`, and commit the results.
 
 Layout:
 

@@ -56,9 +56,18 @@ for size in 16 20 24 32 40 48 64 256; do
 done
 magick "${ico_parts[@]}" windows/runner/resources/app_icon.ico
 
-# Linux: the window icon, installed next to the executable.
-render "$full" 256 "$tmp/linux.png"
-magick "$tmp/linux.png" "${png_opts[@]}" linux/runner/resources/app_icon.png
+# Linux: a hicolor icon theme, named after the application ID, which the
+# bundle ships in share/icons for its window and its .desktop entry.
+hicolor=linux/packaging/icons/hicolor
+app_id=org.myconnect.myconnect_ui
+for size in 16 24 32 48 64 128 256 512; do
+  mkdir -p "$hicolor/${size}x$size/apps"
+  render "$(svg_for "$size")" "$size" "$tmp/linux.png"
+  magick "$tmp/linux.png" "${png_opts[@]}" \
+    "$hicolor/${size}x$size/apps/$app_id.png"
+done
+mkdir -p "$hicolor/scalable/apps"
+cp "$full" "$hicolor/scalable/apps/$app_id.svg"
 
 # Tray: drawn at 64 px and scaled down by the tray host, which usually
 # shows it at 16 to 24 px, so it uses the small drawing.

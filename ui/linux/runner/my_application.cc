@@ -20,20 +20,16 @@ static void first_frame_cb(MyApplication* self, FlView* view) {
 }
 
 // Shows the app icon in the title bar and window switcher. The bundle is
-// relocatable, so find the icon relative to the executable rather than in
-// an icon theme.
+// relocatable and may not be installed, so add its own share/icons to the
+// icon theme's search path, found relative to the executable.
 static void set_window_icon(GtkWindow* window) {
   g_autofree gchar* exe = g_file_read_link("/proc/self/exe", nullptr);
-  if (exe == nullptr) {
-    return;
+  if (exe != nullptr) {
+    g_autofree gchar* dir = g_path_get_dirname(exe);
+    g_autofree gchar* icons = g_build_filename(dir, "share", "icons", nullptr);
+    gtk_icon_theme_append_search_path(gtk_icon_theme_get_default(), icons);
   }
-  g_autofree gchar* dir = g_path_get_dirname(exe);
-  g_autofree gchar* path =
-      g_build_filename(dir, "data", "app_icon.png", nullptr);
-  g_autoptr(GError) error = nullptr;
-  if (!gtk_window_set_icon_from_file(window, path, &error)) {
-    g_warning("Failed to load window icon %s: %s", path, error->message);
-  }
+  gtk_window_set_icon_name(window, APPLICATION_ID);
 }
 
 // Implements GApplication::activate.

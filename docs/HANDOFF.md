@@ -227,6 +227,9 @@ and no single-instance guard.
   confusing second identity if the data dir differs.
 - *Start on login* (optional): an autostart `.desktop` entry on Linux. It is
   a UI setting that has to live in the daemon (item 5), per ground rule 1.
+  Base it on the entry `install.sh` writes to
+  `~/.local/share/applications` (from `ui/linux/packaging/`), which has the
+  bundle's absolute `Exec` path.
 
 **Pitfalls.** Keep daemon shutdown on the real quit path, and keep the
 `ProviderScope` alive while the window is hidden, since disposing it stops the

@@ -97,9 +97,14 @@ install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   COMPONENT Runtime)
 
-# The window icon; the runner loads it from data/ next to the executable.
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/runner/resources/app_icon.png"
-  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}" COMPONENT Runtime)
+# Desktop integration: the icon theme the window takes its icon from, and a
+# .desktop entry that install.sh adds to the user's application menu.
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icons"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/share" COMPONENT Runtime)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/packaging/${APPLICATION_ID}.desktop"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/share/applications" COMPONENT Runtime)
+install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/install.sh"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}" COMPONENT Runtime)
 
 install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
