@@ -128,7 +128,7 @@ class _DeviceDetailsState extends ConsumerState<_DeviceDetails> {
         ListTile(
           leading: Icon(deviceIcon(device.deviceType), size: 40),
           title: Text(device.deviceName, style: theme.textTheme.titleLarge),
-          subtitle: Text(reachabilityLabel(device)),
+          subtitle: Text(deviceStatusLabel(device)),
         ),
         const Divider(),
         _Fact('Device ID', device.deviceId),

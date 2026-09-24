@@ -485,12 +485,18 @@ fn print_devices(devices: &[DeviceSnapshot], json_output: bool) {
     } else {
         for device in devices {
             let trust = if device.paired { "paired" } else { "unpaired" };
+            let battery = match device.battery {
+                Some(battery) if battery.charging => format!("{}% charging", battery.charge),
+                Some(battery) => format!("{}%", battery.charge),
+                None => "-".to_owned(),
+            };
             println!(
-                "{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}",
                 device.device_id,
                 device.device_name,
                 enum_name(device.reachability),
-                trust
+                trust,
+                battery
             );
         }
     }

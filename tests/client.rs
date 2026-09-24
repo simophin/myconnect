@@ -124,6 +124,7 @@ fn device() -> DeviceSnapshot {
         paired: true,
         pairing: false,
         last_seen_at: 10,
+        battery: None,
     }
 }
 

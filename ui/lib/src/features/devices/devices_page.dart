@@ -87,7 +87,7 @@ class _DeviceTile extends ConsumerWidget {
           color: device.isConnected ? colors.primary : colors.outline,
         ),
         title: Text(device.deviceName),
-        subtitle: Text(dropping ? 'Drop to send' : reachabilityLabel(device)),
+        subtitle: Text(dropping ? 'Drop to send' : deviceStatusLabel(device)),
         trailing: const Icon(Icons.chevron_right),
         selected: dropping,
         selectedTileColor: colors.primaryContainer,

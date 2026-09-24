@@ -8,6 +8,7 @@
 //! transport sockets, or CLI types, so it can be exercised without a
 //! connection or an application handle.
 
+pub mod battery;
 pub mod clipboard;
 pub mod ping;
 pub mod sftp;
@@ -27,7 +28,8 @@ pub struct PluginCapabilities {
 }
 
 /// The fixed set of packet types this build can send and receive. Browsing
-/// is one-way: this build asks peers to serve files but serves none itself.
+/// and battery reports are one-way: this build asks peers to serve files
+/// and reads their battery, but serves no files and reports no battery.
 pub fn capabilities() -> PluginCapabilities {
     PluginCapabilities {
         incoming: vec![
@@ -36,6 +38,7 @@ pub fn capabilities() -> PluginCapabilities {
             clipboard::CONNECT_PACKET_TYPE.to_owned(),
             share::PACKET_TYPE.to_owned(),
             sftp::PACKET_TYPE.to_owned(),
+            battery::PACKET_TYPE.to_owned(),
         ],
         outgoing: vec![
             ping::PACKET_TYPE.to_owned(),
@@ -56,6 +59,7 @@ pub enum IncomingPluginPacket {
     ShareRequest(share::ShareRequestBody),
     ShareRequestUpdate(share::ShareRequestUpdateBody),
     Sftp(sftp::SftpBody),
+    Battery(battery::BatteryBody),
 }
 
 #[derive(Debug, Error)]
@@ -84,6 +88,7 @@ pub fn dispatch_incoming(packet: &Packet) -> Result<IncomingPluginPacket, Plugin
             Ok(IncomingPluginPacket::ShareRequestUpdate(packet.body_as()?))
         }
         sftp::PACKET_TYPE => Ok(IncomingPluginPacket::Sftp(packet.body_as()?)),
+        battery::PACKET_TYPE => Ok(IncomingPluginPacket::Battery(packet.body_as()?)),
         other => Err(PluginDispatchError::Unrecognized(other.to_owned())),
     }
 }
@@ -93,7 +98,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn advertises_ping_clipboard_and_share_both_directions_and_browsing_one_way() {
+    fn advertises_ping_clipboard_and_share_both_directions_and_browsing_and_battery_one_way() {
         let capabilities = capabilities();
         let bidirectional = [
             ping::PACKET_TYPE,
@@ -103,7 +108,11 @@ mod tests {
         ];
         assert_eq!(
             capabilities.incoming,
-            [&bidirectional[..], &[sftp::PACKET_TYPE]].concat()
+            [
+                &bidirectional[..],
+                &[sftp::PACKET_TYPE, battery::PACKET_TYPE]
+            ]
+            .concat()
         );
         assert_eq!(
             capabilities.outgoing,

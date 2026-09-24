@@ -6,6 +6,15 @@ part of 'device.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
+_BatteryStatus _$BatteryStatusFromJson(Map<String, dynamic> json) =>
+    _BatteryStatus(
+      charge: (json['charge'] as num).toInt(),
+      charging: json['charging'] as bool,
+    );
+
+Map<String, dynamic> _$BatteryStatusToJson(_BatteryStatus instance) =>
+    <String, dynamic>{'charge': instance.charge, 'charging': instance.charging};
+
 _Device _$DeviceFromJson(Map<String, dynamic> json) => _Device(
   deviceId: json['deviceId'] as String,
   deviceName: json['deviceName'] as String,
@@ -29,6 +38,9 @@ _Device _$DeviceFromJson(Map<String, dynamic> json) => _Device(
   paired: json['paired'] as bool,
   pairing: json['pairing'] as bool,
   lastSeenAt: (json['lastSeenAt'] as num).toInt(),
+  battery: json['battery'] == null
+      ? null
+      : BatteryStatus.fromJson(json['battery'] as Map<String, dynamic>),
 );
 
 Map<String, dynamic> _$DeviceToJson(_Device instance) => <String, dynamic>{
@@ -42,6 +54,7 @@ Map<String, dynamic> _$DeviceToJson(_Device instance) => <String, dynamic>{
   'paired': instance.paired,
   'pairing': instance.pairing,
   'lastSeenAt': instance.lastSeenAt,
+  'battery': instance.battery,
 };
 
 const _$DeviceTypeEnumMap = {

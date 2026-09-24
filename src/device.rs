@@ -16,6 +16,15 @@ pub enum DeviceReachability {
     Unavailable,
 }
 
+/// A peer's battery, as it last reported it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatteryStatus {
+    /// Percent, 0 to 100.
+    pub charge: u8,
+    pub charging: bool,
+}
+
 /// Immutable, API-facing view of a peer device.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +39,9 @@ pub struct DeviceSnapshot {
     pub paired: bool,
     pub pairing: bool,
     pub last_seen_at: u64,
+    /// Known only while the device is paired and connected, and only once
+    /// it has reported it; `null` otherwise.
+    pub battery: Option<BatteryStatus>,
 }
 
 #[derive(Clone, Debug)]
@@ -66,6 +78,7 @@ impl DeviceRegistry {
 
         let existing = self.devices.get(&identity.device_id);
         let pairing = existing.is_some_and(|record| record.snapshot.pairing);
+        let battery = existing.and_then(|record| record.snapshot.battery);
         let reachability = match existing.map(|record| record.snapshot.reachability) {
             Some(DeviceReachability::Connected) => DeviceReachability::Connected,
             _ => DeviceReachability::Discovered,
@@ -81,6 +94,7 @@ impl DeviceRegistry {
             paired,
             pairing,
             last_seen_at: observed_at,
+            battery,
         };
         self.devices.insert(
             identity.device_id.clone(),
@@ -109,6 +123,7 @@ impl DeviceRegistry {
     ) -> Result<DeviceSnapshot, DeviceRegistryError> {
         let record = self.record_mut(device_id)?;
         record.snapshot.reachability = DeviceReachability::Unavailable;
+        record.snapshot.battery = None;
         Ok(record.snapshot.clone())
     }
 
@@ -119,6 +134,20 @@ impl DeviceRegistry {
     ) -> Result<DeviceSnapshot, DeviceRegistryError> {
         let record = self.record_mut(device_id)?;
         record.snapshot.paired = paired;
+        if !paired {
+            record.snapshot.battery = None;
+        }
+        Ok(record.snapshot.clone())
+    }
+
+    /// Record a peer's latest battery report.
+    pub fn set_battery(
+        &mut self,
+        device_id: &str,
+        battery: Option<BatteryStatus>,
+    ) -> Result<DeviceSnapshot, DeviceRegistryError> {
+        let record = self.record_mut(device_id)?;
+        record.snapshot.battery = battery;
         Ok(record.snapshot.clone())
     }
 
@@ -237,8 +266,57 @@ mod tests {
                 "reachability": "discovered",
                 "paired": true,
                 "pairing": false,
-                "lastSeenAt": 42
+                "lastSeenAt": 42,
+                "battery": null
             })
+        );
+
+        let snapshot = registry
+            .set_battery(
+                &identity().device_id,
+                Some(BatteryStatus {
+                    charge: 82,
+                    charging: true,
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(snapshot.battery).unwrap(),
+            json!({"charge": 82, "charging": true})
+        );
+    }
+
+    #[test]
+    fn battery_survives_rediscovery_but_not_disconnecting_or_unpairing() {
+        let mut registry = DeviceRegistry::new();
+        let identity = identity();
+        let battery = Some(BatteryStatus {
+            charge: 50,
+            charging: false,
+        });
+        registry.discover(&identity, true, 10).unwrap();
+        registry.mark_connected(&identity.device_id, 11).unwrap();
+        registry.set_battery(&identity.device_id, battery).unwrap();
+
+        assert_eq!(
+            registry.discover(&identity, true, 12).unwrap().battery,
+            battery
+        );
+        assert_eq!(
+            registry
+                .mark_disconnected(&identity.device_id)
+                .unwrap()
+                .battery,
+            None
+        );
+
+        registry.set_battery(&identity.device_id, battery).unwrap();
+        assert_eq!(
+            registry
+                .set_paired(&identity.device_id, false)
+                .unwrap()
+                .battery,
+            None
         );
     }
 }

@@ -26,7 +26,10 @@ use std::{
 
 use myconnect::{
     config::LocalIdentity,
-    plugins::sftp::{PACKET_TYPE as SFTP_PACKET_TYPE, REQUEST_PACKET_TYPE},
+    plugins::{
+        battery::PACKET_TYPE as BATTERY_PACKET_TYPE,
+        sftp::{PACKET_TYPE as SFTP_PACKET_TYPE, REQUEST_PACKET_TYPE},
+    },
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
     transport::tls::{self, PeerPin, TlsMaterial},
 };
@@ -176,6 +179,11 @@ impl FakePhone {
         .await;
     }
 
+    /// Report the battery, as Android does when it changes.
+    pub async fn report_battery(&self, charge: i64, charging: bool) {
+        self.send(battery_report(charge, charging)).await;
+    }
+
     pub async fn stop(mut self) {
         self.cancellation.cancel();
         while self.tasks.join_next().await.is_some() {}
@@ -205,7 +213,11 @@ fn identity_packet(device_id: &str, extra: Map<String, Value>) -> Vec<u8> {
         device_name: PHONE_NAME.into(),
         device_type: DeviceType::Phone,
         incoming_capabilities: vec![REQUEST_PACKET_TYPE.into(), "kdeconnect.ping".into()],
-        outgoing_capabilities: vec![SFTP_PACKET_TYPE.into(), "kdeconnect.ping".into()],
+        outgoing_capabilities: vec![
+            SFTP_PACKET_TYPE.into(),
+            "kdeconnect.ping".into(),
+            BATTERY_PACKET_TYPE.into(),
+        ],
         protocol_version: 8,
         extra,
     };
@@ -321,6 +333,8 @@ async fn connect_to_desktop(
                         Packet::from_body(0_u64, "kdeconnect.pair", &json!({"pair": true}))
                             .unwrap();
                     let _ = sender.send(accept).await;
+                    // Android's battery plugin reports as soon as it loads.
+                    let _ = sender.send(battery_report(PHONE_BATTERY, false)).await;
                 }
                 REQUEST_PACKET_TYPE => {
                     shared.log.browse_requests.fetch_add(1, Ordering::SeqCst);
@@ -330,6 +344,18 @@ async fn connect_to_desktop(
             }
         }
     }
+}
+
+/// The charge the phone reports right after pairing.
+pub const PHONE_BATTERY: i64 = 73;
+
+fn battery_report(charge: i64, charging: bool) -> Packet {
+    Packet::from_body(
+        0_u64,
+        BATTERY_PACKET_TYPE,
+        &json!({"currentCharge": charge, "isCharging": charging, "thresholdEvent": 0}),
+    )
+    .unwrap()
 }
 
 fn browse_reply(shared: &Shared) -> Packet {
