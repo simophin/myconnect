@@ -26,17 +26,28 @@ The CLI interface is command based, allowing users to interact with MyConnect th
 
 #### Example Commands
 
-- `myconnect run` - Run the authenticated local daemon in the foreground.
+- `myconnect run [--data-dir <dir>] [--download-dir <dir>] [--device-name <name>] [--discovery-loopback]` -
+  Run the authenticated local daemon in the foreground. `--discovery-loopback`
+  restricts LAN discovery to loopback broadcast instead of the real network —
+  useful for running multiple local instances against each other for testing
+  (a physical switch never reflects a broadcast frame back to the port it
+  came from, so two instances on one machine otherwise can't discover each
+  other over a real NIC), at the cost of not discovering real devices.
 - `myconnect devices [--watch]` - List devices and optionally follow changes.
+- `myconnect scan [--timeout <seconds>] [--watch]` - Broadcast a discovery
+  request and list unpaired devices that answer.
 - `myconnect pair <device-id>` - Start pairing with a discovered device.
 - `myconnect pair accept|reject <pairing-id>` - Resolve a pairing request.
 - `myconnect unpair <device-id>` - Remove trust and forget a device.
 - `myconnect send <device-id> <file> [--watch]` - Stream a file to a device.
 - `myconnect clipboard get|set <text>|watch` - Control text synchronization.
 
-Add `--json` for machine-readable output. API clients use the same persistent
-token as the daemon. For development, `MYCONNECT_API_URL` and
-`MYCONNECT_API_TOKEN` override the loopback URL and stored token.
+Add `--json` for machine-readable output. `--api-host`/`--api-port` (global
+flags, default `127.0.0.1:24816`) set the address the control API listens on
+for `run` and the address every other command connects to. API clients use
+the same persistent token as the daemon. For development, `MYCONNECT_API_URL`
+and `MYCONNECT_API_TOKEN` override the API URL and stored token (superseded
+by `--api-host`/`--api-port` when either is given).
 
 ### Project structure
 

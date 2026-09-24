@@ -1,8 +1,8 @@
-//! Authenticated, loopback-only HTTP control plane.
+//! Authenticated HTTP control plane, bound to loopback by default.
 
 use std::{
     convert::Infallible,
-    net::{Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
     time::Duration,
 };
@@ -52,6 +52,7 @@ const REQUEST_ID_HEADER: &str = "x-request-id";
 
 #[derive(Clone, Debug)]
 pub struct ApiServerConfig {
+    host: IpAddr,
     port: u16,
     request_timeout: Duration,
     shutdown_timeout: Duration,
@@ -65,6 +66,7 @@ impl ApiServerConfig {
             return Err(ApiServerError::ReservedKdeConnectPort(port));
         }
         Ok(Self {
+            host: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port,
             request_timeout: Duration::from_secs(15),
             shutdown_timeout: Duration::from_secs(5),
@@ -78,7 +80,12 @@ impl ApiServerConfig {
     }
 
     pub fn bind_addr(&self) -> SocketAddr {
-        SocketAddr::from((Ipv4Addr::LOCALHOST, self.port))
+        SocketAddr::new(self.host, self.port)
+    }
+
+    pub fn with_host(mut self, value: IpAddr) -> Self {
+        self.host = value;
+        self
     }
 
     pub fn with_request_timeout(mut self, value: Duration) -> Self {
@@ -132,7 +139,6 @@ impl ApiServer {
             .await
             .map_err(ApiServerError::Bind)?;
         let local_addr = listener.local_addr().map_err(ApiServerError::Bind)?;
-        debug_assert!(local_addr.ip().is_loopback());
 
         let router = router(
             ApiState {

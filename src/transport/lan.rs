@@ -30,6 +30,7 @@ use crate::{
 };
 
 pub const DISCOVERY_PORT: u16 = 1716;
+const PROTOCOL_VERSION: u8 = 8;
 pub const TCP_PORT_RANGE: RangeInclusive<u16> = 1716..=1764;
 pub const MAX_DISCOVERY_DATAGRAM: usize = 8 * 1024;
 const MAX_IDENTITY_LINE: usize = 8 * 1024;
@@ -245,7 +246,7 @@ async fn run(
                         {
                             let address = SocketAddr::new(source.ip(), port);
                             spawn_outgoing(
-                                &mut connections, address, identity_body.device_id.clone(), reservation,
+                                &mut connections, address, identity_body.clone(), reservation,
                                 permit, local.clone(), application.clone(), identity.clone(), trust_store.clone(),
                                 announcement.clone(), registry.clone(), cancellation.clone(),
                                 config.connect_timeout, config.identity_timeout,
@@ -297,7 +298,7 @@ async fn announce(socket: &UdpSocket, targets: &[SocketAddr], announcement: &[u8
 fn spawn_outgoing(
     connections: &mut JoinSet<()>,
     address: SocketAddr,
-    expected_device_id: String,
+    discovered: IdentityBody,
     reservation: Reservation,
     permit: OwnedSemaphorePermit,
     local: LocalDeviceInfo,
@@ -312,13 +313,13 @@ fn spawn_outgoing(
 ) {
     connections.spawn(async move {
         let _permit = permit;
+        let expected_device_id = discovered.device_id.clone();
         debug!(local_id = %local.device_id, %address, %expected_device_id, "dialing outgoing connection");
         let result = timeout(connect_deadline, TcpStream::connect(address)).await;
         if let Ok(Ok(stream)) = result {
             handle_connection(
                 stream,
-                Role::Client,
-                Some(expected_device_id.clone()),
+                Some(discovered),
                 reservation,
                 local,
                 application.clone(),
@@ -354,7 +355,6 @@ fn spawn_incoming(
         let _permit = permit;
         handle_connection(
             stream,
-            Role::Server,
             None,
             // A placeholder reservation; handle_connection re-reserves once
             // the peer's pre-TLS device ID is known for incoming links.
@@ -377,17 +377,18 @@ fn spawn_incoming(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Role {
-    /// This side dialed the TCP connection and acts as the TLS client.
-    Client,
-    /// This side accepted the TCP connection and acts as the TLS server.
-    Server,
+    /// This side received the peer's UDP announcement and dialed its TCP
+    /// port. It sends its identity in plaintext and acts as the TLS server.
+    Dialer,
+    /// This side accepted the TCP connection. It only reads the dialer's
+    /// plaintext identity and acts as the TLS client.
+    Acceptor,
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn handle_connection(
-    stream: TcpStream,
-    role: Role,
-    expected_device_id: Option<String>,
+    mut stream: TcpStream,
+    discovered: Option<IdentityBody>,
     reservation: Reservation,
     local: LocalDeviceInfo,
     application: ApplicationHandle,
@@ -398,32 +399,46 @@ async fn handle_connection(
     shutdown: CancellationToken,
     identity_deadline: Duration,
 ) {
-    let peer_key = expected_device_id.clone().unwrap_or_default();
-    let peer_addr = stream.peer_addr().ok();
-    let exchanged = exchange_identity(stream, &announcement, identity_deadline).await;
-    let Ok((stream, pre_tls_identity)) = exchanged else {
-        if !peer_key.is_empty() {
-            registry.release(&peer_key, reservation.id);
-        }
-        return;
+    let role = if discovered.is_some() {
+        Role::Dialer
+    } else {
+        Role::Acceptor
     };
-    if pre_tls_identity.device_id == local.device_id {
-        if !peer_key.is_empty() {
-            registry.release(&peer_key, reservation.id);
+    let peer_key = discovered
+        .as_ref()
+        .map(|identity| identity.device_id.clone())
+        .unwrap_or_default();
+    let peer_addr = stream.peer_addr().ok();
+    // The plaintext identity exchange is one-way, as in KDE Connect: the
+    // dialer already knows the acceptor's identity from its UDP announcement,
+    // so only the dialer sends one, addressed to the acceptor.
+    let pre_tls_identity = match discovered {
+        Some(discovered) => {
+            let sent = match encode_dial_identity(&local, &discovered) {
+                Ok(bytes) => send_identity(&mut stream, &bytes, identity_deadline).await,
+                Err(error) => Err(error),
+            };
+            sent.map(|()| discovered)
         }
-        return;
-    }
-    if let Some(expected) = &expected_device_id
-        && expected.as_str() != pre_tls_identity.device_id
-    {
-        registry.release(&peer_key, reservation.id);
-        return;
-    }
+        None => receive_dial_identity(&mut stream, &local.device_id, identity_deadline).await,
+    };
+    let pre_tls_identity = match pre_tls_identity {
+        Ok(identity) if identity.device_id != local.device_id => identity,
+        result => {
+            if let Err(error) = result {
+                debug!(local_id = %local.device_id, ?role, %error, "plaintext identity exchange failed");
+            }
+            if !peer_key.is_empty() {
+                registry.release(&peer_key, reservation.id);
+            }
+            return;
+        }
+    };
 
     // Incoming connections only learn the peer's device ID from the
     // plaintext identity exchange, so the connection slot is reserved here
     // instead of before dialing.
-    let reservation = if role == Role::Server {
+    let reservation = if role == Role::Acceptor {
         match registry.reserve_incoming(&local.device_id, &pre_tls_identity.device_id) {
             Some(reservation) => reservation,
             None => return,
@@ -441,7 +456,7 @@ async fn handle_connection(
     let material = TlsMaterial::new(identity.certificate_der(), identity.private_key_der());
 
     let result = match role {
-        Role::Client => {
+        Role::Acceptor => {
             establish_client_session(
                 stream,
                 &material,
@@ -452,7 +467,7 @@ async fn handle_connection(
             )
             .await
         }
-        Role::Server => {
+        Role::Dialer => {
             establish_server_session(
                 stream,
                 &material,
@@ -615,15 +630,8 @@ async fn establish_server_session(
     ))
 }
 
-async fn exchange_identity(
-    mut stream: TcpStream,
-    announcement: &[u8],
-    deadline: Duration,
-) -> Result<(TcpStream, IdentityBody), LanError> {
-    let identity = exchange_identity_over(&mut stream, announcement, deadline).await?;
-    Ok((stream, identity))
-}
-
+/// Send this device's identity and read the peer's, as both sides do inside
+/// TLS.
 async fn exchange_identity_over<S>(
     stream: &mut S,
     announcement: &[u8],
@@ -632,11 +640,52 @@ async fn exchange_identity_over<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    send_identity(stream, announcement, deadline).await?;
+    receive_identity(stream, deadline).await
+}
+
+async fn send_identity<S>(
+    stream: &mut S,
+    identity: &[u8],
+    deadline: Duration,
+) -> Result<(), LanError>
+where
+    S: AsyncWrite + Unpin,
+{
+    timeout(deadline, stream.write_all(identity))
+        .await
+        .map_err(|_| LanError::IdentityTimeout)?
+        .map_err(LanError::Socket)
+}
+
+/// Read the dialer's plaintext identity, rejecting one addressed to another
+/// device or protocol version.
+async fn receive_dial_identity(
+    stream: &mut TcpStream,
+    local_device_id: &str,
+    deadline: Duration,
+) -> Result<IdentityBody, LanError> {
+    let identity = receive_identity(stream, deadline).await?;
+    let target_device_id = identity.extra.get("targetDeviceId");
+    if target_device_id.is_some_and(|target| target.as_str() != Some(local_device_id)) {
+        return Err(LanError::InvalidIdentity);
+    }
+    // KDE Connect Android sends the version as a string, so accept either.
+    let target_version = identity.extra.get("targetProtocolVersion");
+    if target_version.is_some_and(|target| {
+        target.as_u64() != Some(PROTOCOL_VERSION.into())
+            && target.as_str() != Some(PROTOCOL_VERSION.to_string().as_str())
+    }) {
+        return Err(LanError::InvalidIdentity);
+    }
+    Ok(identity)
+}
+
+async fn receive_identity<S>(stream: &mut S, deadline: Duration) -> Result<IdentityBody, LanError>
+where
+    S: AsyncRead + Unpin,
+{
     timeout(deadline, async {
-        stream
-            .write_all(announcement)
-            .await
-            .map_err(LanError::Socket)?;
         let mut codec = PacketCodec::new(MAX_IDENTITY_LINE);
         let mut buffer = [0_u8; 2048];
         loop {
@@ -667,7 +716,9 @@ fn decode_identity(datagram: &[u8]) -> Option<IdentityBody> {
     if packets.len() != 1 || codec.buffered_len() != 0 {
         return None;
     }
-    packet_identity(packets.into_iter().next()?).ok()
+    packet_identity(packets.into_iter().next()?)
+        .ok()
+        .filter(|identity| tcp_port(identity).is_some())
 }
 
 fn packet_identity(packet: Packet) -> Result<IdentityBody, LanError> {
@@ -676,7 +727,7 @@ fn packet_identity(packet: Packet) -> Result<IdentityBody, LanError> {
     }
     let identity: IdentityBody = packet.body_as().map_err(|_| LanError::InvalidIdentity)?;
     identity.validate().map_err(|_| LanError::InvalidIdentity)?;
-    if identity.protocol_version != 8 || tcp_port(&identity).is_none() {
+    if identity.protocol_version != PROTOCOL_VERSION {
         return Err(LanError::InvalidIdentity);
     }
     Ok(identity)
@@ -695,13 +746,28 @@ fn tcp_port(identity: &IdentityBody) -> Option<u16> {
 fn encode_identity(local: &LocalDeviceInfo, tcp_port: u16) -> Result<Vec<u8>, LanError> {
     let mut extra = Map::new();
     extra.insert("tcpPort".into(), json!(tcp_port));
+    encode_identity_with(local, extra)
+}
+
+/// The plaintext identity a dialer sends, addressed to the discovered peer.
+fn encode_dial_identity(local: &LocalDeviceInfo, peer: &IdentityBody) -> Result<Vec<u8>, LanError> {
+    let mut extra = Map::new();
+    extra.insert("targetDeviceId".into(), json!(peer.device_id));
+    extra.insert("targetProtocolVersion".into(), json!(peer.protocol_version));
+    encode_identity_with(local, extra)
+}
+
+fn encode_identity_with(
+    local: &LocalDeviceInfo,
+    extra: Map<String, serde_json::Value>,
+) -> Result<Vec<u8>, LanError> {
     let identity = IdentityBody {
         device_id: local.device_id.clone(),
         device_name: local.device_name.clone(),
         device_type: local.device_type,
         incoming_capabilities: local.incoming_capabilities.clone(),
         outgoing_capabilities: local.outgoing_capabilities.clone(),
-        protocol_version: 8,
+        protocol_version: PROTOCOL_VERSION,
         extra,
     };
     identity
@@ -750,6 +816,14 @@ fn bind_udp(address: SocketAddr) -> Result<UdpSocket, LanError> {
     };
     let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP)).map_err(LanError::Socket)?;
     socket.set_reuse_address(true).map_err(LanError::Socket)?;
+    // Without SO_REUSEPORT, the kernel delivers each inbound discovery
+    // datagram to only one of several sockets sharing this port (whichever
+    // bound it "wins"), so a second local instance would never receive
+    // announcements. SO_REUSEPORT makes the kernel fan broadcasts out to
+    // every listener instead, letting multiple local instances (and the
+    // real KDE Connect daemon) discover each other on the shared port.
+    #[cfg(unix)]
+    socket.set_reuse_port(true).map_err(LanError::Socket)?;
     socket.set_broadcast(true).map_err(LanError::Socket)?;
     socket
         .bind(&SockAddr::from(address))

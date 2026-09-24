@@ -38,9 +38,13 @@ The current desktop implementation uses this sequence:
 1. Listen for and broadcast identity packets over UDP port 1716. Discovery may
    also use mDNS.
 2. Select a TCP listener in the 1716-1764 range and advertise it as `tcpPort`.
-3. Exchange an identity packet on the plain TCP connection.
+3. The device that received the UDP packet dials `tcpPort` and sends its own
+   identity on the plain TCP connection (with `targetDeviceId` and
+   `targetProtocolVersion`). The accepting device only reads it; this step is
+   one-way, not an exchange.
 4. Upgrade the connection to mutually authenticated TLS with self-signed device
-   certificates.
+   certificates. TLS roles are inverted: the TCP dialer is the TLS server and
+   the TCP acceptor is the TLS client.
 5. Exchange identity packets again inside TLS for protocol v8 and reject a
    changed device ID or protocol version.
 6. Exchange newline-delimited JSON packets on the persistent TLS stream.

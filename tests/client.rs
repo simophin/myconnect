@@ -440,9 +440,14 @@ async fn errors_are_distinct_and_actionable() {
 }
 
 #[test]
-fn client_refuses_to_send_bearer_tokens_off_machine() {
+fn client_allows_non_loopback_hosts() {
+    assert!(ApiClient::new("http://example.com", ApiToken::from_secret(TOKEN).unwrap()).is_ok());
+}
+
+#[test]
+fn client_rejects_non_http_schemes() {
     assert!(matches!(
-        ApiClient::new("http://example.com", ApiToken::from_secret(TOKEN).unwrap()),
-        Err(ClientError::NonLoopbackApiUrl)
+        ApiClient::new("https://127.0.0.1", ApiToken::from_secret(TOKEN).unwrap()),
+        Err(ClientError::UnsupportedScheme)
     ));
 }

@@ -25,7 +25,7 @@ use myconnect::{
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 use serde_json::{Map, json};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     net::TcpStream,
     sync::mpsc,
     time::timeout,
@@ -321,8 +321,8 @@ fn self_signed(device_id: &str) -> (Vec<u8>, Vec<u8>) {
     (certificate.der().to_vec(), key.serialize_der())
 }
 
-/// Dial a real victim `LanService`, complete the plaintext identity exchange
-/// and TLS handshake honestly (claiming `pre_tls_id`), then present a
+/// Dial a real victim `LanService`, send the plaintext identity and complete
+/// the TLS handshake honestly (claiming `pre_tls_id`), then present a
 /// different identity inside TLS. Returns whether the victim ever showed the
 /// connection as `Connected`.
 async fn attempt_identity_mismatch(
@@ -340,24 +340,13 @@ async fn attempt_identity_mismatch(
     let bytes = PacketCodec::new(16 * 1024).encode(&packet).unwrap();
     stream.write_all(&bytes).await.unwrap();
 
-    // Drain the victim's plaintext identity reply.
-    let mut codec = PacketCodec::new(16 * 1024);
-    let mut buffer = [0_u8; 4096];
-    loop {
-        let n = timeout(Duration::from_secs(2), stream.read(&mut buffer))
-            .await
-            .unwrap()
-            .unwrap();
-        if codec.decode(&buffer[..n]).unwrap().len() == 1 {
-            break;
-        }
-    }
-
+    // The victim accepted the connection, so it sends no plaintext identity
+    // and acts as the TLS client; the attacker, having dialed, is the server.
     let (cert_der, key_der) = self_signed(pre_tls_id);
     let material = TlsMaterial::new(&cert_der, &key_der);
     let mut tls_stream = timeout(
         Duration::from_secs(2),
-        tls::connect(stream, &material, victim_device_id, PeerPin::Unpinned),
+        tls::accept(stream, &material, victim_device_id, PeerPin::Unpinned),
     )
     .await
     .unwrap()

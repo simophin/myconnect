@@ -65,9 +65,14 @@ plugin marketplace.
    TCP port (selected from `1716-1764`). Malformed, oversized, self, and
    unsupported-version identities are dropped without affecting the device
    registry.
-2. **Plaintext identity exchange, then TLS** (`transport::tls`): the TCP
-   control connection exchanges identity once in plaintext, upgrades to a
-   real TLS 1.2/1.3 handshake (rustls, real signature verification — no
+2. **Plaintext identity, then TLS** (`transport::tls`): the peer that
+   received a UDP announcement dials the announced `tcpPort` and sends its
+   identity once in plaintext, carrying `targetDeviceId` and
+   `targetProtocolVersion`; the accepting peer only reads it (its identity
+   already arrived over UDP). TLS roles are inverted relative to TCP, as in
+   KDE Connect: the dialer is the TLS *server* and the acceptor the TLS
+   *client*. Only UDP announcements carry `tcpPort`. The connection then
+   upgrades to a real TLS 1.2/1.3 handshake (rustls, real signature verification — no
    accept-all verifier exists in this codebase), then exchanges identity a
    second time *inside* TLS. Device ID and protocol version must match
    between the two exchanges; a mismatch or downgrade against a previously

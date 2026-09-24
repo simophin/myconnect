@@ -15,11 +15,16 @@ use myconnect::{
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
     transport::{
         lan::{LanConfig, LanService, LocalDeviceInfo, MAX_DISCOVERY_DATAGRAM, TCP_PORT_RANGE},
-        tls::subject_public_key_info,
+        tls::{self, PeerPin, TlsMaterial, subject_public_key_info},
     },
 };
-use serde_json::{Map, json};
-use tokio::{net::UdpSocket, sync::mpsc, time::timeout};
+use serde_json::{Map, Value, json};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::{TcpListener, TcpStream, UdpSocket},
+    sync::mpsc,
+    time::timeout,
+};
 use tokio_util::sync::CancellationToken;
 
 struct Peer {
@@ -194,6 +199,192 @@ async fn two_peers_discover_connect_deduplicate_and_follow_address_changes() {
 
     new_a_service.shutdown().await.unwrap();
     b_service.shutdown().await.unwrap();
+}
+
+// The two tests below play the KDE Connect side of the handshake byte for
+// byte as KDE Connect Android's `LanLinkProvider` does, so they catch
+// handshake changes that would still let two MyConnect peers talk to each
+// other but not to a real KDE Connect device.
+
+#[tokio::test]
+async fn accepts_a_kde_connect_dialer_as_tls_client() {
+    let local_peer = peer("Local");
+    let local_id = local_peer.identity.device_id().to_owned();
+    let kde = peer("KDE Connect");
+    let kde_id = kde.identity.device_id().to_owned();
+    let kde_udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let service = LanService::start(
+        test_config(free_udp_addr(), kde_udp.local_addr().unwrap()),
+        local(&local_id, "Local"),
+        local_peer.application.clone(),
+        local_peer.commands,
+        local_peer.identity,
+        local_peer.trust_store,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    // KDE Connect receives the announcement and dials the advertised port.
+    let mut datagram = vec![0_u8; MAX_DISCOVERY_DATAGRAM];
+    let (length, _) = timeout(Duration::from_secs(3), kde_udp.recv_from(&mut datagram))
+        .await
+        .unwrap()
+        .unwrap();
+    let announced: Value = serde_json::from_slice(&datagram[..length]).unwrap();
+    let tcp_port = announced["body"]["tcpPort"].as_u64().unwrap() as u16;
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, tcp_port))
+        .await
+        .unwrap();
+
+    // It sends only its own identity, addressed to us, then waits as the TLS
+    // server. Android sends the target version as a string.
+    let mut dial_extra = Map::new();
+    dial_extra.insert("targetDeviceId".into(), json!(local_id));
+    dial_extra.insert("targetProtocolVersion".into(), json!("8"));
+    stream
+        .write_all(&kde_identity(&kde_id, dial_extra))
+        .await
+        .unwrap();
+    let material = TlsMaterial::new(
+        kde.identity.certificate_der(),
+        kde.identity.private_key_der(),
+    );
+    let mut tls_stream = timeout(
+        Duration::from_secs(3),
+        tls::accept(stream, &material, &local_id, PeerPin::Unpinned),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    tls_stream
+        .write_all(&kde_identity(&kde_id, Map::new()))
+        .await
+        .unwrap();
+    let inner: Value = serde_json::from_str(&read_line(&mut tls_stream).await).unwrap();
+    assert_eq!(inner["body"]["deviceId"], json!(local_id));
+
+    wait_for_reachability(
+        &local_peer.application,
+        &kde_id,
+        DeviceReachability::Connected,
+    )
+    .await;
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn dials_a_kde_connect_peer_as_tls_server() {
+    let local_peer = peer("Local");
+    let local_id = local_peer.identity.device_id().to_owned();
+    let kde = peer("KDE Connect");
+    let kde_id = kde.identity.device_id().to_owned();
+    let service = LanService::start(
+        test_config(free_udp_addr(), free_udp_addr()),
+        local(&local_id, "Local"),
+        local_peer.application.clone(),
+        local_peer.commands,
+        local_peer.identity,
+        local_peer.trust_store,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    let mut listener = None;
+    for port in TCP_PORT_RANGE {
+        if let Ok(bound) = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await {
+            listener = Some(bound);
+            break;
+        }
+    }
+    let listener = listener.expect("a free port in the KDE Connect range");
+    let mut announce_extra = Map::new();
+    announce_extra.insert(
+        "tcpPort".into(),
+        json!(listener.local_addr().unwrap().port()),
+    );
+    UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap()
+        .send_to(
+            &kde_identity(&kde_id, announce_extra),
+            service.discovery_addr(),
+        )
+        .await
+        .unwrap();
+
+    // KDE Connect accepts, reads the dialer's identity without replying,
+    // and then acts as the TLS client.
+    let (mut stream, _) = timeout(Duration::from_secs(3), listener.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    let dialed: Value = serde_json::from_str(&read_line(&mut stream).await).unwrap();
+    assert_eq!(dialed["body"]["deviceId"], json!(local_id));
+    assert_eq!(dialed["body"]["targetDeviceId"], json!(kde_id));
+    assert_eq!(dialed["body"]["targetProtocolVersion"], json!(8));
+    let material = TlsMaterial::new(
+        kde.identity.certificate_der(),
+        kde.identity.private_key_der(),
+    );
+    let mut tls_stream = timeout(
+        Duration::from_secs(3),
+        tls::connect(stream, &material, &local_id, PeerPin::Unpinned),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    tls_stream
+        .write_all(&kde_identity(&kde_id, Map::new()))
+        .await
+        .unwrap();
+    let inner: Value = serde_json::from_str(&read_line(&mut tls_stream).await).unwrap();
+    assert_eq!(inner["body"]["deviceId"], json!(local_id));
+
+    wait_for_reachability(
+        &local_peer.application,
+        &kde_id,
+        DeviceReachability::Connected,
+    )
+    .await;
+    service.shutdown().await.unwrap();
+}
+
+/// An identity packet shaped like KDE Connect Android's: no `tcpPort`
+/// unless the caller adds one, as only its UDP announcement carries it.
+fn kde_identity(device_id: &str, extra: Map<String, Value>) -> Vec<u8> {
+    let identity = IdentityBody {
+        device_id: device_id.into(),
+        device_name: "KDE Connect".into(),
+        device_type: DeviceType::Phone,
+        incoming_capabilities: vec!["kdeconnect.ping".into()],
+        outgoing_capabilities: vec!["kdeconnect.ping".into()],
+        protocol_version: 8,
+        extra,
+    };
+    let packet = Packet::from_body(0, "kdeconnect.identity", &identity).unwrap();
+    PacketCodec::new(MAX_DISCOVERY_DATAGRAM)
+        .encode(&packet)
+        .unwrap()
+}
+
+/// Read one newline-terminated packet byte by byte, so nothing after it
+/// (such as a TLS handshake) is consumed.
+async fn read_line<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S) -> String {
+    let mut line = Vec::new();
+    timeout(Duration::from_secs(3), async {
+        loop {
+            let byte = stream.read_u8().await.unwrap();
+            if byte == b'\n' {
+                break;
+            }
+            line.push(byte);
+        }
+    })
+    .await
+    .unwrap();
+    String::from_utf8(line).unwrap()
 }
 
 #[tokio::test]

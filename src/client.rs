@@ -38,8 +38,18 @@ pub struct ApiClient {
 
 impl ApiClient {
     pub fn from_environment() -> Result<Self, ClientError> {
-        let base_url = env::var(API_URL_ENV)
-            .unwrap_or_else(|_| format!("http://127.0.0.1:{DEFAULT_API_PORT}"));
+        Self::from_environment_with_url(None)
+    }
+
+    /// Like [`ApiClient::from_environment`], but `base_url_override` (when
+    /// given) takes precedence over the `MYCONNECT_API_URL` environment
+    /// variable, e.g. to honor an explicit `--api-host`/`--api-port` flag.
+    pub fn from_environment_with_url(
+        base_url_override: Option<String>,
+    ) -> Result<Self, ClientError> {
+        let base_url = base_url_override.unwrap_or_else(|| {
+            env::var(API_URL_ENV).unwrap_or_else(|_| format!("http://127.0.0.1:{DEFAULT_API_PORT}"))
+        });
         let token = match env::var(API_TOKEN_ENV) {
             Ok(secret) => ApiToken::from_secret(secret)?,
             Err(env::VarError::NotPresent) => {
@@ -53,8 +63,8 @@ impl ApiClient {
 
     pub fn new(base_url: &str, token: ApiToken) -> Result<Self, ClientError> {
         let mut base_url = Url::parse(base_url).map_err(|_| ClientError::InvalidApiUrl)?;
-        if base_url.scheme() != "http" || !is_loopback_url(&base_url) {
-            return Err(ClientError::NonLoopbackApiUrl);
+        if base_url.scheme() != "http" {
+            return Err(ClientError::UnsupportedScheme);
         }
         if !base_url.path().ends_with('/') {
             base_url.set_path(&format!("{}/", base_url.path()));
@@ -75,6 +85,19 @@ impl ApiClient {
 
     pub async fn devices(&self) -> Result<Vec<DeviceSnapshot>, ClientError> {
         self.get_json("api/v1/devices", "device").await
+    }
+
+    /// Trigger an immediate discovery broadcast, so newly reachable devices
+    /// show up in [`ApiClient::devices`] without waiting for the periodic
+    /// announce interval.
+    pub async fn scan(&self) -> Result<(), ClientError> {
+        let response = self
+            .authorized(self.http.post(self.url("api/v1/discovery")?))
+            .send()
+            .await
+            .map_err(map_transport)?;
+        checked(response, "discovery").await?;
+        Ok(())
     }
 
     pub async fn start_pairing(&self, device_id: &str) -> Result<PairingSnapshot, ClientError> {
@@ -372,10 +395,6 @@ pub enum TransferWatchUpdate {
     Event(ApplicationEvent),
 }
 
-fn is_loopback_url(url: &Url) -> bool {
-    matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
-}
-
 fn is_device_event(event: &EventData) -> bool {
     matches!(
         event,
@@ -501,8 +520,8 @@ pub enum ClientError {
     InvalidEvent,
     #[error("the API URL is invalid")]
     InvalidApiUrl,
-    #[error("the API URL must use HTTP on the local machine")]
-    NonLoopbackApiUrl,
+    #[error("the API URL must use HTTP")]
+    UnsupportedScheme,
     #[error("the API token is invalid")]
     InvalidToken,
     #[error("could not determine the configuration directory")]

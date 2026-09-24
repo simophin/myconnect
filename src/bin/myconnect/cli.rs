@@ -1,6 +1,9 @@
-use std::path::PathBuf;
+use std::{
+    net::{IpAddr, Ipv6Addr},
+    path::PathBuf,
+};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use myconnect::{
     api::DEFAULT_API_PORT,
@@ -22,6 +25,14 @@ pub struct Cli {
     /// Emit newline-delimited JSON rather than human-readable output.
     #[arg(long, global = true)]
     json: bool,
+    /// Host of the local control API: listened on by `run`, connected to by
+    /// every other command. Defaults to 127.0.0.1.
+    #[arg(long, global = true, value_name = "HOST")]
+    api_host: Option<String>,
+    /// Port of the local control API: listened on by `run`, connected to by
+    /// every other command. Defaults to 24816.
+    #[arg(long, global = true, value_name = "PORT")]
+    api_port: Option<u16>,
     #[command(subcommand)]
     command: Command,
 }
@@ -32,11 +43,29 @@ enum Command {
     Run {
         #[arg(long, value_name = "DIRECTORY")]
         download_dir: Option<PathBuf>,
-        #[arg(long, default_value_t = DEFAULT_API_PORT)]
-        api_port: u16,
+        /// Directory holding local identity, trust, and token state.
+        #[arg(long, value_name = "DIRECTORY")]
+        data_dir: Option<PathBuf>,
+        /// Name this device advertises to peers.
+        #[arg(long, value_name = "NAME")]
+        device_name: Option<String>,
+        /// Restrict LAN discovery to loopback instead of the real network,
+        /// so multiple local instances can discover each other without a
+        /// second machine. Real devices on the LAN will not be discovered.
+        #[arg(long)]
+        discovery_loopback: bool,
     },
     /// List known devices.
     Devices {
+        #[arg(long)]
+        watch: bool,
+    },
+    /// Broadcast a discovery request and list unpaired devices that answer.
+    Scan {
+        /// Seconds to wait for devices to respond before listing results.
+        #[arg(long, default_value_t = 3)]
+        timeout: u64,
+        /// Keep listening and print unpaired devices as they appear.
         #[arg(long)]
         watch: bool,
     },
@@ -76,20 +105,43 @@ enum ClipboardAction {
 
 impl Cli {
     pub async fn execute(self) -> Result<()> {
-        let Self { json, command } = self;
+        let Self {
+            json,
+            api_host,
+            api_port,
+            command,
+        } = self;
         if let Command::Run {
             download_dir,
-            api_port,
+            data_dir,
+            device_name,
+            discovery_loopback,
         } = command
         {
-            return myconnect::application::run_service(RunRequest {
+            let mut request = RunRequest {
                 download_dir,
-                api_port,
-            })
-            .await;
+                data_dir,
+                device_name,
+                discovery_loopback,
+                ..RunRequest::default()
+            };
+            if let Some(host) = api_host {
+                request.api_host = host
+                    .parse::<IpAddr>()
+                    .with_context(|| format!("invalid --api-host address: {host}"))?;
+            }
+            if let Some(port) = api_port {
+                request.api_port = port;
+            }
+            return myconnect::application::run_service(request).await;
         }
 
-        let client = ApiClient::from_environment()?;
+        let base_url_override = (api_host.is_some() || api_port.is_some()).then(|| {
+            let host = api_host.unwrap_or_else(|| "127.0.0.1".to_owned());
+            let port = api_port.unwrap_or(DEFAULT_API_PORT);
+            format!("http://{}:{port}", format_host_for_url(&host))
+        });
+        let client = ApiClient::from_environment_with_url(base_url_override)?;
         match command {
             Command::Run { .. } => unreachable!("run handled before client configuration"),
             Command::Devices { watch: false } => print_devices(&client.devices().await?, json),
@@ -100,6 +152,25 @@ impl Cli {
                         DeviceWatchUpdate::Event(event) => print_event(&event, json),
                     })
                     .await?;
+            }
+            Command::Scan { timeout, watch } => {
+                client.scan().await?;
+                if watch {
+                    client
+                        .watch_devices(cancellation_on_ctrl_c(), |update| match update {
+                            DeviceWatchUpdate::Snapshot(devices) => {
+                                print_devices(&unpaired(devices), json)
+                            }
+                            DeviceWatchUpdate::Event(event) if event_device_unpaired(&event) => {
+                                print_event(&event, json)
+                            }
+                            DeviceWatchUpdate::Event(_) => {}
+                        })
+                        .await?;
+                } else {
+                    tokio::time::sleep(std::time::Duration::from_secs(timeout)).await;
+                    print_devices(&unpaired(client.devices().await?), json);
+                }
             }
             Command::Pair { arguments } => match parse_pair_action(&arguments)? {
                 PairAction::Start(device_id) => {
@@ -190,6 +261,15 @@ fn parse_pair_action(arguments: &[String]) -> Result<PairAction> {
     }
 }
 
+/// Bracket a bare IPv6 address so it forms a valid URL host, leaving IPv4
+/// addresses and hostnames unchanged.
+fn format_host_for_url(host: &str) -> String {
+    match host.parse::<Ipv6Addr>() {
+        Ok(address) => format!("[{address}]"),
+        Err(_) => host.to_owned(),
+    }
+}
+
 fn cancellation_on_ctrl_c() -> CancellationToken {
     let cancellation = CancellationToken::new();
     let signal = cancellation.clone();
@@ -199,6 +279,23 @@ fn cancellation_on_ctrl_c() -> CancellationToken {
         }
     });
     cancellation
+}
+
+fn unpaired(devices: Vec<DeviceSnapshot>) -> Vec<DeviceSnapshot> {
+    devices
+        .into_iter()
+        .filter(|device| !device.paired)
+        .collect()
+}
+
+fn event_device_unpaired(event: &ApplicationEvent) -> bool {
+    match &event.event {
+        EventData::DeviceDiscovered(device)
+        | EventData::DeviceConnected(device)
+        | EventData::DeviceUpdated(device)
+        | EventData::DeviceDisconnected(device) => !device.paired,
+        _ => false,
+    }
 }
 
 fn print_devices(devices: &[DeviceSnapshot], json_output: bool) {
@@ -318,8 +415,23 @@ mod tests {
     fn parses_every_command() {
         let cases = [
             vec!["myconnect", "run", "--api-port", "25000"],
+            vec!["myconnect", "run", "--data-dir", "/tmp/myconnect"],
+            vec!["myconnect", "run", "--device-name", "My Desktop"],
+            vec!["myconnect", "run", "--discovery-loopback"],
+            vec![
+                "myconnect",
+                "--api-host",
+                "0.0.0.0",
+                "--api-port",
+                "25000",
+                "run",
+            ],
+            vec!["myconnect", "--api-host", "192.168.1.5", "devices"],
             vec!["myconnect", "devices"],
             vec!["myconnect", "devices", "--watch"],
+            vec!["myconnect", "scan"],
+            vec!["myconnect", "scan", "--timeout", "5"],
+            vec!["myconnect", "scan", "--watch"],
             vec!["myconnect", "pair", "device-id"],
             vec!["myconnect", "pair", "accept", ID],
             vec!["myconnect", "pair", "reject", ID],
