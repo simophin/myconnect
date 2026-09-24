@@ -20,6 +20,10 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version shown to users, e.g. v1.2.3 (default: pubspec.yaml's)"
+        required: false
 
 concurrency:
   group: build-${{ github.ref }}
@@ -33,22 +37,36 @@ env:
   FLUTTER_VERSION: 3.47.1
 
 jobs:
+  # The app's version comes from the release tag (or the manual run's input)
+  # as MAJOR.MINOR.PATCH, with an optional leading "v"; the build number is
+  # this workflow's run number. Without a tag, pubspec.yaml's version is used.
   version:
     name: Version
     runs-on: ubuntu-24.04
     outputs:
       name: ${{ steps.version.outputs.name }}
+      flutter-args: ${{ steps.version.outputs.flutter-args }}
     steps:
       - id: version
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.event.release.tag_name || inputs.version }}
           SHA: ${{ github.sha }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
+          args="--build-number=$RUN_NUMBER"
           if [ -n "$TAG" ]; then
-            echo "name=${TAG#v}" >> "$GITHUB_OUTPUT"
+            version="${TAG#v}"
+            # macOS and Windows only accept numeric versions.
+            if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Version '$TAG' isn't MAJOR.MINOR.PATCH (optionally prefixed with v)"
+              exit 1
+            fi
+            echo "name=$version" >> "$GITHUB_OUTPUT"
+            args="$args --build-name=$version"
           else
             echo "name=dev-${SHA::7}" >> "$GITHUB_OUTPUT"
           fi
+          echo "flutter-args=$args" >> "$GITHUB_OUTPUT"
 
   linux:
     name: Linux
@@ -72,7 +90,7 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
       - run: flutter pub get --enforce-lockfile
-      - run: flutter build linux --release
+      - run: flutter build linux --release ${{ needs.version.outputs.flutter-args }}
       - name: Package
         env:
           PACKAGE: myconnect-${{ needs.version.outputs.name }}-linux-x64.tar.gz
@@ -105,7 +123,7 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
       - run: flutter pub get --enforce-lockfile
-      - run: flutter build macos --release
+      - run: flutter build macos --release ${{ needs.version.outputs.flutter-args }}
       - name: Check the bundled core
         run: |
           app=build/macos/Build/Products/Release/myconnect_ui.app
@@ -114,6 +132,8 @@ jobs:
           otool -D "$dylib"
           codesign --verify --deep --strict --verbose=2 "$app"
           codesign --display --entitlements - "$app"
+          plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist"
+          plutil -extract CFBundleVersion raw "$app/Contents/Info.plist"
       # Unsigned for now (ad-hoc signature only): Gatekeeper blocks it until
       # the user allows it in System Settings → Privacy & Security.
       - name: Package
@@ -147,7 +167,7 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
       - run: flutter pub get --enforce-lockfile
-      - run: flutter build windows --release
+      - run: flutter build windows --release ${{ needs.version.outputs.flutter-args }}
       - name: Package
         shell: pwsh
         env:
