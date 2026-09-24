@@ -18,6 +18,7 @@ class NativeDaemonConfig {
     this.downloadDir = '',
     this.deviceName = '',
     this.discoveryLoopback = false,
+    this.systemClipboard = true,
   });
 
   final String dataDir;
@@ -25,11 +26,16 @@ class NativeDaemonConfig {
   final String deviceName;
   final bool discoveryLoopback;
 
+  /// Sync the desktop clipboard; `false` keeps the daemon's clipboard in
+  /// memory, e.g. for a second instance on the same desktop.
+  final bool systemClipboard;
+
   Map<String, Object?> toJson() => {
     if (dataDir.isNotEmpty) 'dataDir': dataDir,
     if (downloadDir.isNotEmpty) 'downloadDir': downloadDir,
     if (deviceName.isNotEmpty) 'deviceName': deviceName,
     'discoveryLoopback': discoveryLoopback,
+    'systemClipboard': systemClipboard,
   };
 }
 

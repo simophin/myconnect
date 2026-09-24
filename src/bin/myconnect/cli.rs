@@ -69,6 +69,10 @@ enum Command {
         /// second machine. Real devices on the LAN will not be discovered.
         #[arg(long)]
         discovery_loopback: bool,
+        /// Sync the desktop clipboard instead of an in-memory one, which
+        /// only `myconnect clipboard` can read and write.
+        #[arg(long)]
+        system_clipboard: bool,
     },
     /// List known devices.
     Devices {
@@ -153,6 +157,7 @@ impl Cli {
             data_dir,
             device_name,
             discovery_loopback,
+            system_clipboard,
         } = command
         {
             let mut request = RunRequest {
@@ -161,6 +166,7 @@ impl Cli {
                 data_dir,
                 device_name,
                 discovery_loopback,
+                system_clipboard,
                 ..RunRequest::default()
             };
             if let Some(host) = api_host {
@@ -500,6 +506,7 @@ mod tests {
             vec!["myconnect", "run", "--data-dir", "/tmp/myconnect"],
             vec!["myconnect", "run", "--device-name", "My Desktop"],
             vec!["myconnect", "run", "--discovery-loopback"],
+            vec!["myconnect", "run", "--system-clipboard"],
             vec![
                 "myconnect",
                 "--api-host",

@@ -1,11 +1,9 @@
 //! Platform-neutral text clipboard service.
 //!
 //! The application core depends only on the [`ClipboardService`] trait, not
-//! on any particular desktop clipboard API. This keeps the MVP testable
-//! without a display server: [`InMemoryClipboard`] is a plain in-process
-//! store used both by tests and, for now, by the daemon itself. A real OS
-//! clipboard backend can be added later behind the same trait without
-//! touching `application`.
+//! on any particular desktop clipboard API. [`SystemClipboard`] is the
+//! desktop clipboard; [`InMemoryClipboard`] is a plain in-process store for
+//! tests and headless runs, where there is no display server.
 //!
 //! Implementations must never log clipboard content; only lengths or
 //! booleans derived from it are safe to trace.
@@ -13,6 +11,10 @@
 use std::sync::{Arc, Mutex};
 
 use thiserror::Error;
+
+mod system;
+
+pub use system::{POLL_INTERVAL, SystemClipboard};
 
 /// Local read/write access to a text clipboard.
 pub trait ClipboardService: Send + Sync {
@@ -23,8 +25,8 @@ pub trait ClipboardService: Send + Sync {
     fn set(&self, text: &str) -> Result<(), ClipboardError>;
 }
 
-/// An in-memory clipboard requiring no desktop session. Used by tests and as
-/// the MVP's only clipboard backend.
+/// An in-memory clipboard requiring no desktop session, for tests and
+/// headless runs.
 #[derive(Default)]
 pub struct InMemoryClipboard {
     text: Mutex<Option<String>>,
@@ -60,6 +62,8 @@ impl ClipboardService for InMemoryClipboard {
 pub enum ClipboardError {
     #[error("clipboard is unavailable")]
     Unavailable,
+    #[error("system clipboard is unavailable: {0}")]
+    System(String),
 }
 
 #[cfg(test)]

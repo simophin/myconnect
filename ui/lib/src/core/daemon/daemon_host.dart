@@ -43,6 +43,10 @@ abstract interface class DaemonHost {
         downloadDir: String.fromEnvironment('MYCONNECT_DOWNLOAD_DIR'),
         deviceName: String.fromEnvironment('MYCONNECT_DEVICE_NAME'),
         discoveryLoopback: bool.fromEnvironment('MYCONNECT_DISCOVERY_LOOPBACK'),
+        systemClipboard: bool.fromEnvironment(
+          'MYCONNECT_SYSTEM_CLIPBOARD',
+          defaultValue: true,
+        ),
       ),
     );
   }

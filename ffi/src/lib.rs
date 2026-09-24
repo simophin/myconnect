@@ -39,6 +39,8 @@ pub struct StartConfig {
     pub download_dir: Option<PathBuf>,
     pub device_name: Option<String>,
     pub discovery_loopback: bool,
+    /// Sync the desktop clipboard instead of an in-memory one.
+    pub system_clipboard: bool,
     /// Defaults to `127.0.0.1`.
     pub api_host: Option<IpAddr>,
     /// Defaults to `0`, letting the OS pick a free port.
@@ -130,6 +132,7 @@ pub fn start(config: StartConfig) -> Result<StartedInstance> {
         download_dir: config.download_dir,
         device_name: config.device_name,
         discovery_loopback: config.discovery_loopback,
+        system_clipboard: config.system_clipboard,
         api_host: config.api_host.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
         api_port: config.api_port.unwrap_or(0),
     };

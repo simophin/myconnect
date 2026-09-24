@@ -6,12 +6,13 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::{
     api::{ApiServer, ApiServerConfig, DEFAULT_API_PORT},
-    clipboard::InMemoryClipboard,
+    clipboard::{ClipboardService, InMemoryClipboard, SystemClipboard},
     config::{
         ApiToken, FilesystemTrustStore, LocalIdentity, SettingsFile, StoredSettings, TrustStore,
         default_config_dir,
@@ -71,6 +72,10 @@ pub struct RunRequest {
     /// instances against each other without a second machine, at the cost
     /// of not discovering real devices on the LAN.
     pub discovery_loopback: bool,
+    /// Sync the desktop clipboard rather than an in-memory one. Falls back to
+    /// the in-memory clipboard, with a warning, when the session has no
+    /// usable clipboard (e.g. no display server).
+    pub system_clipboard: bool,
 }
 
 impl Default for RunRequest {
@@ -83,6 +88,7 @@ impl Default for RunRequest {
             api_host: IpAddr::V4(Ipv4Addr::LOCALHOST),
             api_port: DEFAULT_API_PORT,
             discovery_loopback: false,
+            system_clipboard: false,
         }
     }
 }
@@ -95,6 +101,7 @@ pub struct RunningService {
     application: ApplicationHandle,
     lan: LanService,
     server: ApiServer,
+    system_clipboard: Option<(Arc<SystemClipboard>, JoinHandle<()>)>,
 }
 
 impl RunningService {
@@ -131,6 +138,21 @@ impl RunningService {
         });
         let initial = settings.snapshot();
         let device_name = initial.device_name.clone();
+        let system_clipboard = if request.system_clipboard {
+            match SystemClipboard::start() {
+                Ok(clipboard) => Some(Arc::new(clipboard)),
+                Err(error) => {
+                    warn!(%error, "using an in-memory clipboard instead");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let clipboard: Arc<dyn ClipboardService + Send + Sync> = match &system_clipboard {
+            Some(clipboard) => clipboard.clone(),
+            None => InMemoryClipboard::shared(),
+        };
         let (application, commands) = ApplicationHandle::new(
             LocalDeviceSnapshot {
                 device_id: identity.device_id().to_owned(),
@@ -139,7 +161,7 @@ impl RunningService {
             8,
             local_public_key_der,
             trust_store.clone(),
-            InMemoryClipboard::shared(),
+            clipboard,
             32,
             256,
             identity.clone(),
@@ -147,6 +169,11 @@ impl RunningService {
         )?;
         application.install_settings(settings);
         let shutdown = CancellationToken::new();
+        let system_clipboard = system_clipboard.map(|clipboard| {
+            let follower = application
+                .follow_local_clipboard(clipboard.local_changes(), shutdown.child_token());
+            (clipboard, follower)
+        });
         let capabilities = plugins::capabilities();
         let mut lan_config = LanConfig::default();
         if request.discovery_loopback {
@@ -191,6 +218,7 @@ impl RunningService {
             application,
             lan,
             server,
+            system_clipboard,
         })
     }
 
@@ -207,9 +235,16 @@ impl RunningService {
             application,
             lan,
             server,
+            system_clipboard,
         } = self;
         let server_result = server.shutdown().await;
         let lan_result = lan.shutdown().await;
+        if let Some((clipboard, follower)) = system_clipboard {
+            follower.abort();
+            // Joining the clipboard thread may wait briefly for a clipboard
+            // manager to take over the text we own (X11).
+            let _ = tokio::task::spawn_blocking(move || clipboard.stop()).await;
+        }
         application.shutdown_transfers(Duration::from_secs(5)).await;
         server_result?;
         lan_result?;

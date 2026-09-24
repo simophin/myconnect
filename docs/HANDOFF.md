@@ -66,6 +66,7 @@ Working and verified live (UI ↔ CLI daemon over loopback):
 - A settings screen (device name, download folder, clipboard sync, close
   to tray), stored by the daemon, with renames reaching peers at once
   (item 5).
+- The desktop clipboard synced with peers, in both directions (item 6).
 
 Only Linux bundles the native library. Nothing has been tested against a real
 KDE Connect install yet.
@@ -79,7 +80,7 @@ KDE Connect install yet.
 | 3 | ~~[Keep running in the background](#3-keep-running-in-the-background-tray-and-notifications)~~ **Done** | P0 | Flutter |
 | 4 | ~~[Send files and a transfers view](#4-send-files-and-a-transfers-view)~~ **Done** | P1 | Flutter (+ small API) |
 | 5 | ~~[Daemon settings API and screen](#5-daemon-settings-api-and-settings-screen)~~ **Done** | P1 | Rust + Flutter |
-| 6 | [OS clipboard integration](#6-os-clipboard-integration) | P1 | Rust |
+| 6 | ~~[OS clipboard integration](#6-os-clipboard-integration)~~ **Done** | P1 | Rust |
 | 7 | [Automated end-to-end test](#7-automated-end-to-end-test) | P1 | Test infra |
 | 8 | [Ping: send button and receiving](#8-ping-send-button-and-receiving) | P2 | Flutter + Rust |
 | 9 | [Add device by IP address](#9-add-device-by-ip-address) | P2 | Rust + Flutter |
@@ -370,6 +371,29 @@ sees after a scan, and the setting survives an app restart.
 ---
 
 ## 6. OS clipboard integration
+
+> **Done (2026-09-24), checked on X11.** `SystemClipboard`
+> (`src/clipboard/system.rs`, over `arboard` with `wayland-data-control`)
+> owns the clipboard on its own thread instead of `spawn_blocking`: it
+> applies writes as they arrive and polls every 500 ms for local copies,
+> which `ApplicationHandle::follow_local_clipboard` feeds into
+> `set_clipboard` (the `PUT /clipboard` path). Loop guards: text the thread
+> wrote is never reported back, and `set_clipboard` ignores unchanged text.
+> Like KDE Connect, text already on the clipboard at start isn't synced, nor
+> are empty text, images, or copies made while clipboard sync is off. Opt in
+> with `RunRequest::system_clipboard` (`myconnect run --system-clipboard`,
+> FFI `systemClipboard`); the app turns it on (`MYCONNECT_SYSTEM_CLIPBOARD`
+> =`false` turns it off). Without a usable clipboard it logs a warning and
+> falls back to `InMemoryClipboard`, which stays the default. Verified live
+> with two CLI daemons on separate Xvfb displays: a copy on each side
+> pasted on the other, one packet each way and no echo, `clipboard set`
+> reached the desktop, a copy with sync off stayed local. The app's
+> embedded daemon picked up a copy made on its display. Not done: a check on
+> a Wayland compositor (with data-control, e.g. KDE, or the XWayland
+> fallback on GNOME), macOS and Windows, and the optional last-synced text
+> on the device page. The UI toggle already came with item 5. On X11 without a
+> clipboard manager, quitting logs a harmless arboard warning that nothing
+> took over the copied text. See ARCHITECTURE §6.
 
 **Why.** Clipboard sync works over the network, but the only backend is
 `InMemoryClipboard` (`src/clipboard.rs`), so nothing reaches the real

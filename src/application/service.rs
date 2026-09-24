@@ -871,6 +871,38 @@ impl ApplicationHandle {
         });
     }
 
+    /// Sync text copied on this machine, as `changes` reports it (see
+    /// [`crate::clipboard::SystemClipboard::local_changes`]), the way
+    /// [`Self::set_clipboard`] does. Copies made while clipboard sync is off
+    /// are dropped rather than read into the snapshot. Runs until `changes`
+    /// closes or `shutdown` is cancelled.
+    pub fn follow_local_clipboard(
+        &self,
+        mut changes: watch::Receiver<Option<String>>,
+        shutdown: CancellationToken,
+    ) -> JoinHandle<()> {
+        let application = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    () = shutdown.cancelled() => return,
+                    changed = changes.changed() => if changed.is_err() {
+                        return;
+                    },
+                }
+                let Some(text) = changes.borrow_and_update().clone() else {
+                    continue;
+                };
+                if !application.clipboard_sync_enabled() {
+                    continue;
+                }
+                if let Err(error) = application.set_clipboard(text) {
+                    tracing::debug!(%error, "local clipboard change not synced");
+                }
+            }
+        })
+    }
+
     /// Apply a `kdeconnect.clipboard` or `kdeconnect.clipboard.connect` body
     /// received from a paired peer. `timestamp`, present only for the
     /// connect variant, gates staleness: a timestamp that is not strictly
@@ -2506,6 +2538,39 @@ mod tests {
         handle.set_clipboard("resumed".into()).unwrap();
         let sent = rx.try_recv().unwrap();
         assert_eq!(sent.packet_type, plugins::clipboard::PACKET_TYPE);
+    }
+
+    #[tokio::test]
+    async fn local_clipboard_changes_are_synced_while_sync_is_enabled() {
+        let (handle, _commands) = handle();
+        let device_id = "740bd4b9b4184ee497d6caf1da8151be";
+        let mut rx = connect_paired_clipboard_peer(&handle, device_id);
+        let (changes, receiver) = watch::channel(None);
+        let shutdown = CancellationToken::new();
+        let follower = handle.follow_local_clipboard(receiver, shutdown.clone());
+
+        changes.send_replace(Some("copied".into()));
+        let sent = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let body: plugins::clipboard::ClipboardBody = sent.body_as().unwrap();
+        assert_eq!(body.content, "copied");
+
+        handle.set_clipboard_sync_enabled(false);
+        changes.send_replace(Some("private".into()));
+        sleep(Duration::from_millis(50)).await;
+        match handle.query(Query::Clipboard).unwrap() {
+            QueryResult::Clipboard(clipboard) => assert_eq!(clipboard.text, "copied"),
+            other => panic!("unexpected query result: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(5), follower)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[test]
