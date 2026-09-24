@@ -1,4 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mocktail/mocktail.dart';
+import 'package:myconnect_ui/src/core/api/api_exception.dart';
+import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
 import 'package:myconnect_ui/src/core/api/models/transfer.dart';
@@ -18,7 +21,7 @@ void main() {
     expect(daemon.shell.exited, isFalse);
     expect(daemon.host.stops, 0);
 
-    daemon.shell.onShowRequested!();
+    daemon.shell.onTrayClicked!();
     await tester.pumpAndSettle();
     expect(daemon.shell.visible, isTrue);
   });
@@ -42,7 +45,7 @@ void main() {
   ) async {
     final daemon = await pumpApp(tester, TestDaemon());
 
-    daemon.shell.onQuitRequested!();
+    daemon.shell.selectTrayItem(['Quit']);
     await tester.pumpAndSettle();
 
     expect(daemon.host.stops, 1);
@@ -140,5 +143,106 @@ void main() {
     daemon.events.add(const PingReceived(deviceId: 'a', deviceName: 'Pixel'));
     await tester.pumpAndSettle();
     expect(daemon.notifications.shown.values, ['Ping!']);
+  });
+
+  testWidgets('the tray menu lists paired devices, then Settings and Quit', (
+    tester,
+  ) async {
+    final daemon = TestDaemon()
+      ..devices = [
+        device(
+          name: 'Pixel',
+          incomingCapabilities: [shareCapability, pingCapability],
+        ),
+        device(
+          id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          name: 'Laptop',
+          reachability: DeviceReachability.unavailable,
+        ),
+        device(id: 'cccccccccccccccccccccccccccccccc', paired: false),
+      ];
+    await pumpApp(tester, daemon);
+    final shell = daemon.shell;
+
+    expect(shell.trayLabels, [
+      'Open MyConnect',
+      '-',
+      'Laptop (Not reachable)',
+      'Pixel',
+      '-',
+      'Settings',
+      '-',
+      'Quit',
+    ]);
+    expect(shell.trayItem(['Pixel', 'Send files…']).enabled, isTrue);
+    expect(shell.trayItem(['Pixel', 'Ping']).enabled, isTrue);
+    expect(
+      shell.trayItem(['Laptop (Not reachable)', 'Send files…']).enabled,
+      isFalse,
+    );
+    expect(shell.trayItem(['Laptop (Not reachable)', 'Ping']).enabled, isFalse);
+
+    daemon.events.add(
+      DeviceChanged(
+        device(
+          id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          name: 'Laptop',
+          incomingCapabilities: [pingCapability],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(shell.trayItem(['Laptop', 'Ping']).enabled, isTrue);
+    expect(shell.trayItem(['Laptop', 'Send files…']).enabled, isFalse);
+  });
+
+  testWidgets('the tray menu says when nothing is paired', (tester) async {
+    final daemon = await pumpApp(tester, TestDaemon());
+
+    expect(daemon.shell.trayItem(['No paired devices']).enabled, isFalse);
+  });
+
+  testWidgets('the tray opens a device, or settings, in the window', (
+    tester,
+  ) async {
+    final daemon = TestDaemon()..devices = [device(name: 'Pixel')];
+    await pumpApp(tester, daemon);
+    daemon.shell.onCloseRequested!();
+    await tester.pumpAndSettle();
+
+    daemon.shell.selectTrayItem(['Pixel', 'Show details']);
+    await tester.pumpAndSettle();
+    expect(daemon.shell.visible, isTrue);
+    expect(find.text('Device ID'), findsOneWidget);
+
+    daemon.shell.selectTrayItem(['Settings']);
+    await tester.pumpAndSettle();
+    expect(find.text('Keep running when the window is closed'), findsOneWidget);
+  });
+
+  testWidgets('pinging from the tray reports only a failure', (tester) async {
+    final daemon = TestDaemon()
+      ..devices = [
+        device(name: 'Pixel', incomingCapabilities: [pingCapability]),
+      ];
+    when(() => daemon.api.ping(any())).thenAnswer((_) async {});
+    await pumpApp(tester, daemon);
+    daemon.shell.onCloseRequested!();
+    await tester.pumpAndSettle();
+
+    daemon.shell.selectTrayItem(['Pixel', 'Ping']);
+    await tester.pumpAndSettle();
+    verify(() => daemon.api.ping('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')).called(1);
+    expect(daemon.shell.visible, isFalse);
+    expect(daemon.notifications.shown, isEmpty);
+
+    when(() => daemon.api.ping(any())).thenThrow(
+      const ApiException(code: 'device_not_connected', statusCode: 409),
+    );
+    daemon.shell.selectTrayItem(['Pixel', 'Ping']);
+    await tester.pumpAndSettle();
+    expect(daemon.notifications.shown.values, [
+      'The device is not connected right now.',
+    ]);
   });
 }

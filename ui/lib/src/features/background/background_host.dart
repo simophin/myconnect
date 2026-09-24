@@ -5,14 +5,19 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
 import 'package:myconnect_ui/src/core/api/models/transfer.dart';
+import 'package:myconnect_ui/src/core/desktop/desktop_shell.dart';
 import 'package:myconnect_ui/src/core/providers.dart';
+import 'package:myconnect_ui/src/core/routing/router.dart';
+import 'package:myconnect_ui/src/features/devices/devices_controller.dart';
 import 'package:myconnect_ui/src/features/pairing/pairings_controller.dart';
 import 'package:myconnect_ui/src/features/send/send_files.dart';
 import 'package:myconnect_ui/src/features/settings/settings_controller.dart';
 import 'package:myconnect_ui/src/features/transfers/transfers_controller.dart';
+import 'package:myconnect_ui/src/shared/widgets.dart';
 
 final _log = Logger('BackgroundHost');
 
@@ -20,9 +25,9 @@ final _log = Logger('BackgroundHost');
 /// is closed.
 ///
 /// Closing the window only hides it, unless the user turned off the
-/// `closeToTray` setting; the tray menu shows it again, sends files, or
-/// quits. Quitting is
-/// the one path that stops the daemon. While the window is
+/// `closeToTray` setting. Clicking the tray icon shows it again; the tray
+/// menu lists the paired devices, each with its actions, then Settings and
+/// Quit. Quitting is the one path that stops the daemon. While the window is
 /// hidden or unfocused, incoming pairing requests, received files and pings
 /// raise a notification that brings the window back. A ping over a focused
 /// window shows a snackbar instead.
@@ -59,6 +64,12 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
         if (event is PingReceived) unawaited(_showPing(event));
       });
     }, fireImmediately: true);
+    ref.listenManual(
+      pairedDevicesProvider,
+      (_, devices) =>
+          ref.read(desktopShellProvider).setTrayMenu(_trayMenu(devices.value)),
+      fireImmediately: true,
+    );
     // An exit the OS asks for (e.g. quitting from the macOS menu bar) rather
     // than a window close, which the shell intercepts.
     _lifecycle = AppLifecycleListener(
@@ -75,9 +86,7 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
     try {
       await shell.start(
         onCloseRequested: () => unawaited(_close()),
-        onShowRequested: () => unawaited(shell.showWindow()),
-        onSendFilesRequested: () => unawaited(_sendFiles()),
-        onQuitRequested: () => unawaited(_quit()),
+        onTrayClicked: () => unawaited(shell.showWindow()),
       );
     } on Object catch (error) {
       _log.warning('Tray and close-to-tray unavailable: $error');
@@ -103,17 +112,106 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
     }
   }
 
-  /// Show the window, then ask for files and where to send them.
-  Future<void> _sendFiles() async {
+  /// The tray menu: [devices] (left out while they are unknown), each with
+  /// what can be done to it, then Settings and Quit.
+  List<TrayMenuEntry> _trayMenu(List<Device>? devices) {
+    final shell = ref.read(desktopShellProvider);
+    return [
+      TrayMenuItem(
+        'Open MyConnect',
+        onSelected: () => unawaited(shell.showWindow()),
+      ),
+      const TrayMenuSeparator(),
+      if (devices != null) ...[
+        if (devices.isEmpty) const TrayMenuItem('No paired devices'),
+        for (final device in devices)
+          TrayMenuItem(
+            device.isConnected
+                ? device.deviceName
+                : '${device.deviceName} (${reachabilityLabel(device)})',
+            submenu: [
+              TrayMenuItem(
+                'Send files…',
+                onSelected: device.acceptsFiles
+                    ? () => unawaited(_sendFiles(device))
+                    : null,
+              ),
+              TrayMenuItem(
+                'Ping',
+                onSelected: device.acceptsPings
+                    ? () => unawaited(_ping(device))
+                    : null,
+              ),
+              const TrayMenuSeparator(),
+              TrayMenuItem(
+                'Show details',
+                onSelected: () =>
+                    unawaited(_showRoute('/devices/${device.deviceId}')),
+              ),
+            ],
+          ),
+        const TrayMenuSeparator(),
+      ],
+      TrayMenuItem(
+        'Settings',
+        onSelected: () => unawaited(_showRoute('/settings')),
+      ),
+      const TrayMenuSeparator(),
+      TrayMenuItem('Quit', onSelected: () => unawaited(_quit())),
+    ];
+  }
+
+  Future<void> _showRoute(String location) async {
+    ref.read(routerProvider).go(location);
     await ref.read(desktopShellProvider).showWindow();
-    final files = await openFiles(confirmButtonText: 'Next');
+  }
+
+  /// Ask for files and send them to [device], leaving the window as it is;
+  /// the outcome is reported, and progress shows on the transfers page.
+  Future<void> _sendFiles(Device device) async {
+    final files = await openFiles(confirmButtonText: 'Send');
     if (files.isEmpty || !mounted) return;
-    // No navigator while the daemon is starting or failed to start.
-    final context = navigatorContext(ref);
-    if (context == null || !context.mounted) return;
-    await confirmAndSendFiles(context, ref, [
-      for (final file in files) file.path,
-    ]);
+    // The device may have dropped while the user picked.
+    final current = ref.read(deviceProvider(device.deviceId));
+    if (current == null || !current.acceptsFiles) {
+      await _report(
+        "Couldn't send to ${device.deviceName}",
+        'The device is not connected right now.',
+      );
+      return;
+    }
+    final failure = await startTransfers(
+      ref.read(transfersProvider.notifier),
+      current,
+      [for (final file in files) file.path],
+    );
+    final sending = files.length == 1
+        ? 'Sending ${files.single.name}'
+        : 'Sending ${files.length} files';
+    await _report(current.deviceName, failure ?? '$sending.');
+  }
+
+  /// Ping [device] without showing the window; only a failure is reported.
+  Future<void> _ping(Device device) async {
+    try {
+      await (await ref.read(apiProvider.future)).ping(device.deviceId);
+    } on Object catch (error) {
+      await _report("Couldn't ping ${device.deviceName}", describeError(error));
+    }
+  }
+
+  /// Tell the user something: in a snackbar over a focused window,
+  /// otherwise in a notification.
+  Future<void> _report(String title, String body) async {
+    if (await ref.read(desktopShellProvider).isWindowFocused()) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(SnackBar(content: Text('$title: $body')));
+      return;
+    }
+    await ref
+        .read(desktopNotificationsProvider)
+        .show(id: _nextNotificationId++, title: title, body: body);
   }
 
   Future<void> _stopDaemon() async {
@@ -194,15 +292,7 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
       final message? when message.isNotEmpty => message,
       _ => 'Ping!',
     };
-    if (await ref.read(desktopShellProvider).isWindowFocused()) {
-      if (!mounted) return;
-      ScaffoldMessenger.maybeOf(context)
-          ?.showSnackBar(SnackBar(content: Text('${ping.deviceName}: $text')));
-      return;
-    }
-    await ref
-        .read(desktopNotificationsProvider)
-        .show(id: _nextNotificationId++, title: ping.deviceName, body: text);
+    await _report(ping.deviceName, text);
   }
 
   @override

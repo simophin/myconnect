@@ -16,7 +16,7 @@ library, on a free loopback port with a per-launch token.
 - Incoming pairing requests prompt on any screen
 - Send files from a device's page, by dropping them on the window (on a
   device to send straight to it, anywhere else to choose one), or from the
-  tray menu's "Send files…"; a transfers page (and each device's recent
+  device's entry in the tray menu; a transfers page (and each device's recent
   transfers) shows progress, cancels running transfers, and opens received
   files or their folder
 - Keeps running in the tray when the window is closed (Quit from the tray

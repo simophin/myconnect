@@ -15,10 +15,13 @@ launch must not start a second daemon: it would fight the first for UDP
 ## Decision
 
 - **Closing hides; only Quit exits.** `window_manager` takes over the close
-  button (`setPreventClose`) and the window is hidden instead. A tray icon
-  (`tray_manager`) offers *Show MyConnect*, *Send files…* (which shows the
-  window, then asks for files and a device) and *Quit*. Quit stops the daemon
-  first, then destroys the window, which ends the process.
+  button (`setPreventClose`) and the window is hidden instead. Clicking the
+  tray icon (`tray_manager`) shows the window; its menu has *Open
+  MyConnect*, one submenu per paired device (*Send files…*, *Ping*, *Show
+  details*, each enabled only when the device can take it), *Settings* and
+  *Quit*. `BackgroundHost` rebuilds the menu from `pairedDevicesProvider`.
+  Quit stops the daemon first, then destroys the window, which ends the
+  process.
 - **The policy lives in Dart, the mechanics behind interfaces.**
   `BackgroundHost` (`features/background/`) decides what close, show, quit
   and a notification click mean. It talks to `DesktopShell` (window and
@@ -48,6 +51,12 @@ launch must not start a second daemon: it would fight the first for UDP
   libappindicator build dependency). KDE Plasma and most panels show it;
   stock GNOME needs the AppIndicator extension. Without a tray host a
   closed window can still be brought back by launching the app again.
+- nativeapi 0.3 (under `tray_manager` 0.7) defaults the menu trigger to
+  none, which never opens it, so the shell sets `rightClicked`. On Linux,
+  upstream exports the menu only for the `clicked` trigger (`ItemIsMenu`)
+  and ignores the panel's `Activate`, so a left click could not show the
+  window. `cnativeapi` is vendored with a patch that fixes both
+  (`third_party/README.md`); drop the override once upstream has the fix.
 - Launching a second copy with different `--dart-define`s (e.g. another data
   dir) only focuses the first. To run two app instances side by side, give
   the second build a different `APPLICATION_ID` in `linux/CMakeLists.txt`.
