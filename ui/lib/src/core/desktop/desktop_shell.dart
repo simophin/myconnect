@@ -94,9 +94,17 @@ class NativeDesktopShell with WindowListener implements DesktopShell {
       _log.warning('No tray icon on this system');
       return null;
     }
-    tray
-      ..icon = ImageAsset.fromAsset('assets/tray_icon.png')
-      ..setTooltip('MyConnect');
+    // The macOS menu bar wants a template image, which it tints to suit a
+    // light or dark menu bar. Elsewhere the tray shows the icon as drawn,
+    // on its own tile so it stands out on light and dark panels alike.
+    if (defaultTargetPlatform == TargetPlatform.macOS) {
+      tray
+        ..icon = ImageAsset.fromAsset('assets/tray_icon_template.png')
+        ..isIconTemplate = true;
+    } else {
+      tray.icon = ImageAsset.fromAsset('assets/tray_icon.png');
+    }
+    tray.setTooltip('MyConnect');
     menu
       ..addItem(_item('Show MyConnect', onShow))
       ..addItem(_item('Send files…', onSendFiles))

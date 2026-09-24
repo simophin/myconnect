@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="20 20 216 216">
+  <!-- The small tin cans as a macOS menu bar template: black on
+       transparent, no tile. macOS uses only the alpha and tints it to suit
+       a light or dark menu bar. The can mouths are cut out so they read as
+       openings. -->
+  <defs>
+    <mask id="mouths">
+      <rect x="0" y="0" width="256" height="256" fill="#FFFFFF"/>
+      <ellipse cx="38" cy="128" rx="8" ry="31" fill="#000000"/>
+      <ellipse cx="218" cy="128" rx="8" ry="31" fill="#000000"/>
+    </mask>
+  </defs>
+  <g transform="rotate(-20 128 128)">
+    <path d="M98 128H112Q120 106 128 128T144 128H158" fill="none" stroke="#000000" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+    <g mask="url(#mouths)" fill="#000000">
+      <path d="M38 86L100 100V156L38 170Z"/>
+      <ellipse cx="38" cy="128" rx="15" ry="42"/>
+      <path d="M218 86L156 100V156L218 170Z"/>
+      <ellipse cx="218" cy="128" rx="15" ry="42"/>
+    </g>
+  </g>
+</svg>
