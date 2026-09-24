@@ -26,10 +26,12 @@ pub struct PluginCapabilities {
 }
 
 /// The fixed set of packet types this build can send and receive.
+///
+/// Ping is outgoing-only: this build can ping a peer but does not yet
+/// handle incoming pings, so it does not advertise them as receivable.
 pub fn capabilities() -> PluginCapabilities {
     PluginCapabilities {
         incoming: vec![
-            ping::PACKET_TYPE.to_owned(),
             clipboard::PACKET_TYPE.to_owned(),
             clipboard::CONNECT_PACKET_TYPE.to_owned(),
             share::PACKET_TYPE.to_owned(),
@@ -46,7 +48,6 @@ pub fn capabilities() -> PluginCapabilities {
 /// A packet successfully routed to a registered plugin handler.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IncomingPluginPacket {
-    Ping(ping::PingBody),
     Clipboard(clipboard::ClipboardBody),
     ClipboardConnect(clipboard::ClipboardConnectBody),
     ShareRequest(share::ShareRequestBody),
@@ -69,7 +70,6 @@ pub enum PluginDispatchError {
 /// on the peer's advertised `incomingCapabilities`.
 pub fn dispatch_incoming(packet: &Packet) -> Result<IncomingPluginPacket, PluginDispatchError> {
     match packet.packet_type.as_str() {
-        ping::PACKET_TYPE => Ok(IncomingPluginPacket::Ping(packet.body_as()?)),
         clipboard::PACKET_TYPE => Ok(IncomingPluginPacket::Clipboard(packet.body_as()?)),
         clipboard::CONNECT_PACKET_TYPE => {
             Ok(IncomingPluginPacket::ClipboardConnect(packet.body_as()?))
@@ -87,16 +87,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn advertises_ping_clipboard_and_share_both_directions() {
+    fn advertises_clipboard_and_share_both_directions_and_ping_outgoing_only() {
         let capabilities = capabilities();
-        let expected = vec![
-            ping::PACKET_TYPE.to_owned(),
+        let bidirectional = vec![
             clipboard::PACKET_TYPE.to_owned(),
             clipboard::CONNECT_PACKET_TYPE.to_owned(),
             share::PACKET_TYPE.to_owned(),
         ];
-        assert_eq!(capabilities.incoming, expected);
-        assert_eq!(capabilities.outgoing, expected);
+        assert_eq!(capabilities.incoming, bidirectional);
+        let mut outgoing = vec![ping::PACKET_TYPE.to_owned()];
+        outgoing.extend(bidirectional);
+        assert_eq!(capabilities.outgoing, outgoing);
     }
 
     #[test]
@@ -126,11 +127,11 @@ mod tests {
     }
 
     #[test]
-    fn ping_packet_dispatches_to_the_ping_handler() {
+    fn incoming_ping_has_no_handler_yet() {
         let packet = ping::build_packet(1_u64, None).unwrap();
         assert!(matches!(
             dispatch_incoming(&packet),
-            Ok(IncomingPluginPacket::Ping(_))
+            Err(PluginDispatchError::Unrecognized(t)) if t == ping::PACKET_TYPE
         ));
     }
 

@@ -159,6 +159,27 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Ping a paired, connected device, optionally attaching a message.
+    pub async fn ping(&self, device_id: &str, message: Option<&str>) -> Result<(), ClientError> {
+        #[derive(Serialize)]
+        struct Ping<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            message: Option<&'a str>,
+        }
+
+        let response = self
+            .authorized(
+                self.http
+                    .post(self.url(&format!("api/v1/devices/{device_id}/ping"))?),
+            )
+            .json(&Ping { message })
+            .send()
+            .await
+            .map_err(map_transport)?;
+        checked(response, "device").await?;
+        Ok(())
+    }
+
     pub async fn send_file(
         &self,
         device_id: &str,

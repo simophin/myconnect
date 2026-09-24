@@ -24,12 +24,7 @@ use myconnect::{
 };
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 use serde_json::{Map, json};
-use tokio::{
-    io::AsyncWriteExt,
-    net::TcpStream,
-    sync::mpsc,
-    time::timeout,
-};
+use tokio::{io::AsyncWriteExt, net::TcpStream, sync::mpsc, time::timeout};
 use tokio_util::sync::CancellationToken;
 
 struct Peer {

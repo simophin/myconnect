@@ -46,7 +46,7 @@ so packet handling can be exercised without a live connection.
 | `config` | `src/config/{mod,identity,token,trust}.rs` | Local device identity (UUID + self-signed cert), API bearer token, filesystem-backed `TrustStore` of pinned peer certificates. |
 | `transport` | `src/transport/{lan,tls,payload}.rs` | UDP discovery, TCP control-channel connect/accept, the real rustls TLS handshake and certificate pinning, and the auxiliary TLS payload connection used for file transfer. |
 | `device` | `src/device.rs` | `DeviceSnapshot`, `DeviceReachability`, and the in-memory device registry keyed by device ID. |
-| `plugins` | `src/plugins/{mod,ping,clipboard,share}.rs` | Fixed (non-dynamic) packet-type routing table for the packet families this build understands: ping, clipboard, share. Advertises capability strings for the identity packet. |
+| `plugins` | `src/plugins/{mod,ping,clipboard,share}.rs` | Fixed (non-dynamic) packet-type routing table for the packet families this build understands: ping, clipboard, share. Advertises capability strings for the identity packet; ping is advertised as outgoing only, since incoming pings are not handled yet. |
 | `application` | `src/application.rs`, `src/application/{state,events,service,transfer}.rs` | Orchestration: connection registry, pairing state machine, transfer state machine, clipboard sync, bounded event bus. Everything HTTP-facing is a snapshot type defined here. |
 | `clipboard` | `src/clipboard.rs` | `ClipboardService` trait plus an in-memory implementation (no OS clipboard integration yet). |
 | `api` | `src/api.rs` | Axum HTTP transport only — translates HTTP requests to `ApplicationService` calls and snapshots back to JSON. Bearer-token auth, body-size limits, SSE. |
@@ -155,6 +155,7 @@ is disabled. Errors use `application/problem+json`.
 | `GET` | `/devices` | Snapshot of known devices. |
 | `GET` | `/devices/{deviceId}` | One device, or `404`. |
 | `DELETE` | `/devices/{deviceId}` | Unpair, remove trust, forget the device. |
+| `POST` | `/devices/{deviceId}/ping` | Send `kdeconnect.ping` to a paired, connected device that advertises receiving it; optional JSON body `{"message": "..."}`; `202`. |
 | `POST` | `/pairings` | Start outgoing pairing; `202`. |
 | `GET` | `/pairings/{pairingId}` | Pairing state, verification code, expiry. |
 | `POST` | `/pairings/{pairingId}/accept` | Confirm verification codes match (incoming only). |
@@ -194,6 +195,8 @@ git diff --check
 - No manual interoperability check against a real KDE Connect
   (Android/desktop) implementation has been performed in this environment.
   Everything above is verified against this codebase's own peers only.
+- Ping is outgoing only: incoming `kdeconnect.ping` packets are dropped and
+  not advertised in `incomingCapabilities`.
 - No OS clipboard backend, no Bluetooth transport, no multi-file/directory
   transfer, no durable event replay, no remote/LAN exposure of the control
   API — these are explicit non-goals for the current scope, not oversights.

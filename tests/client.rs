@@ -65,6 +65,7 @@ impl MockServer {
         let app = Router::new()
             .route("/api/v1/devices", get(devices))
             .route("/api/v1/devices/{device_id}", delete(unpair))
+            .route("/api/v1/devices/{device_id}/ping", post(ping))
             .route("/api/v1/pairings", post(start_pairing))
             .route(
                 "/api/v1/pairings/{pairing_id}",
@@ -171,6 +172,29 @@ async fn unpair(Path(device_id): Path<String>) -> Response {
         )
             .into_response()
     }
+}
+
+#[derive(Deserialize)]
+struct Ping {
+    message: Option<String>,
+}
+
+async fn ping(Path(device_id): Path<String>, Json(request): Json<Ping>) -> Response {
+    if device_id != device().device_id {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"code": "device_not_found"})),
+        )
+            .into_response();
+    }
+    if request.message.as_deref() == Some("unsupported") {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"code": "unsupported_by_peer"})),
+        )
+            .into_response();
+    }
+    StatusCode::ACCEPTED.into_response()
 }
 
 #[derive(Deserialize)]
@@ -312,6 +336,11 @@ async fn every_client_operation_uses_the_expected_http_contract() {
     );
     client.reject_pairing(Uuid::from_u128(1)).await.unwrap();
     client.unpair(&device().device_id).await.unwrap();
+    client.ping(&device().device_id, None).await.unwrap();
+    client
+        .ping(&device().device_id, Some("hello"))
+        .await
+        .unwrap();
 
     let directory = TempDir::new().unwrap();
     let file = directory.path().join("payload.txt");
@@ -419,6 +448,14 @@ async fn errors_are_distinct_and_actionable() {
     assert!(matches!(
         client.unpair("missing").await,
         Err(ClientError::NotFound("device"))
+    ));
+    assert!(matches!(
+        client.ping("missing", None).await,
+        Err(ClientError::NotFound("device"))
+    ));
+    assert!(matches!(
+        client.ping(&device().device_id, Some("unsupported")).await,
+        Err(ClientError::OperationFailed { status: 409, .. })
     ));
     assert!(matches!(
         client.set_clipboard("fail").await,

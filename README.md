@@ -39,6 +39,8 @@ The CLI interface is command based, allowing users to interact with MyConnect th
 - `myconnect pair <device-id>` - Start pairing with a discovered device.
 - `myconnect pair accept|reject <pairing-id>` - Resolve a pairing request.
 - `myconnect unpair <device-id>` - Remove trust and forget a device.
+- `myconnect ping <device-id> [message]` - Ping a paired device, optionally
+  with a message. Receiving pings is not supported yet.
 - `myconnect send <device-id> <file> [--watch]` - Stream a file to a device.
 - `myconnect clipboard get|set <text>|watch` - Control text synchronization.
 

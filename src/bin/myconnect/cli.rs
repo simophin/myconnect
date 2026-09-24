@@ -76,6 +76,11 @@ enum Command {
     },
     /// Unpair and forget a device.
     Unpair { device_id: String },
+    /// Ping a paired device, optionally with a message.
+    Ping {
+        device_id: String,
+        message: Option<String>,
+    },
     /// Send a file to a paired device.
     Send {
         device_id: String,
@@ -194,6 +199,14 @@ impl Cli {
                     println!("{}", json!({"deviceId": device_id, "status": "unpaired"}));
                 } else {
                     println!("Device {device_id} unpaired");
+                }
+            }
+            Command::Ping { device_id, message } => {
+                client.ping(&device_id, message.as_deref()).await?;
+                if json {
+                    println!("{}", json!({"deviceId": device_id, "status": "sent"}));
+                } else {
+                    println!("Ping sent to {device_id}");
                 }
             }
             Command::Send {
@@ -432,6 +445,8 @@ mod tests {
             vec!["myconnect", "scan"],
             vec!["myconnect", "scan", "--timeout", "5"],
             vec!["myconnect", "scan", "--watch"],
+            vec!["myconnect", "ping", "device-id"],
+            vec!["myconnect", "ping", "device-id", "hello"],
             vec!["myconnect", "pair", "device-id"],
             vec!["myconnect", "pair", "accept", ID],
             vec!["myconnect", "pair", "reject", ID],

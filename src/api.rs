@@ -224,6 +224,7 @@ fn router(state: ApiState, token: ApiToken, config: &ApiServerConfig) -> Router 
             "/devices/{device_id}",
             get(get_device).delete(delete_device),
         )
+        .route("/devices/{device_id}/ping", post(post_ping))
         .route("/pairings", post(post_pairing))
         .route(
             "/pairings/{pairing_id}",
@@ -388,6 +389,26 @@ async fn delete_device(
         .forget_device(&device_id)
         .map_err(map_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct PingRequest {
+    message: Option<String>,
+}
+
+/// Queue a `kdeconnect.ping` to a paired, connected device. The JSON body
+/// is optional; without one, a plain ping carrying no message is sent.
+async fn post_ping(
+    State(state): State<ApiState>,
+    Path(device_id): Path<String>,
+    request: Option<Json<PingRequest>>,
+) -> Result<StatusCode, ApiProblem> {
+    let message = request.and_then(|Json(request)| request.message);
+    state
+        .application
+        .send_ping(&device_id, message)
+        .map_err(map_error)?;
+    Ok(StatusCode::ACCEPTED)
 }
 
 #[derive(Deserialize)]

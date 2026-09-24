@@ -90,8 +90,9 @@ impl TestServer {
     }
 
     /// Register a live, paired connection for `device_id`, as the transport
-    /// layer would after a real handshake, so transfer endpoints have
-    /// somewhere to send a `kdeconnect.share.request`.
+    /// layer would after a real handshake, so transfer and ping endpoints
+    /// have somewhere to send a `kdeconnect.share.request` or
+    /// `kdeconnect.ping`.
     fn connect_and_pair(
         &self,
         device_id: &str,
@@ -100,7 +101,10 @@ impl TestServer {
             device_id: device_id.to_owned(),
             device_name: "Peer Phone".into(),
             device_type: DeviceType::Phone,
-            incoming_capabilities: vec!["kdeconnect.share.request".into()],
+            incoming_capabilities: vec![
+                "kdeconnect.share.request".into(),
+                "kdeconnect.ping".into(),
+            ],
             outgoing_capabilities: vec!["kdeconnect.share.request".into()],
             protocol_version: 8,
             extra: Map::new(),
@@ -363,6 +367,64 @@ async fn clipboard_get_and_put_round_trip_and_enforce_the_size_limit() {
         request_with_body(&server, "PUT", "/api/v1/clipboard", &oversized).await;
     assert!(oversized_response.starts_with("HTTP/1.1 413 Payload Too Large"));
     assert!(body(&oversized_response).contains("clipboard_text_too_large"));
+
+    server.server.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ping_is_queued_to_a_paired_device_with_an_optional_message() {
+    let server = TestServer::start().await;
+    let device_id = "cccccccccccccccccccccccccccccccc";
+    let mut packets = server.connect_and_pair(device_id);
+
+    let with_message = request_with_body(
+        &server,
+        "POST",
+        &format!("/api/v1/devices/{device_id}/ping"),
+        r#"{"message":"hello from api"}"#,
+    )
+    .await;
+    assert!(
+        with_message.starts_with("HTTP/1.1 202 Accepted"),
+        "unexpected response: {with_message}"
+    );
+    let sent = packets.try_recv().unwrap();
+    assert_eq!(sent.packet_type, "kdeconnect.ping");
+    assert_eq!(sent.body["message"], "hello from api");
+
+    // Without a body, a plain ping carrying no message is sent.
+    let plain = request(
+        &server,
+        "POST",
+        &format!("/api/v1/devices/{device_id}/ping"),
+        true,
+    )
+    .await;
+    assert!(plain.starts_with("HTTP/1.1 202 Accepted"));
+    let sent = packets.try_recv().unwrap();
+    assert_eq!(sent.packet_type, "kdeconnect.ping");
+    assert!(!sent.body.contains_key("message"));
+
+    let unknown = request(
+        &server,
+        "POST",
+        "/api/v1/devices/dddddddddddddddddddddddddddddddd/ping",
+        true,
+    )
+    .await;
+    assert!(unknown.starts_with("HTTP/1.1 404 Not Found"));
+    assert!(body(&unknown).contains("device_not_found"));
+
+    // The peer discovered at startup is not paired.
+    let unpaired = request(
+        &server,
+        "POST",
+        "/api/v1/devices/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/ping",
+        true,
+    )
+    .await;
+    assert!(unpaired.starts_with("HTTP/1.1 409 Conflict"));
+    assert!(body(&unpaired).contains("device_not_paired"));
 
     server.server.shutdown().await.unwrap();
 }

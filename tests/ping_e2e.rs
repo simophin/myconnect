@@ -1,6 +1,8 @@
-//! End-to-end ping vertical slice: LAN discovery, protocol-v8 TLS pairing,
-//! and encrypted plugin dispatch of `kdeconnect.ping`, plus capability
-//! filtering that rejects a ping to a peer that never advertised support.
+//! End-to-end outgoing ping: a ping sent through the application reaches a
+//! paired KDE Connect peer over the TLS control connection, and capability
+//! filtering refuses to ping a peer that never advertised receiving pings.
+//! Incoming pings are not handled yet, so MyConnect itself advertises ping
+//! as outgoing only and two MyConnect instances cannot ping each other.
 
 use std::{
     net::{Ipv4Addr, SocketAddr},
@@ -14,16 +16,22 @@ use myconnect::{
         Query, QueryResult,
     },
     clipboard::InMemoryClipboard,
-    config::{FilesystemTrustStore, LocalIdentity, TrustStore},
+    config::{FilesystemTrustStore, LocalIdentity, TrustStore, TrustedDevice},
     device::DeviceReachability,
     plugins,
-    protocol::DeviceType,
+    protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
     transport::{
-        lan::{LanConfig, LanService, LocalDeviceInfo, TCP_PORT_RANGE},
-        tls::subject_public_key_info,
+        lan::{LanConfig, LanService, LocalDeviceInfo, MAX_DISCOVERY_DATAGRAM, TCP_PORT_RANGE},
+        tls::{self, PeerPin, TlsMaterial, subject_public_key_info},
     },
 };
-use tokio::{sync::mpsc, time::timeout};
+use serde_json::{Map, Value, json};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::{TcpStream, UdpSocket},
+    sync::mpsc,
+    time::timeout,
+};
 use tokio_util::sync::CancellationToken;
 
 struct Peer {
@@ -64,9 +72,9 @@ fn peer(name: &str) -> Peer {
     }
 }
 
-/// A `LocalDeviceInfo` that advertises the ping capability in both
-/// directions, as production code does via `plugins::capabilities()`.
-fn local_with_ping(device_id: &str, name: &str) -> LocalDeviceInfo {
+/// A `LocalDeviceInfo` advertising exactly what production code does via
+/// `plugins::capabilities()`: ping outgoing only.
+fn local_production(device_id: &str, name: &str) -> LocalDeviceInfo {
     let capabilities = plugins::capabilities();
     LocalDeviceInfo {
         device_id: device_id.into(),
@@ -74,18 +82,6 @@ fn local_with_ping(device_id: &str, name: &str) -> LocalDeviceInfo {
         device_type: DeviceType::Desktop,
         incoming_capabilities: capabilities.incoming,
         outgoing_capabilities: capabilities.outgoing,
-    }
-}
-
-/// A `LocalDeviceInfo` that advertises no plugin capabilities at all, used
-/// to prove capability filtering rejects an outgoing ping.
-fn local_without_capabilities(device_id: &str, name: &str) -> LocalDeviceInfo {
-    LocalDeviceInfo {
-        device_id: device_id.into(),
-        device_name: name.into(),
-        device_type: DeviceType::Desktop,
-        incoming_capabilities: Vec::new(),
-        outgoing_capabilities: Vec::new(),
     }
 }
 
@@ -149,21 +145,6 @@ async fn wait_for_paired(application: &ApplicationHandle, device_id: &str, expec
     .unwrap();
 }
 
-async fn wait_for_ping(application: &ApplicationHandle, device_id: &str, expected_message: &str) {
-    timeout(Duration::from_secs(3), async {
-        loop {
-            if let Some(body) = application.last_ping_received(device_id)
-                && body.message.as_deref() == Some(expected_message)
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
-}
-
 async fn pair(a: &ApplicationHandle, b: &ApplicationHandle, a_id: &str, b_id: &str) {
     let pairing = a.start_outgoing_pairing(b_id).unwrap();
     let mut b_events = b.subscribe();
@@ -183,8 +164,146 @@ async fn pair(a: &ApplicationHandle, b: &ApplicationHandle, a_id: &str, b_id: &s
     wait_for_paired(b, a_id, true).await;
 }
 
+/// An identity packet shaped like KDE Connect Android's, advertising that it
+/// can receive and send pings.
+fn kde_identity(device_id: &str, extra: Map<String, Value>) -> Vec<u8> {
+    let identity = IdentityBody {
+        device_id: device_id.into(),
+        device_name: "KDE Connect".into(),
+        device_type: DeviceType::Phone,
+        incoming_capabilities: vec![plugins::ping::PACKET_TYPE.into()],
+        outgoing_capabilities: vec![plugins::ping::PACKET_TYPE.into()],
+        protocol_version: 8,
+        extra,
+    };
+    let packet = Packet::from_body(0, "kdeconnect.identity", &identity).unwrap();
+    PacketCodec::new(MAX_DISCOVERY_DATAGRAM)
+        .encode(&packet)
+        .unwrap()
+}
+
+/// Read one newline-terminated packet byte by byte, so nothing after it
+/// (such as a TLS handshake) is consumed.
+async fn read_line<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S) -> String {
+    let mut line = Vec::new();
+    timeout(Duration::from_secs(3), async {
+        loop {
+            let byte = stream.read_u8().await.unwrap();
+            if byte == b'\n' {
+                break;
+            }
+            line.push(byte);
+        }
+    })
+    .await
+    .unwrap();
+    String::from_utf8(line).unwrap()
+}
+
 #[tokio::test]
-async fn discovery_pairing_and_ping_succeed_over_encrypted_dispatch() {
+async fn ping_reaches_a_paired_kde_connect_peer_over_tls() {
+    let local_peer = peer("Local");
+    let local_id = local_peer.identity.device_id().to_owned();
+    let kde = peer("KDE Connect");
+    let kde_id = kde.identity.device_id().to_owned();
+
+    // The KDE Connect peer is already paired: its certificate is pinned in
+    // the local trust store, as a completed pairing would have left it.
+    local_peer
+        .trust_store
+        .put(&TrustedDevice {
+            device_id: kde_id.clone(),
+            certificate_der: kde.identity.certificate_der().to_vec(),
+            last_trusted_protocol_version: 8,
+        })
+        .unwrap();
+
+    let kde_udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let service = LanService::start(
+        test_config(free_udp_addr(), kde_udp.local_addr().unwrap()),
+        local_production(&local_id, "Local"),
+        local_peer.application.clone(),
+        local_peer.commands,
+        local_peer.identity.clone(),
+        local_peer.trust_store.clone(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    // KDE Connect receives the announcement, dials the advertised port,
+    // sends its identity, and acts as the TLS server.
+    let mut datagram = vec![0_u8; MAX_DISCOVERY_DATAGRAM];
+    let (length, _) = timeout(Duration::from_secs(3), kde_udp.recv_from(&mut datagram))
+        .await
+        .unwrap()
+        .unwrap();
+    let announced: Value = serde_json::from_slice(&datagram[..length]).unwrap();
+    let tcp_port = announced["body"]["tcpPort"].as_u64().unwrap() as u16;
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, tcp_port))
+        .await
+        .unwrap();
+    let mut dial_extra = Map::new();
+    dial_extra.insert("targetDeviceId".into(), json!(local_id));
+    dial_extra.insert("targetProtocolVersion".into(), json!(8));
+    stream
+        .write_all(&kde_identity(&kde_id, dial_extra))
+        .await
+        .unwrap();
+    let material = TlsMaterial::new(
+        kde.identity.certificate_der(),
+        kde.identity.private_key_der(),
+    );
+    let mut tls_stream = timeout(
+        Duration::from_secs(3),
+        tls::accept(
+            stream,
+            &material,
+            &local_id,
+            PeerPin::Pinned(local_peer.identity.certificate_der().to_vec()),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    tls_stream
+        .write_all(&kde_identity(&kde_id, Map::new()))
+        .await
+        .unwrap();
+
+    // Our identity advertises ping as something we send, not receive.
+    let inner: Value = serde_json::from_str(&read_line(&mut tls_stream).await).unwrap();
+    assert_eq!(inner["body"]["deviceId"], json!(local_id));
+    let advertises = |field: &str| {
+        inner["body"][field]
+            .as_array()
+            .unwrap()
+            .contains(&json!(plugins::ping::PACKET_TYPE))
+    };
+    assert!(advertises("outgoingCapabilities"));
+    assert!(!advertises("incomingCapabilities"));
+
+    wait_for_reachability(
+        &local_peer.application,
+        &kde_id,
+        DeviceReachability::Connected,
+    )
+    .await;
+    wait_for_paired(&local_peer.application, &kde_id, true).await;
+
+    local_peer
+        .application
+        .send_ping(&kde_id, Some("hello from MyConnect".into()))
+        .unwrap();
+    let ping: Value = serde_json::from_str(&read_line(&mut tls_stream).await).unwrap();
+    assert_eq!(ping["type"], json!(plugins::ping::PACKET_TYPE));
+    assert_eq!(ping["body"]["message"], json!("hello from MyConnect"));
+
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn myconnect_peers_refuse_to_ping_each_other_until_incoming_ping_is_supported() {
     let a = peer("Peer A");
     let b = peer("Peer B");
     let a_id = a.identity.device_id().to_owned();
@@ -194,7 +313,7 @@ async fn discovery_pairing_and_ping_succeed_over_encrypted_dispatch() {
 
     let a_service = LanService::start(
         test_config(a_udp, b_udp),
-        local_with_ping(&a_id, "Peer A"),
+        local_production(&a_id, "Peer A"),
         a.application.clone(),
         a.commands,
         a.identity.clone(),
@@ -205,7 +324,7 @@ async fn discovery_pairing_and_ping_succeed_over_encrypted_dispatch() {
     .unwrap();
     let b_service = LanService::start(
         test_config(b_udp, a_udp),
-        local_with_ping(&b_id, "Peer B"),
+        local_production(&b_id, "Peer B"),
         b.application.clone(),
         b.commands,
         b.identity.clone(),
@@ -218,8 +337,7 @@ async fn discovery_pairing_and_ping_succeed_over_encrypted_dispatch() {
     wait_for_reachability(&a.application, &b_id, DeviceReachability::Connected).await;
     wait_for_reachability(&b.application, &a_id, DeviceReachability::Connected).await;
 
-    // Before pairing, a ping must not be delivered even though both sides
-    // are connected and capability-compatible.
+    // Before pairing, a ping is refused for lack of trust.
     assert!(matches!(
         a.application.send_ping(&b_id, Some("too early".into())),
         Err(ApplicationError::NotPaired)
@@ -227,71 +345,14 @@ async fn discovery_pairing_and_ping_succeed_over_encrypted_dispatch() {
 
     pair(&a.application, &b.application, &a_id, &b_id).await;
 
-    // Now that both devices are paired and each advertised
-    // `kdeconnect.ping`, a ping sent over the TLS-protected connection must
-    // be decoded and dispatched to the plugin handler on the other side.
-    a.application
-        .send_ping(&b_id, Some("hello from A".into()))
-        .unwrap();
-    wait_for_ping(&b.application, &a_id, "hello from A").await;
-
-    // And the reverse direction, proving the dispatch path is symmetric.
-    b.application
-        .send_ping(&a_id, Some("hello from B".into()))
-        .unwrap();
-    wait_for_ping(&a.application, &b_id, "hello from B").await;
-
-    a_service.shutdown().await.unwrap();
-    b_service.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn capability_filtering_prevents_sending_ping_to_a_peer_that_never_advertised_it() {
-    let a = peer("Peer A");
-    let b = peer("Peer B");
-    let a_id = a.identity.device_id().to_owned();
-    let b_id = b.identity.device_id().to_owned();
-    let a_udp = free_udp_addr();
-    let b_udp = free_udp_addr();
-
-    let a_service = LanService::start(
-        test_config(a_udp, b_udp),
-        local_with_ping(&a_id, "Peer A"),
-        a.application.clone(),
-        a.commands,
-        a.identity.clone(),
-        a.trust_store.clone(),
-        CancellationToken::new(),
-    )
-    .await
-    .unwrap();
-    // B advertises no plugin capabilities at all.
-    let b_service = LanService::start(
-        test_config(b_udp, a_udp),
-        local_without_capabilities(&b_id, "Peer B"),
-        b.application.clone(),
-        b.commands,
-        b.identity.clone(),
-        b.trust_store.clone(),
-        CancellationToken::new(),
-    )
-    .await
-    .unwrap();
-
-    wait_for_reachability(&a.application, &b_id, DeviceReachability::Connected).await;
-    wait_for_reachability(&b.application, &a_id, DeviceReachability::Connected).await;
-
-    pair(&a.application, &b.application, &a_id, &b_id).await;
-
-    // B is paired and connected, but never advertised `kdeconnect.ping` in
-    // its incoming capabilities, so sending must be refused with a typed
+    // Paired and connected, but B never advertised `kdeconnect.ping` in its
+    // incoming capabilities, so sending must be refused with a typed
     // rejection rather than silently dropped or delivered anyway.
     assert!(matches!(
         a.application
             .send_ping(&b_id, Some("should not send".into())),
         Err(ApplicationError::UnsupportedByPeer)
     ));
-    assert_eq!(b.application.last_ping_received(&a_id), None);
 
     a_service.shutdown().await.unwrap();
     b_service.shutdown().await.unwrap();

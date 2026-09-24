@@ -27,7 +27,7 @@ use crate::{
     clipboard::ClipboardService,
     config::{LocalIdentity, TrustError, TrustStore, TrustedDevice},
     device::DeviceSnapshot,
-    plugins::{self, clipboard::ClipboardBody, ping::PingBody, share},
+    plugins::{self, clipboard::ClipboardBody, share},
     protocol::{IdentityBody, Packet, PairingBody, verification_code},
     transport::{
         payload,
@@ -52,6 +52,7 @@ pub trait ApplicationService: Send + Sync {
     fn accept_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, ApplicationError>;
     fn cancel_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, ApplicationError>;
     fn forget_device(&self, device_id: &str) -> Result<(), ApplicationError>;
+    fn send_ping(&self, device_id: &str, message: Option<String>) -> Result<(), ApplicationError>;
     fn set_clipboard(&self, text: String) -> Result<ClipboardSnapshot, ApplicationError>;
     fn begin_outgoing_transfer(
         &self,
@@ -109,10 +110,6 @@ struct ApplicationState {
     /// all. Disabling this only affects network synchronization; the local
     /// snapshot remains readable and writable through the API.
     clipboard_sync_enabled: bool,
-    /// The most recent `kdeconnect.ping` body received from each paired
-    /// peer. This is an internal integration point for tests; it is not
-    /// exposed through the HTTP API or CLI.
-    last_ping_received: HashMap<String, PingBody>,
 }
 
 /// Cloneable application facade backed by bounded commands and snapshots.
@@ -172,7 +169,6 @@ impl ApplicationHandle {
                         source_device_id: None,
                     },
                     clipboard_sync_enabled: true,
-                    last_ping_received: HashMap::new(),
                 })),
                 commands,
                 events,
@@ -621,7 +617,6 @@ impl ApplicationHandle {
         }
 
         match plugins::dispatch_incoming(&packet) {
-            Ok(plugins::IncomingPluginPacket::Ping(body)) => self.handle_ping(device_id, body),
             Ok(plugins::IncomingPluginPacket::Clipboard(body)) => {
                 self.handle_clipboard(device_id, body, None)
             }
@@ -647,18 +642,10 @@ impl ApplicationHandle {
         }
     }
 
-    fn handle_ping(&self, device_id: &str, body: PingBody) {
-        if let Ok(mut state) = self.state.write() {
-            state.last_ping_received.insert(device_id.to_owned(), body);
-        }
-    }
-
-    /// Send a `kdeconnect.ping` packet to a paired, connected device.
-    ///
-    /// This is an internal integration point for tests, not a public MVP
-    /// API surface: it is not wired to any HTTP endpoint. Sending is
-    /// refused, with a typed error, unless the device is paired, connected,
-    /// and has advertised `kdeconnect.ping` in its `incomingCapabilities`.
+    /// Send a `kdeconnect.ping` packet, optionally carrying a message, to a
+    /// paired, connected device. Sending is refused, with a typed error,
+    /// unless the device is paired, connected, and has advertised
+    /// `kdeconnect.ping` in its `incomingCapabilities`.
     pub fn send_ping(
         &self,
         device_id: &str,
@@ -693,17 +680,6 @@ impl ApplicationHandle {
             .packets
             .try_send(packet)
             .map_err(|_| ApplicationError::DeviceNotConnected)
-    }
-
-    /// The most recent `kdeconnect.ping` body received from `device_id`, if
-    /// any. Internal test/integration helper; see [`Self::send_ping`].
-    pub fn last_ping_received(&self, device_id: &str) -> Option<PingBody> {
-        self.state
-            .read()
-            .ok()?
-            .last_ping_received
-            .get(device_id)
-            .cloned()
     }
 
     /// Set the local clipboard text and synchronize it to every paired,
@@ -1818,6 +1794,10 @@ impl ApplicationService for ApplicationHandle {
         ApplicationHandle::forget_device(self, device_id)
     }
 
+    fn send_ping(&self, device_id: &str, message: Option<String>) -> Result<(), ApplicationError> {
+        ApplicationHandle::send_ping(self, device_id, message)
+    }
+
     fn set_clipboard(&self, text: String) -> Result<ClipboardSnapshot, ApplicationError> {
         ApplicationHandle::set_clipboard(self, text)
     }
@@ -2010,7 +1990,7 @@ mod tests {
     }
 
     #[test]
-    fn unpaired_devices_cannot_exchange_pings() {
+    fn unpaired_devices_cannot_be_pinged() {
         let (handle, _commands) = handle();
         let device_id = "740bd4b9b4184ee497d6caf1da8151be";
         let identity = make_identity(device_id, vec![plugins::ping::PACKET_TYPE.into()]);
@@ -2026,16 +2006,10 @@ mod tests {
             handle.send_ping(device_id, None),
             Err(ApplicationError::NotPaired)
         ));
-
-        // An incoming ping from an unpaired connection must not be
-        // delivered to the plugin handler.
-        let packet = plugins::ping::build_packet(1_u64, Some("hi".into())).unwrap();
-        handle.handle_peer_packet(device_id, packet);
-        assert_eq!(handle.last_ping_received(device_id), None);
     }
 
     #[test]
-    fn capability_filtering_rejects_unsupported_peers_and_paired_devices_exchange_pings() {
+    fn capability_filtering_rejects_unsupported_peers_and_paired_devices_can_be_pinged() {
         let (handle, _commands) = handle();
         let device_id = "740bd4b9b4184ee497d6caf1da8151be";
         let identity = make_identity(device_id, Vec::new());
@@ -2063,16 +2037,17 @@ mod tests {
         handle.send_ping(device_id, Some("hello".into())).unwrap();
         let sent = rx.try_recv().unwrap();
         assert_eq!(sent.packet_type, plugins::ping::PACKET_TYPE);
+        let body: plugins::ping::PingBody = sent.body_as().unwrap();
+        assert_eq!(body.message.as_deref(), Some("hello"));
 
+        // Incoming pings are not handled yet: one from a paired peer is
+        // dropped without disturbing the connection.
         let incoming = plugins::ping::build_packet(2_u64, Some("pong".into())).unwrap();
         handle.handle_peer_packet(device_id, incoming);
+        handle.send_ping(device_id, None).unwrap();
         assert_eq!(
-            handle
-                .last_ping_received(device_id)
-                .unwrap()
-                .message
-                .as_deref(),
-            Some("pong")
+            rx.try_recv().unwrap().packet_type,
+            plugins::ping::PACKET_TYPE
         );
     }
 
