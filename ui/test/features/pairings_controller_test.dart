@@ -95,4 +95,36 @@ void main() {
       );
     },
   );
+
+  test('a request that arrives during a refetch survives it', () async {
+    await container.read(pairingsProvider.future);
+    // The daemon reads its pairings before the request comes in, and the
+    // response arrives after the request's event.
+    final fetched = Completer<List<Pairing>>();
+    when(daemon.api.pairings).thenAnswer((_) => fetched.future);
+
+    await daemon.emit(const EventStreamConnected());
+    await daemon.emit(PairingChanged(pairing(id: 'waiting')));
+    fetched.complete([]);
+    await pumpEventQueue();
+
+    expect(container.read(pendingIncomingPairingsProvider).map((p) => p.id), [
+      'waiting',
+    ]);
+  });
+
+  test('a request that arrives during the first fetch survives it', () async {
+    final fetched = Completer<List<Pairing>>();
+    when(daemon.api.pairings).thenAnswer((_) => fetched.future);
+    final loaded = container.read(pairingsProvider.future);
+    await pumpEventQueue();
+
+    await daemon.emit(PairingChanged(pairing(id: 'waiting')));
+    fetched.complete([]);
+    await loaded;
+
+    expect(container.read(pendingIncomingPairingsProvider).map((p) => p.id), [
+      'waiting',
+    ]);
+  });
 }

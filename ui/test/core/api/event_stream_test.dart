@@ -34,4 +34,27 @@ void main() {
       expect(attempts, 3);
     },
   );
+
+  test('replays events recorded during each fetch onto its result', () async {
+    final replay = SnapshotReplay<List<String>>(
+      (names, event) => switch (event) {
+        UnhandledEvent(:final type) => [...names, type],
+        _ => names,
+      },
+    );
+    final first = Completer<List<String>>();
+    final second = Completer<List<String>>();
+
+    replay.record(const UnhandledEvent('before'));
+    final firstResult = replay.fetch(() => first.future);
+    replay.record(const UnhandledEvent('a'));
+    final secondResult = replay.fetch(() => second.future);
+    replay.record(const UnhandledEvent('b'));
+    second.complete(['snapshot 2']);
+    expect(await secondResult, ['snapshot 2', 'b']);
+
+    replay.record(const UnhandledEvent('c'));
+    first.complete(['snapshot 1']);
+    expect(await firstResult, ['snapshot 1', 'a', 'b', 'c']);
+  });
 }

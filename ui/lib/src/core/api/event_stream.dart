@@ -35,3 +35,47 @@ Stream<DaemonEvent> reconnectingEvents(
     );
   }
 }
+
+/// Keeps snapshots fetched over HTTP consistent with the event stream.
+///
+/// A controller patches its cached snapshot with each event, and refetches
+/// the whole snapshot when the stream (re)connects. An event that arrives
+/// while a fetch is in flight is applied to the old snapshot, which the
+/// fetch's result then replaces; if the daemon read its state before that
+/// event, the change would be lost until the next reconnect. [fetch] replays
+/// such events onto the result.
+///
+/// Every event the controller receives must go through [record].
+class SnapshotReplay<T> {
+  new(this._apply);
+
+  /// Applies one event to a snapshot, returning it unchanged when the event
+  /// doesn't concern it.
+  final T Function(T snapshot, DaemonEvent event) _apply;
+
+  final _inFlight = <List<DaemonEvent>>{};
+
+  void record(DaemonEvent event) {
+    for (final missed in _inFlight) {
+      missed.add(event);
+    }
+  }
+
+  /// Run [fetch] and return its snapshot with the events recorded since the
+  /// fetch started applied, in order. Replaying an event the snapshot
+  /// already reflects is harmless: the last event about an item is its
+  /// latest state.
+  Future<T> fetch(Future<T> Function() fetch) async {
+    final missed = <DaemonEvent>[];
+    _inFlight.add(missed);
+    try {
+      var snapshot = await fetch();
+      for (final event in missed) {
+        snapshot = _apply(snapshot, event);
+      }
+      return snapshot;
+    } finally {
+      _inFlight.remove(missed);
+    }
+  }
+}

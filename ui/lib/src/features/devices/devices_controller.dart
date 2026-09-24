@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
+import 'package:myconnect_ui/src/core/api/event_stream.dart';
 import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/providers.dart';
@@ -48,16 +49,20 @@ class DevicesController extends AsyncNotifier<List<Device>> {
         .listen(_onEvent);
     ref.onDispose(subscription.cancel);
     final api = await ref.watch(apiProvider.future);
-    return _sorted(await api.devices());
+    return await _replay.fetch(() async => _sorted(await api.devices()));
   }
+
+  final _replay = SnapshotReplay<List<Device>>(_applied);
 
   /// Refetch the snapshot. A failure keeps the current list, since the
   /// connection indicator already reports an unreachable daemon.
   Future<void> refresh() async {
     try {
       final api = await ref.read(apiProvider.future);
-      final devices = await api.devices();
-      if (ref.mounted) state = AsyncData(_sorted(devices));
+      final devices = await _replay.fetch(
+        () async => _sorted(await api.devices()),
+      );
+      if (ref.mounted) state = AsyncData(devices);
     } on Object catch (error) {
       _log.warning('Device refresh failed: $error');
     }
@@ -75,38 +80,39 @@ class DevicesController extends AsyncNotifier<List<Device>> {
   }
 
   void _onEvent(DaemonEvent event) {
+    _replay.record(event);
     switch (event) {
       case EventStreamConnected():
         unawaited(refresh());
-      case DeviceChanged(:final device):
-        _upsert(device);
-      case DeviceForgotten(:final device):
-        _remove(device.deviceId);
+      case DeviceChanged() || DeviceForgotten():
+        if (state.value case final current?) {
+          state = AsyncData(_applied(current, event));
+        }
       case _:
         break;
     }
   }
 
-  void _upsert(Device device) {
-    final current = state.value;
-    if (current == null) return;
-    state = AsyncData(
-      _sorted([
-        for (final existing in current)
-          if (existing.deviceId != device.deviceId) existing,
-        device,
-      ]),
-    );
-  }
-
   void _remove(String deviceId) {
     final current = state.value;
     if (current == null) return;
-    state = AsyncData([
-      for (final device in current)
-        if (device.deviceId != deviceId) device,
-    ]);
+    state = AsyncData(_without(current, deviceId));
   }
+
+  static List<Device> _applied(List<Device> devices, DaemonEvent event) =>
+      switch (event) {
+        DeviceChanged(:final device) => _sorted([
+          ..._without(devices, device.deviceId),
+          device,
+        ]),
+        DeviceForgotten(:final device) => _without(devices, device.deviceId),
+        _ => devices,
+      };
+
+  static List<Device> _without(List<Device> devices, String deviceId) => [
+    for (final device in devices)
+      if (device.deviceId != deviceId) device,
+  ];
 
   static List<Device> _sorted(List<Device> devices) => [...devices]
     ..sort(
