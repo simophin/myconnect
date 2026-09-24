@@ -7,6 +7,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:myconnect_ui/src/core/api/api_exception.dart';
 import 'package:myconnect_ui/src/core/api/models/device.dart';
+import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 
 import '../helpers.dart';
@@ -138,10 +139,43 @@ void main() {
     daemon.shell.selectTrayItem(['Laptop', 'Send files…']);
     await tester.pumpAndSettle();
 
-    expect(daemon.shell.visible, isTrue);
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(daemon.shell.visible, isFalse);
     verify(() => daemon.api.sendFile(_laptopId, photo)).called(1);
     verify(() => daemon.api.sendFile(_laptopId, notes)).called(1);
+    expect(daemon.notifications.shown.values, ['Sending 2 files.']);
+  });
+
+  testWidgets('the tray says so when the device dropped during the pick', (
+    tester,
+  ) async {
+    final picker = FileSelectorPlatform.instance;
+    addTearDown(() => FileSelectorPlatform.instance = picker);
+    final daemon = await pumpApp(tester, daemonWithRecipients());
+    daemon.shell.onCloseRequested!();
+    await tester.pumpAndSettle();
+    // The device drops while the picker is open.
+    FileSelectorPlatform.instance = _PickFiles(
+      [photo],
+      onPick: () {
+        daemon.events.add(
+          DeviceChanged(
+            device(
+              id: _laptopId,
+              name: 'Laptop',
+              reachability: DeviceReachability.unavailable,
+            ),
+          ),
+        );
+      },
+    );
+
+    daemon.shell.selectTrayItem(['Laptop', 'Send files…']);
+    await tester.pumpAndSettle();
+
+    verifyNever(() => daemon.api.sendFile(any(), any()));
+    expect(daemon.notifications.shown.values, [
+      'The device is not connected right now.',
+    ]);
   });
 
   testWidgets('failed uploads are reported once', (tester) async {
@@ -184,14 +218,21 @@ Future<void> _drop(WidgetTester tester, List<String> paths) =>
 
 /// The file picker, answered with [paths].
 class _PickFiles extends FileSelectorPlatform {
-  new(this.paths);
+  new(this.paths, {this.onPick});
 
   final List<String> paths;
+
+  /// Runs while the picker is open; the pick returns once it has settled.
+  final VoidCallback? onPick;
 
   @override
   Future<List<XFile>> openFiles({
     List<XTypeGroup>? acceptedTypeGroups,
     String? initialDirectory,
     String? confirmButtonText,
-  }) async => [for (final path in paths) XFile(path)];
+  }) async {
+    onPick?.call();
+    await Future<void>.delayed(Duration.zero);
+    return [for (final path in paths) XFile(path)];
+  }
 }

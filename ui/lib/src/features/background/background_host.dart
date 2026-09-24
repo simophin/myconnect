@@ -166,18 +166,29 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
     await ref.read(desktopShellProvider).showWindow();
   }
 
-  /// Show the window, then ask for files to send to [device].
+  /// Ask for files and send them to [device], leaving the window as it is;
+  /// the outcome is reported, and progress shows on the transfers page.
   Future<void> _sendFiles(Device device) async {
-    await ref.read(desktopShellProvider).showWindow();
     final files = await openFiles(confirmButtonText: 'Send');
     if (files.isEmpty || !mounted) return;
-    // No navigator while the daemon is starting or failed to start.
-    final context = navigatorContext(ref);
-    if (context == null || !context.mounted) return;
-    // Asks for another device if this one dropped while the user picked.
-    await confirmAndSendFiles(context, ref, [
-      for (final file in files) file.path,
-    ], to: device);
+    // The device may have dropped while the user picked.
+    final current = ref.read(deviceProvider(device.deviceId));
+    if (current == null || !current.acceptsFiles) {
+      await _report(
+        "Couldn't send to ${device.deviceName}",
+        'The device is not connected right now.',
+      );
+      return;
+    }
+    final failure = await startTransfers(
+      ref.read(transfersProvider.notifier),
+      current,
+      [for (final file in files) file.path],
+    );
+    final sending = files.length == 1
+        ? 'Sending ${files.single.name}'
+        : 'Sending ${files.length} files';
+    await _report(current.deviceName, failure ?? '$sending.');
   }
 
   /// Ping [device] without showing the window; only a failure is reported.
