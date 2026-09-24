@@ -1,33 +1,16 @@
-# Builds the desktop app for Linux, macOS and Windows. On a published
-# release the packages are attached to it; otherwise they are workflow
-# artifacts.
-#
-# The push to main trigger is temporary, to shake out the builds; drop it
-# once they are reliable, leaving releases (and packaging changes in PRs).
+# Builds the desktop app for Linux, macOS and Windows when a release is
+# published, and attaches the packages to it. It can also be run by hand
+# (Actions → Build → Run workflow), leaving the packages as run artifacts.
 name: Build
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    paths:
-      - .github/workflows/build.yml
-      - ffi/**
-      - ui/lib/src/core/daemon/**
-      - ui/linux/**
-      - ui/macos/**
-      - ui/windows/**
   release:
     types: [published]
   workflow_dispatch:
     inputs:
       version:
-        description: "Version shown to users, e.g. v1.2.3 (default: pubspec.yaml's)"
+        description: "Version shown to users, e.g. v1.2.3 (default: dev)"
         required: false
-
-concurrency:
-  group: build-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -39,7 +22,7 @@ env:
 jobs:
   # The app's version comes from the release tag (or the manual run's input)
   # as MAJOR.MINOR.PATCH, with an optional leading "v"; the build number is
-  # this workflow's run number. Without a tag, pubspec.yaml's version is used.
+  # this workflow's run number. Without one, the app says "dev".
   version:
     name: Version
     runs-on: ubuntu-24.04
@@ -62,7 +45,10 @@ jobs:
               exit 1
             fi
             echo "name=$version" >> "$GITHUB_OUTPUT"
-            args="$args --build-name=$version"
+            # --build-name sets the OS's version metadata (Info.plist, the
+            # Windows version resource); the define is what Settings shows,
+            # since on Linux --build-name doesn't reach the Dart side.
+            args="$args --build-name=$version --dart-define=MYCONNECT_VERSION=$version"
           else
             echo "name=dev-${SHA::7}" >> "$GITHUB_OUTPUT"
           fi

@@ -97,4 +97,16 @@ void main() {
     );
     expect(toggle.value, isFalse);
   });
+
+  testWidgets('shows the version, dev without a MYCONNECT_VERSION', (
+    tester,
+  ) async {
+    await pumpApp(tester, TestDaemon());
+
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(ListTile, 'Version'), findsOneWidget);
+    expect(find.text('dev'), findsOneWidget);
+  });
 }

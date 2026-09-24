@@ -45,6 +45,7 @@ flutter run -d linux
 | `MYCONNECT_DEVICE_NAME` | Name advertised to peers. Overrides the saved setting for this run; without either, the host name. |
 | `MYCONNECT_DISCOVERY_LOOPBACK` | `true` to discover only instances on this machine. |
 | `MYCONNECT_SYSTEM_CLIPBOARD` | `false` to keep the embedded daemon's clipboard in memory instead of syncing the desktop clipboard. |
+| `MYCONNECT_VERSION` | Version shown in Settings; CI sets it from the release tag. Without it, `dev`. |
 
 ### Two instances on one machine
 

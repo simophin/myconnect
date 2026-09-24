@@ -7,6 +7,15 @@ import 'package:myconnect_ui/src/core/api/models/settings.dart';
 import 'package:myconnect_ui/src/features/settings/settings_controller.dart';
 import 'package:myconnect_ui/src/shared/widgets.dart';
 
+/// The version users see: the release tag CI builds with
+/// (`--dart-define=MYCONNECT_VERSION`), or `dev` for a local build. The
+/// `const` matters: outside a constant context `fromEnvironment` always
+/// returns the default.
+const _appVersion = String.fromEnvironment(
+  'MYCONNECT_VERSION',
+  defaultValue: 'dev',
+);
+
 /// The daemon's settings. Every change is saved by the daemon right away.
 class SettingsPage extends ConsumerWidget {
   const new({super.key});
@@ -110,6 +119,11 @@ class _SettingsList extends ConsumerWidget {
             (controller) => controller.setCloseToTray(enabled: enabled),
           ),
         ),
+      ),
+      const ListTile(
+        leading: Icon(Icons.info_outline),
+        title: Text('Version'),
+        subtitle: Text(_appVersion),
       ),
     ],
   );
