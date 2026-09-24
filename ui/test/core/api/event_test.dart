@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
+import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 
 Map<String, Object?> deviceJson({String reachability = 'connected'}) => {
   'deviceId': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -55,6 +56,38 @@ void main() {
     final pairing = (event as PairingChanged).pairing;
     expect(pairing.status, PairingStatus.awaitingConfirmation);
     expect(pairing.needsLocalConfirmation, isTrue);
+  });
+
+  test('decodes transfer events, telling cancellation from failure', () {
+    Map<String, Object?> transferJson(String status) => {
+      'id': '00000000-0000-0000-0000-000000000002',
+      'deviceId': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      'deviceName': 'Phone',
+      'direction': 'incoming',
+      'status': status,
+      'fileName': 'photo.jpg',
+      'totalBytes': 10,
+      'transferredBytes': 10,
+      'createdAt': 1,
+      'updatedAt': 2,
+      if (status == 'completed') 'savedPath': '/home/me/Downloads/photo.jpg',
+    };
+    final completed = DaemonEvent.fromJson({
+      'type': 'transfer.completed',
+      'data': transferJson('completed'),
+    });
+    expect(
+      (completed as TransferChanged).transfer.savedPath,
+      '/home/me/Downloads/photo.jpg',
+    );
+    final cancelled = DaemonEvent.fromJson({
+      'type': 'transfer.failed',
+      'data': transferJson('cancelled'),
+    });
+    expect(
+      (cancelled as TransferChanged).transfer.status,
+      TransferStatus.cancelled,
+    );
   });
 
   test('tolerates event types and enum values from a newer daemon', () {

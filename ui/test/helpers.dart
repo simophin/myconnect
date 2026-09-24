@@ -10,6 +10,7 @@ import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
 import 'package:myconnect_ui/src/core/api/models/status.dart';
+import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 import 'package:myconnect_ui/src/core/api/myconnect_api.dart';
 import 'package:myconnect_ui/src/core/daemon/daemon_host.dart';
 import 'package:myconnect_ui/src/core/desktop/desktop_notifications.dart';
@@ -88,12 +89,13 @@ Device device({
   bool paired = true,
   bool pairing = false,
   DeviceReachability reachability = DeviceReachability.connected,
+  List<String> incomingCapabilities = const [],
 }) => Device(
   deviceId: id,
   deviceName: name,
   deviceType: DeviceType.phone,
   protocolVersion: 8,
-  incomingCapabilities: const [],
+  incomingCapabilities: incomingCapabilities,
   outgoingCapabilities: const [],
   reachability: reachability,
   paired: paired,
@@ -120,11 +122,37 @@ Pairing pairing({
   verificationCode: code,
 );
 
+Transfer transfer({
+  String id = 't1',
+  String deviceId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  String deviceName = 'Phone',
+  TransferDirection direction = TransferDirection.incoming,
+  TransferStatus status = TransferStatus.transferring,
+  String fileName = 'photo.jpg',
+  int transferredBytes = 0,
+  int createdAt = 0,
+  int? updatedAt,
+  String? savedPath,
+}) => Transfer(
+  id: id,
+  deviceId: deviceId,
+  deviceName: deviceName,
+  direction: direction,
+  status: status,
+  fileName: fileName,
+  totalBytes: 100,
+  transferredBytes: transferredBytes,
+  createdAt: createdAt,
+  updatedAt: updatedAt ?? createdAt,
+  savedPath: savedPath,
+);
+
 /// An API mock with empty defaults, plus a controllable event stream.
 class TestDaemon {
   new() {
     when(api.devices).thenAnswer((_) async => devices);
     when(api.pairings).thenAnswer((_) async => pairings);
+    when(api.transfers).thenAnswer((_) async => transfers);
     when(api.status).thenAnswer(
       (_) async => const DaemonStatus(
         version: '0.1.0',
@@ -142,6 +170,7 @@ class TestDaemon {
   final events = StreamController<DaemonEvent>.broadcast();
   List<Device> devices = [];
   List<Pairing> pairings = [];
+  List<Transfer> transfers = [];
 
   List<Override> get overrides => [
     daemonHostProvider.overrideWithValue(host),

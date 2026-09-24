@@ -321,6 +321,7 @@ async fn run_successful_transfer(harness: &Harness, file_name: &str, data: Vec<u
     assert_eq!(incoming.file_name, file_name);
 
     let destination = harness.b_download_dir.join(file_name);
+    assert_eq!(incoming.saved_path.as_deref(), Some(destination.as_path()));
     let written = tokio::fs::read(&destination).await.unwrap();
     assert_eq!(written, expected);
     // The temporary file must not survive a completed transfer.

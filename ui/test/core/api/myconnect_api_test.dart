@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -100,6 +101,42 @@ void main() {
         isA<ApiException>().having((e) => e.code, 'code', 'daemon_unavailable'),
       ),
     );
+  });
+
+  test('uploads a file as deviceId, then a file part with its size', () async {
+    final directory = await Directory.systemTemp.createTemp('myconnect_test');
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/notes.txt')
+      ..writeAsStringSync('hello');
+    final adapter = FakeAdapter(
+      (_) => json({
+        'id': 't1',
+        'deviceId': 'device',
+        'deviceName': 'Phone',
+        'direction': 'outgoing',
+        'status': 'completed',
+        'fileName': 'notes.txt',
+        'totalBytes': 5,
+        'transferredBytes': 5,
+        'createdAt': 1,
+        'updatedAt': 2,
+      }, status: 202),
+    );
+
+    final transfer = await apiWith(adapter).sendFile('device', file.path);
+
+    expect(transfer.fileName, 'notes.txt');
+    final request = adapter.requests.single;
+    expect(request.path, 'transfers');
+    expect(request.receiveTimeout, Duration.zero);
+    final form = request.data as FormData;
+    expect(form.fields.single, isA<MapEntry<String, String>>());
+    expect(form.fields.single.key, 'deviceId');
+    expect(form.fields.single.value, 'device');
+    final part = form.files.single;
+    expect(part.key, 'file');
+    expect(part.value.filename, 'notes.txt');
+    expect(part.value.headers?['content-length'], ['5']);
   });
 
   test('streams events, announcing the connection first', () async {

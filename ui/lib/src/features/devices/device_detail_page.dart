@@ -1,8 +1,11 @@
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/features/devices/devices_controller.dart';
+import 'package:myconnect_ui/src/features/transfers/transfer_tile.dart';
+import 'package:myconnect_ui/src/features/transfers/transfers_controller.dart';
 import 'package:myconnect_ui/src/shared/widgets.dart';
 
 class DeviceDetailPage extends ConsumerWidget {
@@ -31,8 +34,30 @@ class _DeviceDetails extends ConsumerStatefulWidget {
   ConsumerState<_DeviceDetails> createState() => _DeviceDetailsState();
 }
 
+/// The capability a peer lists when it accepts files.
+const _shareCapability = 'kdeconnect.share.request';
+
+/// How many of this device's transfers the page lists.
+const _recentTransfers = 5;
+
 class _DeviceDetailsState extends ConsumerState<_DeviceDetails> {
   bool _busy = false;
+
+  Future<void> _sendFile() async {
+    final file = await openFile(confirmButtonText: 'Send');
+    if (file == null || !mounted) return;
+    // The upload outlives this page if the user navigates away, or if the
+    // device drops and unmounts it, so report errors through a messenger
+    // captured now.
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref
+          .read(transfersProvider.notifier)
+          .send(widget.device.deviceId, file.path);
+    } on Object catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(describeError(error))));
+    }
+  }
 
   Future<void> _unpair() async {
     final device = widget.device;
@@ -75,6 +100,13 @@ class _DeviceDetailsState extends ConsumerState<_DeviceDetails> {
   Widget build(BuildContext context) {
     final device = widget.device;
     final theme = Theme.of(context);
+    final canSend =
+        device.isConnected &&
+        device.incomingCapabilities.contains(_shareCapability);
+    final transfers = ref
+        .watch(transferListProvider(device.deviceId))
+        .take(_recentTransfers)
+        .toList();
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -87,6 +119,31 @@ class _DeviceDetailsState extends ConsumerState<_DeviceDetails> {
         _Fact('Device ID', device.deviceId),
         _Fact('Type', device.deviceType.name),
         _Fact('Protocol version', '${device.protocolVersion}'),
+        const SizedBox(height: 16),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: FilledButton.icon(
+            onPressed: canSend ? _sendFile : null,
+            icon: const Icon(Icons.upload_file),
+            label: const Text('Send file'),
+          ),
+        ),
+        if (transfers.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          ListTile(
+            title: Text('Recent transfers', style: theme.textTheme.titleSmall),
+            trailing: TextButton(
+              onPressed: () => context.go('/transfers'),
+              child: const Text('See all'),
+            ),
+          ),
+          for (final transfer in transfers)
+            TransferTile(
+              transfer,
+              showDevice: false,
+              key: ValueKey(transfer.id),
+            ),
+        ],
         const SizedBox(height: 24),
         Align(
           alignment: Alignment.centerLeft,

@@ -4,8 +4,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:myconnect_ui/src/core/api/api_exception.dart';
+import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
+import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 
 import '../helpers.dart';
 
@@ -86,5 +88,81 @@ void main() {
 
     verify(() => daemon.api.forgetDevice(device().deviceId)).called(1);
     expect(find.text('No paired devices yet'), findsOneWidget);
+  });
+
+  testWidgets('files can be sent only to a connected device that takes them', (
+    tester,
+  ) async {
+    FilledButton sendButton() =>
+        tester.widget(find.widgetWithText(FilledButton, 'Send file'));
+    final daemon = TestDaemon()..devices = [device(name: 'Pixel')];
+    await pumpApp(tester, daemon);
+    await tester.tap(find.text('Pixel'));
+    await tester.pumpAndSettle();
+    expect(sendButton().onPressed, isNull);
+
+    daemon.events.add(
+      DeviceChanged(
+        device(
+          name: 'Pixel',
+          incomingCapabilities: ['kdeconnect.share.request'],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(sendButton().onPressed, isNotNull);
+
+    daemon.events.add(
+      DeviceChanged(
+        device(
+          name: 'Pixel',
+          incomingCapabilities: ['kdeconnect.share.request'],
+          reachability: DeviceReachability.unavailable,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(sendButton().onPressed, isNull);
+  });
+
+  testWidgets('the transfers page shows progress and cancels', (tester) async {
+    final daemon = TestDaemon()
+      ..transfers = [
+        transfer(id: 'running', fileName: 'movie.mkv', transferredBytes: 50),
+        transfer(
+          id: 'done',
+          fileName: 'notes.txt',
+          status: TransferStatus.completed,
+          savedPath: '/home/me/Downloads/notes.txt',
+        ),
+      ];
+    when(
+      () => daemon.api.cancelTransfer('running'),
+    ).thenAnswer((_) async => transfer(id: 'running', fileName: 'movie.mkv'));
+    await pumpApp(tester, daemon);
+
+    await tester.tap(find.byTooltip('Transfers'));
+    await tester.pumpAndSettle();
+    expect(find.text('From Phone · 50 bytes of 100 bytes'), findsOneWidget);
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
+    expect(find.byTooltip('Open folder'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Cancel'));
+    await tester.pumpAndSettle();
+    verify(() => daemon.api.cancelTransfer('running')).called(1);
+
+    daemon.events.add(
+      TransferChanged(
+        transfer(
+          id: 'running',
+          fileName: 'movie.mkv',
+          status: TransferStatus.cancelled,
+          updatedAt: 1,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('From Phone · Cancelled'), findsOneWidget);
+    expect(find.byType(LinearProgressIndicator), findsNothing);
   });
 }

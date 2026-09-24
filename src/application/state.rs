@@ -173,6 +173,10 @@ pub struct TransferSnapshot {
     pub updated_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<OperationErrorCode>,
+    /// Where a completed incoming file was saved. It can differ from
+    /// `file_name` when a file of that name already existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_path: Option<PathBuf>,
 }
 
 /// Mutable core representation of a transfer operation.
@@ -225,6 +229,17 @@ impl Transfer {
         }
         self.snapshot.transferred_bytes = transferred_bytes;
         self.snapshot.updated_at = updated_at;
+        Ok(self.snapshot())
+    }
+
+    /// Mark an incoming transfer completed, recording where the file landed.
+    pub fn complete(
+        &mut self,
+        saved_path: Option<PathBuf>,
+        updated_at: u64,
+    ) -> Result<TransferSnapshot, TransferTransitionError> {
+        self.transition(TransferStatus::Completed, updated_at, None)?;
+        self.snapshot.saved_path = saved_path;
         Ok(self.snapshot())
     }
 }
@@ -338,6 +353,7 @@ mod tests {
             created_at: 100,
             updated_at: 100,
             error_code: None,
+            saved_path: None,
         })
     }
 

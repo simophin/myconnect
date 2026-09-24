@@ -60,6 +60,9 @@ Working and verified live (UI ↔ CLI daemon over loopback):
   token, and a "reconnecting" banner if the event stream drops.
 - Close to tray, tray Show and Quit, pairing-request notifications, and a
   single instance on Linux (item 3).
+- Sending a file from a device's page, a transfers view with progress,
+  cancel, and open file/folder, and a notification for received files
+  (item 4).
 
 Only Linux bundles the native library. Nothing has been tested against a real
 KDE Connect install yet.
@@ -71,7 +74,7 @@ KDE Connect install yet.
 | 1 | ~~[Tell the peer when unpairing](#1-tell-the-peer-when-unpairing)~~ **Done** | P0 | Rust |
 | 2 | ~~[Interop check against real KDE Connect](#2-interop-check-against-real-kde-connect)~~ **Done** | P0 | Manual + Rust fixes |
 | 3 | ~~[Keep running in the background](#3-keep-running-in-the-background-tray-and-notifications)~~ **Done** | P0 | Flutter |
-| 4 | [Send files and a transfers view](#4-send-files-and-a-transfers-view) | P1 | Flutter (+ small API) |
+| 4 | ~~[Send files and a transfers view](#4-send-files-and-a-transfers-view)~~ **Done** | P1 | Flutter (+ small API) |
 | 5 | [Daemon settings API and screen](#5-daemon-settings-api-and-settings-screen) | P1 | Rust + Flutter |
 | 6 | [OS clipboard integration](#6-os-clipboard-integration) | P1 | Rust |
 | 7 | [Automated end-to-end test](#7-automated-end-to-end-test) | P1 | Test infra |
@@ -229,6 +232,29 @@ API port stops listening).
 ---
 
 ## 4. Send files and a transfers view
+
+> **Done (2026-09-24).** The device page has a "Send file" button
+> (`file_selector`), enabled when the peer is connected and lists
+> `kdeconnect.share.request`, and shows that device's five most recent
+> transfers. `/transfers` lists all of them. Each row shows direction,
+> progress and outcome, with Cancel while running and Open file/Open folder
+> (`url_launcher`) once received. `TransfersController` follows the pairings
+> pattern and never lets a stale upload response overwrite a newer event.
+> Received files raise a notification while the window is unfocused. Daemon
+> changes: completed incoming snapshots carry `savedPath` (absolute), so no
+> download directory is needed in `/status`. The upload route no longer
+> sits under the 15 s request deadline (the "verify first" worry was real:
+> a new test in `tests/api.rs` fails without the fix), and fails with
+> `request_timeout` only when the upload stalls for that long.
+> `transfer.progress` events are throttled to one per 100 ms per transfer,
+> since one per 64 KiB chunk could overflow the 256-slot event bus and drop
+> the UI's stream. Verified live under Xvfb against a CLI peer: 50 MB each
+> way, byte-identical; a 2 GB upload still running after 20 s, then
+> cancelled from the app (the partial file was removed on the peer); Open
+> folder launched the file manager on the download directory. Not done:
+> drag-and-drop onto a device (`desktop_drop`), sending several files at
+> once (the API takes one file per request), and a live check of the
+> received-file notification (it is covered by a widget test).
 
 **Why.** File transfer is a core feature and the API already supports it end
 to end; only the UI is missing.

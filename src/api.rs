@@ -120,6 +120,10 @@ impl Default for ApiServerConfig {
 struct ApiState {
     application: Arc<dyn ApplicationService>,
     shutdown: CancellationToken,
+    /// How long an upload may go without making progress. Uploads are exempt
+    /// from the whole-request deadline, since a large file legitimately takes
+    /// longer than that.
+    upload_idle_timeout: Duration,
 }
 
 pub struct ApiServer {
@@ -145,6 +149,7 @@ impl ApiServer {
             ApiState {
                 application,
                 shutdown: shutdown.clone(),
+                upload_idle_timeout: config.request_timeout,
             },
             token,
             &config,
@@ -213,6 +218,8 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
     // default applied below. Because this layer is added on the inner,
     // not-yet-nested router, it is closer to the handler than the outer
     // `DefaultBodyLimit` and therefore overrides it for these routes only.
+    // It is also merged in after the request deadline is applied, so a large
+    // upload isn't cut off; the handler enforces an idle timeout instead.
     let transfer_upload = Router::new()
         .route(TRANSFER_UPLOAD_PATH, post(post_transfer))
         .layer(DefaultBodyLimit::max(config.max_transfer_body_bytes));
@@ -237,21 +244,21 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
             "/transfers/{transfer_id}",
             get(get_transfer).delete(delete_transfer),
         )
-        .merge(transfer_upload)
         .route("/clipboard", get(get_clipboard).put(put_clipboard))
         .route("/events", get(get_events))
         .fallback(api_not_found)
         .method_not_allowed_fallback(method_not_allowed)
+        .layer(middleware::from_fn_with_state(
+            config.request_timeout,
+            enforce_request_timeout,
+        ))
+        .merge(transfer_upload)
         .layer(middleware::from_fn_with_state(
             BodyLimits {
                 default: config.max_request_body_bytes,
                 transfer_upload: config.max_transfer_body_bytes,
             },
             enforce_content_length,
-        ))
-        .layer(middleware::from_fn_with_state(
-            config.request_timeout,
-            enforce_request_timeout,
         ));
     // Without a configured token the API is open to any local client, which
     // is the default for a CLI-started daemon bound to loopback.
@@ -533,6 +540,10 @@ async fn delete_transfer(
 /// connection. The `file` part must declare its length in a `Content-Length`
 /// part header (as the bundled CLI does); this is the transfer's declared
 /// size, checked against the configured maximum before anything is sent.
+///
+/// The request has no overall deadline, but fails with `request_timeout` if
+/// the client stops sending, or the peer stops reading, for longer than the
+/// idle timeout.
 async fn post_transfer(
     State(state): State<ApiState>,
     mut multipart: Multipart,
@@ -540,18 +551,17 @@ async fn post_transfer(
     let mut device_id: Option<String> = None;
     let mut created: Option<TransferSnapshot> = None;
 
+    let idle = state.upload_idle_timeout;
     loop {
-        let field = multipart
-            .next_field()
-            .await
+        let field = idle_timeout(idle, multipart.next_field())
+            .await?
             .map_err(|_| ApiProblem::bad_request("invalid_multipart"))?;
         let Some(mut field) = field else { break };
 
         match field.name() {
             Some("deviceId") => {
-                let text = field
-                    .text()
-                    .await
+                let text = idle_timeout(idle, field.text())
+                    .await?
                     .map_err(|_| ApiProblem::bad_request("invalid_multipart"))?;
                 device_id = Some(text);
             }
@@ -574,9 +584,8 @@ async fn post_transfer(
                 created = Some(transfer);
 
                 loop {
-                    let chunk = field
-                        .chunk()
-                        .await
+                    let chunk = idle_timeout(idle, field.chunk())
+                        .await?
                         .map_err(|_| ApiProblem::bad_request("invalid_multipart"))?;
                     let Some(chunk) = chunk else { break };
                     if chunk.is_empty() {
@@ -586,14 +595,14 @@ async fn post_transfer(
                     // task ends (success, failure, or cancellation); there is
                     // nothing more useful to do with the rest of the upload
                     // in that case, so stop forwarding it.
-                    if sender.send(chunk).await.is_err() {
+                    if idle_timeout(idle, sender.send(chunk)).await?.is_err() {
                         break;
                     }
                 }
                 drop(sender);
             }
             _ => {
-                let _ = field.bytes().await;
+                let _ = idle_timeout(idle, field.bytes()).await?;
             }
         }
     }
@@ -610,6 +619,22 @@ async fn post_transfer(
         _ => return Err(ApiProblem::internal()),
     };
     Ok((StatusCode::ACCEPTED, Json(latest)))
+}
+
+/// Await one step of an upload, failing with `request_timeout` if it makes
+/// no progress within `limit`. Returning early drops the upload's chunk
+/// sender, which fails the transfer rather than leaving it hanging.
+async fn idle_timeout<T>(
+    limit: Duration,
+    step: impl std::future::Future<Output = T>,
+) -> Result<T, ApiProblem> {
+    timeout(limit, step).await.map_err(|_| {
+        ApiProblem::new(
+            StatusCode::REQUEST_TIMEOUT,
+            "Request timeout",
+            "request_timeout",
+        )
+    })
 }
 
 async fn get_clipboard(

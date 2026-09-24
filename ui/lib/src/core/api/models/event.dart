@@ -1,5 +1,6 @@
 import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
+import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 
 /// A notification from the daemon's `/events` stream.
 ///
@@ -27,6 +28,12 @@ sealed class DaemonEvent {
       ),
       'pairing.requested' || 'pairing.updated' => PairingChanged(
         Pairing.fromJson(data! as Map<String, Object?>),
+      ),
+      'transfer.started' ||
+      'transfer.progress' ||
+      'transfer.completed' ||
+      'transfer.failed' => TransferChanged(
+        Transfer.fromJson(data! as Map<String, Object?>),
       ),
       _ => UnhandledEvent(type),
     };
@@ -59,7 +66,15 @@ final class PairingChanged extends DaemonEvent {
   final Pairing pairing;
 }
 
-/// Transfer and clipboard events, which the UI does not consume yet.
+/// Carries every `transfer.*` event. A cancelled transfer arrives as
+/// `transfer.failed` with status `cancelled`, so only the snapshot's status
+/// tells them apart.
+final class TransferChanged extends DaemonEvent {
+  const new(this.transfer);
+  final Transfer transfer;
+}
+
+/// Clipboard events, which the UI does not consume yet.
 final class UnhandledEvent extends DaemonEvent {
   const new(this.type);
   final String type;

@@ -137,6 +137,12 @@ States: `queued → connecting → transferring → completed | cancelled | fail
   byte has been written.
 - Progress is monotonic; `transfer.completed` is only emitted after durable
   local finalization (incoming) or full acknowledged send (outgoing).
+  Every chunk updates the snapshot, but `transfer.progress` is published at
+  most every 100 ms per transfer (plus the final byte), so a fast link can't
+  overflow the bounded event bus.
+- A completed incoming transfer's snapshot carries `savedPath`, the absolute
+  path the file was saved to (a ` (n)` suffix is added when the name is
+  taken), so clients can open the file or its folder.
   Cancellation, disconnect, and daemon shutdown all clean up the partial
   `.part` file and abort the associated task.
 - Only paired devices can initiate or receive transfers.
@@ -165,7 +171,9 @@ through the FFI), every request must carry `Authorization: Bearer <token>`
 and gets a `401` otherwise. Without a token — the CLI default — any local
 client may call the API. Tokens are never persisted; clients pass the same
 `--api-token`/`MYCONNECT_API_TOKEN`. The server binds `127.0.0.1` by default;
-CORS is disabled. Errors use `application/problem+json`.
+CORS is disabled. Errors use `application/problem+json`. Requests must finish
+within 15 seconds (`408 request_timeout`), except the file upload and the
+event stream.
 
 | Method | Path | Notes |
 | --- | --- | --- |
@@ -180,7 +188,7 @@ CORS is disabled. Errors use `application/problem+json`.
 | `GET` | `/pairings/{pairingId}` | Pairing state, verification code, expiry. |
 | `POST` | `/pairings/{pairingId}/accept` | Confirm verification codes match (incoming only). |
 | `DELETE` | `/pairings/{pairingId}` | Reject/cancel/unpair. |
-| `POST` | `/transfers` | Streaming `multipart/form-data` (`deviceId` + `file`); `202`. Has its own, larger body-size limit than the rest of the API. |
+| `POST` | `/transfers` | Streaming `multipart/form-data` (`deviceId` + `file`, whose part must carry a `Content-Length` header); `202` once the whole file has been forwarded. Has its own, larger body-size limit than the rest of the API, and no overall deadline: it fails with `408 request_timeout` only if the upload stalls for longer than the request timeout. |
 | `GET` | `/transfers` | Active and recent transfers. |
 | `GET` | `/transfers/{transferId}` | State, byte counts, safe metadata. |
 | `DELETE` | `/transfers/{transferId}` | Cancel an active transfer. |

@@ -4,6 +4,7 @@ import 'package:myconnect_ui/src/features/devices/add_device_page.dart';
 import 'package:myconnect_ui/src/features/devices/device_detail_page.dart';
 import 'package:myconnect_ui/src/features/devices/devices_page.dart';
 import 'package:myconnect_ui/src/features/pairing/pairing_page.dart';
+import 'package:myconnect_ui/src/features/transfers/transfers_page.dart';
 
 /// Route tree. Paths nest the way screens stack, so the app bar's back
 /// button walks up it.
@@ -18,6 +19,10 @@ final routerProvider = Provider<GoRouter>((ref) {
             path: 'devices/:deviceId',
             builder: (context, state) =>
                 DeviceDetailPage(deviceId: state.pathParameters['deviceId']!),
+          ),
+          GoRoute(
+            path: 'transfers',
+            builder: (context, state) => const TransfersPage(),
           ),
           GoRoute(
             path: 'add',

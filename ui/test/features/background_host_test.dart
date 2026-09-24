@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
+import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 
 import '../helpers.dart';
 
@@ -73,5 +74,38 @@ void main() {
     daemon.events.add(PairingChanged(pairing(id: 'p2', createdAt: 1)));
     await tester.pumpAndSettle();
     expect(daemon.notifications.shown, hasLength(1));
+  });
+
+  testWidgets('a received file notifies while the window is hidden', (
+    tester,
+  ) async {
+    final daemon = TestDaemon()
+      ..transfers = [
+        transfer(id: 'earlier', status: TransferStatus.completed),
+        transfer(id: 'sent', direction: TransferDirection.outgoing),
+      ];
+    await pumpApp(tester, daemon);
+    daemon.shell.onCloseRequested!();
+    await tester.pumpAndSettle();
+
+    daemon.events
+      ..add(TransferChanged(transfer()))
+      ..add(
+        TransferChanged(
+          transfer(deviceName: 'Pixel', status: TransferStatus.completed),
+        ),
+      )
+      ..add(
+        TransferChanged(
+          transfer(
+            id: 'sent',
+            direction: TransferDirection.outgoing,
+            status: TransferStatus.completed,
+          ),
+        ),
+      );
+    await tester.pumpAndSettle();
+
+    expect(daemon.notifications.shown.values, ['photo.jpg from Pixel']);
   });
 }

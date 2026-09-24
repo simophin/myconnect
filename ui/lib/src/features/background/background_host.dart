@@ -5,8 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
+import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 import 'package:myconnect_ui/src/core/providers.dart';
 import 'package:myconnect_ui/src/features/pairing/pairings_controller.dart';
+import 'package:myconnect_ui/src/features/transfers/transfers_controller.dart';
 
 final _log = Logger('BackgroundHost');
 
@@ -15,8 +17,8 @@ final _log = Logger('BackgroundHost');
 ///
 /// Closing the window only hides it; the tray menu shows it again or quits.
 /// Quitting is the one path that stops the daemon. While the window is
-/// hidden or unfocused, incoming pairing requests raise a notification that
-/// brings the window (and its pairing prompt) back.
+/// hidden or unfocused, incoming pairing requests and received files raise a
+/// notification that brings the window back.
 ///
 /// Sits above everything else so the tray works even if the daemon failed to
 /// start, and so it lives as long as the `ProviderScope` does.
@@ -117,6 +119,34 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
     }
   }
 
+  /// Notify about incoming files that completed since [previous]. A
+  /// transfer [previous] didn't hold is skipped, so the first snapshot
+  /// doesn't announce files received before the app started.
+  Future<void> _notifyReceivedFiles(
+    Map<String, Transfer>? previous,
+    Map<String, Transfer> current,
+  ) async {
+    if (previous == null) return;
+    final received = [
+      for (final transfer in current.values)
+        if (transfer.direction == TransferDirection.incoming &&
+            transfer.status == TransferStatus.completed &&
+            previous[transfer.id] != null &&
+            previous[transfer.id]!.status != TransferStatus.completed)
+          transfer,
+    ];
+    if (received.isEmpty) return;
+    if (await ref.read(desktopShellProvider).isWindowFocused()) return;
+    final notifications = ref.read(desktopNotificationsProvider);
+    for (final transfer in received) {
+      await notifications.show(
+        id: _nextNotificationId++,
+        title: 'File received',
+        body: '${transfer.fileName} from ${transfer.deviceName}',
+      );
+    }
+  }
+
   @override
   void dispose() {
     _lifecycle.dispose();
@@ -128,6 +158,12 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
     ref.listen(
       pendingIncomingPairingsProvider,
       (_, pending) => unawaited(_syncPairingNotifications(pending)),
+    );
+    ref.listen(
+      transfersProvider,
+      (previous, next) => unawaited(
+        _notifyReceivedFiles(previous?.value, next.value ?? const {}),
+      ),
     );
     return widget.child;
   }

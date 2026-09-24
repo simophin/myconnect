@@ -154,6 +154,7 @@ fn transfer_snapshot() -> TransferSnapshot {
         created_at: 10,
         updated_at: 11,
         error_code: None,
+        saved_path: None,
     }
 }
 

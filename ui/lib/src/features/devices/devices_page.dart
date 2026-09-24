@@ -17,6 +17,13 @@ class DevicesPage extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Devices'),
+        actions: [
+          IconButton(
+            tooltip: 'Transfers',
+            icon: const Icon(Icons.swap_vert),
+            onPressed: () => context.go('/transfers'),
+          ),
+        ],
         bottom: localName == null
             ? null
             : PreferredSize(

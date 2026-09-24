@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -7,6 +8,7 @@ import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
 import 'package:myconnect_ui/src/core/api/models/status.dart';
+import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 import 'package:myconnect_ui/src/core/api/sse.dart';
 import 'package:myconnect_ui/src/core/daemon/daemon_host.dart';
 
@@ -72,6 +74,52 @@ class MyConnectApi {
   /// Reject an incoming request or cancel an outgoing one.
   Future<Pairing> rejectPairing(String pairingId) async => Pairing.fromJson(
     await _send(() => _dio.delete<_Json>('pairings/$pairingId')),
+  );
+
+  Future<List<Transfer>> transfers() async =>
+      (await _get<List<Object?>>('transfers'))
+          .map((json) => Transfer.fromJson(json! as _Json))
+          .toList();
+
+  /// Send the file at [path] to a paired, connected device.
+  ///
+  /// The daemon answers only once the whole file has been streamed to the
+  /// peer, so this completes at the end of the upload; follow progress
+  /// through `transfer.*` events meanwhile.
+  Future<Transfer> sendFile(String deviceId, String path) async {
+    final file = File(path);
+    final length = await file.length();
+    // The daemon reads `deviceId` before the file, and takes the file's
+    // declared size from its part's Content-Length header.
+    final form = FormData()
+      ..fields.add(MapEntry('deviceId', deviceId))
+      ..files.add(
+        MapEntry(
+          'file',
+          await MultipartFile.fromFile(
+            path,
+            filename: file.uri.pathSegments.last,
+            headers: {
+              'content-length': ['$length'],
+            },
+          ),
+        ),
+      );
+    return Transfer.fromJson(
+      await _send(
+        () => _dio.post<_Json>(
+          'transfers',
+          data: form,
+          // The daemon fails an upload that stalls, but a large one may
+          // legitimately take far longer than the default deadline.
+          options: Options(receiveTimeout: Duration.zero),
+        ),
+      ),
+    );
+  }
+
+  Future<Transfer> cancelTransfer(String transferId) async => Transfer.fromJson(
+    await _send(() => _dio.delete<_Json>('transfers/$transferId')),
   );
 
   /// One connection to `/events`, starting with [EventStreamConnected] once

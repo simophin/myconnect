@@ -32,6 +32,14 @@ class ApiException implements Exception {
     'pairing_not_found' => 'That pairing request no longer exists.',
     'invalid_pairing_state' ||
     'invalid_pairing_direction' => 'That pairing request is no longer active.',
+    'device_not_paired' => 'The device is not paired.',
+    'unsupported_by_peer' => 'The device doesn’t support that.',
+    'invalid_file_name' => 'That file name can’t be sent.',
+    'transfer_too_large' ||
+    'payload_too_large' => 'The file is too large to send.',
+    'transfer_not_found' => 'That transfer no longer exists.',
+    'invalid_transfer_state' => 'That transfer has already finished.',
+    'request_timeout' => 'MyConnect took too long to respond.',
     _ => 'Something went wrong ($code).',
   };
 

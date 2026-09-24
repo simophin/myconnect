@@ -33,6 +33,10 @@ impl TestServer {
     }
 
     async fn start_with_token(token: Option<ApiToken>) -> Self {
+        Self::start_with(token, Duration::from_secs(15)).await
+    }
+
+    async fn start_with(token: Option<ApiToken>, request_timeout: Duration) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let identity =
             Arc::new(LocalIdentity::load_or_create(directory.path().join("identity")).unwrap());
@@ -71,7 +75,8 @@ impl TestServer {
         let server = ApiServer::start(
             ApiServerConfig::new(0)
                 .unwrap()
-                .with_shutdown_timeout(Duration::from_secs(2)),
+                .with_shutdown_timeout(Duration::from_secs(2))
+                .with_request_timeout(request_timeout),
             Arc::new(application.clone()),
             token.clone(),
             CancellationToken::new(),
@@ -592,6 +597,71 @@ async fn transfer_upload_is_streamed_queryable_and_cancellable() {
     assert!(cancelled.starts_with("HTTP/1.1 200 OK"));
     let cancelled_json: serde_json::Value = serde_json::from_str(body(&cancelled)).unwrap();
     assert_eq!(cancelled_json["id"], transfer_id);
+
+    server.server.shutdown().await.unwrap();
+    server
+        .application
+        .shutdown_transfers(Duration::from_secs(1))
+        .await;
+}
+
+/// Upload a four-piece file, writing the pieces `gap` apart, or stop after
+/// the `deviceId` part if `stall` is set. Returns the response.
+async fn slow_upload(server: &TestServer, device_id: &str, gap: Duration, stall: bool) -> String {
+    let boundary = "myconnect-test-boundary";
+    let pieces = ["slow", " up", "lo", "ad"];
+    let file_len: usize = pieces.iter().map(|piece| piece.len()).sum();
+    let device_part = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"deviceId\"\r\n\r\n{device_id}\r\n"
+    );
+    let file_head = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"slow.txt\"\r\nContent-Length: {file_len}\r\n\r\n"
+    );
+    let trailer = format!("\r\n--{boundary}--\r\n");
+    let mut stream = TcpStream::connect(server.server.local_addr())
+        .await
+        .unwrap();
+    let head = format!(
+        "POST /api/v1/transfers HTTP/1.1\r\nHost: localhost\r\n{}Content-Type: multipart/form-data; boundary={boundary}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{device_part}",
+        server.authorization(),
+        device_part.len() + file_head.len() + file_len + trailer.len(),
+    );
+    stream.write_all(head.as_bytes()).await.unwrap();
+    if !stall {
+        stream.write_all(file_head.as_bytes()).await.unwrap();
+        for piece in pieces {
+            tokio::time::sleep(gap).await;
+            stream.write_all(piece.as_bytes()).await.unwrap();
+        }
+        stream.write_all(trailer.as_bytes()).await.unwrap();
+    }
+    let mut response = Vec::new();
+    timeout(Duration::from_secs(5), stream.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    String::from_utf8(response).unwrap()
+}
+
+#[tokio::test]
+async fn transfer_upload_may_outlast_the_request_deadline_but_not_stall() {
+    let server = TestServer::start_with(None, Duration::from_millis(400)).await;
+    let device_id = "cccccccccccccccccccccccccccccccc";
+    let _packets = server.connect_and_pair(device_id);
+
+    // Four 150 ms gaps: longer than the deadline in total, never idle for it.
+    let response = slow_upload(&server, device_id, Duration::from_millis(150), false).await;
+    assert!(
+        response.starts_with("HTTP/1.1 202 Accepted"),
+        "unexpected response: {response}"
+    );
+
+    let response = slow_upload(&server, device_id, Duration::ZERO, true).await;
+    assert!(
+        response.starts_with("HTTP/1.1 408 Request Timeout"),
+        "unexpected response: {response}"
+    );
+    assert!(body(&response).contains("request_timeout"));
 
     server.server.shutdown().await.unwrap();
     server

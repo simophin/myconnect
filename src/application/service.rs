@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     net::SocketAddr,
+    path::PathBuf,
     sync::{Arc, RwLock},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -47,6 +48,37 @@ pub const PAIRING_TIMESTAMP_TOLERANCE_SECS: u64 = 1800;
 /// the network writer stay coupled by backpressure instead of one side
 /// racing ahead and buffering the whole file in memory.
 const TRANSFER_CHANNEL_CAPACITY: usize = 4;
+
+/// Minimum gap between `transfer.progress` events for one transfer. The
+/// payload loops report every 64 KiB chunk, which on a fast link would flood
+/// the bounded event bus and make slow subscribers lag.
+const PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Records every progress report in the transfer's snapshot but publishes at
+/// most one `transfer.progress` event per [`PROGRESS_EVENT_INTERVAL`], plus
+/// one for the final byte.
+#[derive(Default)]
+struct ProgressEvents {
+    last_published: Option<Instant>,
+}
+
+impl ProgressEvents {
+    fn record(&mut self, handle: &ApplicationHandle, transfer_id: Uuid, transferred: u64) {
+        let Some(snapshot) = handle.record_transfer_progress(transfer_id, transferred) else {
+            return;
+        };
+        let now = Instant::now();
+        let due = self
+            .last_published
+            .is_none_or(|last| now.duration_since(last) >= PROGRESS_EVENT_INTERVAL);
+        if due || snapshot.transferred_bytes == snapshot.total_bytes {
+            self.last_published = Some(now);
+            let _ = handle
+                .events
+                .publish(super::EventData::TransferProgress(snapshot));
+        }
+    }
+}
 
 /// Core interface consumed by the local API and future frontends.
 pub trait ApplicationService: Send + Sync {
@@ -1264,6 +1296,7 @@ impl ApplicationHandle {
             created_at: now,
             updated_at: now,
             error_code: None,
+            saved_path: None,
         });
         let started = transfer.snapshot();
 
@@ -1392,16 +1425,17 @@ impl ApplicationHandle {
             return;
         }
 
+        let mut progress = ProgressEvents::default();
         let result = payload::forward_channel(
             &mut chunk_rx,
             &mut stream,
             total,
             &cancellation,
-            |transferred| self.publish_transfer_progress(transfer_id, transferred),
+            |transferred| progress.record(self, transfer_id, transferred),
         )
         .await;
         match result {
-            Ok(()) => self.complete_transfer(transfer_id),
+            Ok(()) => self.complete_transfer(transfer_id, None),
             Err(payload::PayloadError::Cancelled) => self.finish_transfer_cancelled(transfer_id),
             Err(_) => self.fail_transfer(transfer_id, OperationErrorCode::ConnectionFailed),
         }
@@ -1478,6 +1512,7 @@ impl ApplicationHandle {
             created_at: now,
             updated_at: now,
             error_code: None,
+            saved_path: None,
         });
         let started = transfer.snapshot();
 
@@ -1610,14 +1645,13 @@ impl ApplicationHandle {
             return;
         }
 
+        let mut progress = ProgressEvents::default();
         let result = payload::copy_exact(
             &mut stream,
             &mut file,
             total,
             &cancellation,
-            |transferred| {
-                self.publish_transfer_progress(transfer_id, transferred);
-            },
+            |transferred| progress.record(self, transfer_id, transferred),
         )
         .await;
         drop(file);
@@ -1627,7 +1661,10 @@ impl ApplicationHandle {
                 let destination =
                     unique_destination(&self.transfer_config.download_dir, &file_name);
                 match tokio::fs::rename(&temp_path, &destination).await {
-                    Ok(()) => self.complete_transfer(transfer_id),
+                    Ok(()) => self.complete_transfer(
+                        transfer_id,
+                        Some(std::path::absolute(&destination).unwrap_or(destination)),
+                    ),
                     Err(_) => {
                         let _ = tokio::fs::remove_file(&temp_path).await;
                         self.fail_transfer(transfer_id, OperationErrorCode::Internal);
@@ -1689,25 +1726,27 @@ impl ApplicationHandle {
         transfer.transition(next, unix_millis(), error_code).ok()
     }
 
-    fn publish_transfer_progress(&self, transfer_id: Uuid, transferred_bytes: u64) {
+    /// Record progress in the transfer's snapshot, and return that snapshot
+    /// for publishing.
+    fn record_transfer_progress(
+        &self,
+        transfer_id: Uuid,
+        transferred_bytes: u64,
+    ) -> Option<TransferSnapshot> {
+        let mut state = self.state.write().ok()?;
+        let transfer = state.transfers.get_mut(&transfer_id)?;
+        transfer
+            .record_progress(transferred_bytes, unix_millis())
+            .ok()
+    }
+
+    fn complete_transfer(&self, transfer_id: Uuid, saved_path: Option<PathBuf>) {
         let snapshot = (|| {
             let mut state = self.state.write().ok()?;
             let transfer = state.transfers.get_mut(&transfer_id)?;
-            transfer
-                .record_progress(transferred_bytes, unix_millis())
-                .ok()
+            transfer.complete(saved_path, unix_millis()).ok()
         })();
         if let Some(snapshot) = snapshot {
-            let _ = self
-                .events
-                .publish(super::EventData::TransferProgress(snapshot));
-        }
-    }
-
-    fn complete_transfer(&self, transfer_id: Uuid) {
-        if let Some(snapshot) =
-            self.transition_transfer(transfer_id, TransferStatus::Completed, None)
-        {
             let _ = self
                 .events
                 .publish(super::EventData::TransferCompleted(snapshot));
@@ -2367,5 +2406,59 @@ mod tests {
         handle.set_clipboard("resumed".into()).unwrap();
         let sent = rx.try_recv().unwrap();
         assert_eq!(sent.packet_type, plugins::clipboard::PACKET_TYPE);
+    }
+
+    #[test]
+    fn progress_events_are_throttled_but_the_final_byte_is_published() {
+        let (handle, _commands) = handle();
+        let transfer_id = Uuid::new_v4();
+        let mut transfer = Transfer::new(TransferSnapshot {
+            id: transfer_id,
+            device_id: "peer".into(),
+            device_name: "Peer".into(),
+            direction: TransferDirection::Incoming,
+            status: TransferStatus::Queued,
+            file_name: "file.bin".into(),
+            total_bytes: 100,
+            transferred_bytes: 0,
+            created_at: 1,
+            updated_at: 1,
+            error_code: None,
+            saved_path: None,
+        });
+        transfer
+            .transition(TransferStatus::Transferring, 1, None)
+            .unwrap();
+        handle
+            .state
+            .write()
+            .unwrap()
+            .transfers
+            .insert(transfer_id, transfer);
+        let mut events = handle.subscribe();
+
+        let mut progress = ProgressEvents::default();
+        let mut published = Vec::new();
+        for transferred in 1..=100 {
+            progress.record(&handle, transfer_id, transferred);
+            // The test bus holds one event, so drain it after every report.
+            while let Ok(event) = events.try_recv() {
+                match event.event {
+                    super::super::EventData::TransferProgress(snapshot) => {
+                        published.push(snapshot.transferred_bytes);
+                    }
+                    other => panic!("unexpected event: {other:?}"),
+                }
+            }
+        }
+
+        assert_eq!(published, vec![1, 100]);
+        assert_eq!(
+            handle
+                .transfer_snapshot(transfer_id)
+                .unwrap()
+                .transferred_bytes,
+            100
+        );
     }
 }
