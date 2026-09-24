@@ -18,6 +18,15 @@ String reachabilityLabel(Device device) => switch (device.reachability) {
   DeviceReachability.unknown => 'Unknown',
 };
 
+/// Whether [device] is reachable, with its battery when it reported one,
+/// e.g. `Connected · 82%, charging`.
+String deviceStatusLabel(Device device) => switch (device.battery) {
+  null => reachabilityLabel(device),
+  BatteryStatus(:final charge, charging: true) =>
+    '${reachabilityLabel(device)} · $charge%, charging',
+  BatteryStatus(:final charge) => '${reachabilityLabel(device)} · $charge%',
+};
+
 /// A user-facing sentence for any error the UI may catch.
 String describeError(Object error) =>
     error is ApiException ? error.message : 'Something went wrong: $error';

@@ -26,7 +26,7 @@ use myconnect::{
     client::{ApiClient, ClientError},
     clipboard::InMemoryClipboard,
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
-    device::DeviceReachability,
+    device::{BatteryStatus, DeviceReachability},
     plugins,
     protocol::DeviceType,
     transport::{
@@ -34,7 +34,7 @@ use myconnect::{
         tls::subject_public_key_info,
     },
 };
-use support::fake_phone::{BrowseReply, FakePhone, FakePhoneConfig};
+use support::fake_phone::{BrowseReply, FakePhone, FakePhoneConfig, PHONE_BATTERY};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -630,4 +630,65 @@ async fn a_cancelled_upload_leaves_nothing_behind() {
             .exists()
     );
     drop(sender);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_phones_battery_is_shown_while_it_is_connected() {
+    let harness = harness(android_roots(), false).await;
+    let (desktop, phone_id, client) = (&harness.desktop, &harness.phone_id, &harness.client);
+    // Reported on its own once paired, as Android does.
+    wait_for_device(desktop, phone_id, |device| {
+        device.battery
+            == Some(BatteryStatus {
+                charge: PHONE_BATTERY as u8,
+                charging: false,
+            })
+    })
+    .await;
+
+    let battery_over_api = async || {
+        client
+            .devices()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|device| &device.device_id == phone_id)
+            .unwrap()
+            .battery
+    };
+
+    harness.phone.report_battery(74, true).await;
+    wait_for_device(desktop, phone_id, |device| {
+        device.battery.is_some_and(|battery| battery.charging)
+    })
+    .await;
+    assert_eq!(
+        battery_over_api().await,
+        Some(BatteryStatus {
+            charge: 74,
+            charging: true,
+        })
+    );
+
+    let Harness {
+        desktop,
+        phone,
+        phone_id,
+        client,
+        ..
+    } = harness;
+    phone.stop().await;
+    wait_for_device(&desktop, &phone_id, |device| {
+        device.reachability != DeviceReachability::Connected
+    })
+    .await;
+    let device = client.devices().await.unwrap();
+    assert_eq!(
+        device
+            .iter()
+            .find(|device| device.device_id == phone_id)
+            .unwrap()
+            .battery,
+        None
+    );
 }

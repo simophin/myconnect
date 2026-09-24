@@ -120,6 +120,7 @@ Device device({
   bool pairing = false,
   DeviceReachability reachability = DeviceReachability.connected,
   List<String> incomingCapabilities = const [],
+  BatteryStatus? battery,
 }) => Device(
   deviceId: id,
   deviceName: name,
@@ -131,6 +132,7 @@ Device device({
   paired: paired,
   pairing: pairing,
   lastSeenAt: 0,
+  battery: battery,
 );
 
 Pairing pairing({

@@ -4,6 +4,7 @@ import 'package:myconnect_ui/src/core/api/api_exception.dart';
 import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/pairing.dart';
+import 'package:myconnect_ui/src/core/api/models/remote_file.dart';
 import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 
 import '../helpers.dart';
@@ -218,6 +219,53 @@ void main() {
     daemon.shell.selectTrayItem(['Settings']);
     await tester.pumpAndSettle();
     expect(find.text('Keep running when the window is closed'), findsOneWidget);
+  });
+
+  testWidgets('the tray offers browsing only on devices that share files', (
+    tester,
+  ) async {
+    final daemon = TestDaemon()
+      ..devices = [
+        device(name: 'Pixel', incomingCapabilities: [browseCapability]),
+        device(
+          id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          name: 'Laptop',
+          incomingCapabilities: [pingCapability],
+        ),
+      ];
+    when(() => daemon.api.listFiles(any(), path: any(named: 'path')))
+        .thenAnswer((_) async => const DirectoryListing(entries: []));
+    await pumpApp(tester, daemon);
+    final shell = daemon.shell;
+
+    expect(() => shell.trayItem(['Laptop', 'Browse files']), throwsStateError);
+    daemon.events.add(
+      DeviceChanged(
+        device(
+          name: 'Pixel',
+          incomingCapabilities: [browseCapability],
+          reachability: DeviceReachability.unavailable,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      shell.trayItem(['Pixel (Not reachable)', 'Browse files']).enabled,
+      isFalse,
+    );
+
+    daemon.events.add(
+      DeviceChanged(
+        device(name: 'Pixel', incomingCapabilities: [browseCapability]),
+      ),
+    );
+    await tester.pumpAndSettle();
+    shell.onCloseRequested!();
+    await tester.pumpAndSettle();
+    shell.selectTrayItem(['Pixel', 'Browse files']);
+    await tester.pumpAndSettle();
+    expect(shell.visible, isTrue);
+    expect(find.text('Files on Pixel'), findsOneWidget);
   });
 
   testWidgets('pinging from the tray reports only a failure', (tester) async {

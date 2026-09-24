@@ -21,6 +21,14 @@ const browseCapability = 'kdeconnect.sftp.request';
 /// The capability a peer lists when it accepts pings.
 const pingCapability = 'kdeconnect.ping';
 
+/// Mirror of the daemon's `BatteryStatus`: a peer's last battery report.
+@freezed
+abstract class BatteryStatus with _$BatteryStatus {
+  const factory({required int charge, required bool charging}) = _BatteryStatus;
+
+  factory fromJson(Map<String, Object?> json) => _$BatteryStatusFromJson(json);
+}
+
 /// Mirror of the daemon's `DeviceSnapshot`.
 @freezed
 abstract class Device with _$Device {
@@ -37,6 +45,10 @@ abstract class Device with _$Device {
     required bool paired,
     required bool pairing,
     required int lastSeenAt,
+
+    /// Known only while the device is paired and connected, once it has
+    /// reported it.
+    BatteryStatus? battery,
   }) = _Device;
 
   const new _();

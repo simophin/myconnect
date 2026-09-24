@@ -40,6 +40,18 @@ void main() {
     );
   });
 
+  test('decodes a device battery, or its absence', () {
+    expect(Device.fromJson(deviceJson()).battery, isNull);
+    expect(Device.fromJson({...deviceJson(), 'battery': null}).battery, isNull);
+    expect(
+      Device.fromJson({
+        ...deviceJson(),
+        'battery': {'charge': 82, 'charging': true},
+      }).battery,
+      const BatteryStatus(charge: 82, charging: true),
+    );
+  });
+
   test('decodes pairing events with snake_case enums', () {
     final event = DaemonEvent.fromJson({
       'type': 'pairing.requested',

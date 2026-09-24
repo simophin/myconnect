@@ -60,7 +60,8 @@ Against KDE Connect for Android (a Pixel 8a, from the CLI daemon), these
 work: pairing, unpairing, clipboard, file transfer both ways, and browsing
 the phone's files. Nothing has been checked against KDE Connect on a
 desktop yet. The tray menu lists each paired device (send files, ping,
-show details); on Linux it needs a patched `cnativeapi`, vendored in
+browse files, show details), with its battery; the device list and details
+page show the battery too (`kdeconnect.battery`, read-only); on Linux it needs a patched `cnativeapi`, vendored in
 `ui/third_party/`. Releases (`.github/workflows/build.yml`) build the
 macOS app, Debian packages for amd64 and arm64, and for tagged builds an
 Arch Linux PKGBUILD; Windows is built only locally.
@@ -92,6 +93,10 @@ macOS app has only an ad-hoc signature. A Flutter build hook
   Connect desktops don't either).
 
 **Smaller follow-ups.**
+
+- Battery reports were checked against the fake phone only, not a real
+  one. A low-battery notification (`thresholdEvent: 1`) isn't shown, and
+  this machine doesn't report its own battery.
 
 - Devices added by IP address are forgotten on restart. KDE Connect keeps
   a list of such addresses and announces to them periodically. The

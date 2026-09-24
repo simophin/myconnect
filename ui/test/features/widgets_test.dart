@@ -26,6 +26,41 @@ void main() {
     expect(find.text('This computer: Desk'), findsOneWidget);
   });
 
+  testWidgets('a device shows its battery once it reports one', (
+    tester,
+  ) async {
+    final daemon = TestDaemon()..devices = [device(name: 'Pixel')];
+    await pumpApp(tester, daemon);
+    expect(find.text('Connected'), findsOneWidget);
+
+    daemon.events.add(
+      DeviceChanged(
+        device(
+          name: 'Pixel',
+          battery: const BatteryStatus(charge: 82, charging: true),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Connected · 82%, charging'), findsOneWidget);
+
+    daemon.events.add(
+      DeviceChanged(
+        device(
+          name: 'Pixel',
+          battery: const BatteryStatus(charge: 81, charging: false),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Connected · 81%'), findsOneWidget);
+    expect(daemon.shell.trayItem(['Pixel · 81%']).enabled, isTrue);
+
+    await tester.tap(find.text('Pixel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Connected · 81%'), findsOneWidget);
+  });
+
   testWidgets('an incoming request prompts on any screen until resolved', (
     tester,
   ) async {

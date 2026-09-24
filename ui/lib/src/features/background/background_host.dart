@@ -132,9 +132,13 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
         if (devices.isEmpty) const TrayMenuItem('No paired devices'),
         for (final device in devices)
           TrayMenuItem(
-            device.isConnected
-                ? device.deviceName
-                : '${device.deviceName} (${reachabilityLabel(device)})',
+            switch (device) {
+              Device(isConnected: false) =>
+                '${device.deviceName} (${reachabilityLabel(device)})',
+              Device(battery: BatteryStatus(:final charge)) =>
+                '${device.deviceName} · $charge%',
+              _ => device.deviceName,
+            },
             submenu: [
               TrayMenuItem(
                 'Send files…',
@@ -148,6 +152,15 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
                     ? () => unawaited(_ping(device))
                     : null,
               ),
+              if (device.incomingCapabilities.contains(browseCapability))
+                TrayMenuItem(
+                  'Browse files',
+                  onSelected: device.sharesFiles
+                      ? () => unawaited(
+                          _showRoute('/devices/${device.deviceId}/files'),
+                        )
+                      : null,
+                ),
               const TrayMenuSeparator(),
               TrayMenuItem(
                 'Show details',

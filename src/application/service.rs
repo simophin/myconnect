@@ -839,6 +839,9 @@ impl ApplicationHandle {
             Ok(plugins::IncomingPluginPacket::Sftp(body)) => {
                 self.handle_sftp_reply(device_id, body)
             }
+            Ok(plugins::IncomingPluginPacket::Battery(body)) => {
+                self.handle_battery(device_id, &body)
+            }
             Err(_) => {}
         }
     }
@@ -980,6 +983,30 @@ impl ApplicationHandle {
                 }
             }
         })
+    }
+
+    /// Record a paired peer's battery report, publishing `device.updated`
+    /// when it changes what the device snapshot shows.
+    fn handle_battery(&self, device_id: &str, body: &plugins::battery::BatteryBody) {
+        let battery = body.status();
+        let Ok(mut state) = self.state.write() else {
+            return;
+        };
+        if state
+            .devices
+            .get(device_id)
+            .is_none_or(|device| device.battery == battery)
+        {
+            return;
+        }
+        let Ok(snapshot) = state.devices.set_battery(device_id, battery) else {
+            return;
+        };
+        drop(state);
+        tracing::debug!(device_id, ?battery, "battery changed");
+        let _ = self
+            .events
+            .publish(super::EventData::DeviceUpdated(snapshot));
     }
 
     /// Apply a `kdeconnect.clipboard` or `kdeconnect.clipboard.connect` body
@@ -2497,6 +2524,63 @@ mod tests {
         );
         handle.handle_peer_packet(paired_id, ping(None));
         assert_eq!(received().message, None);
+        assert!(events.try_recv().is_err());
+    }
+
+    #[test]
+    fn battery_reports_from_paired_devices_update_the_device_once_per_change() {
+        let (handle, _commands) = handle();
+        let paired_id = "740bd4b9b4184ee497d6caf1da8151be";
+        let unpaired_id = "850bd4b9b4184ee497d6caf1da8151be";
+        handle
+            .discover_device(&make_identity(paired_id, Vec::new()), true, 1)
+            .unwrap();
+        handle
+            .discover_device(&make_identity(unpaired_id, Vec::new()), false, 1)
+            .unwrap();
+        let mut events = handle.subscribe();
+
+        let report = |charge: i64, charging: bool| {
+            Packet::from_body(
+                2_u64,
+                plugins::battery::PACKET_TYPE,
+                &serde_json::json!({
+                    "currentCharge": charge,
+                    "isCharging": charging,
+                    "thresholdEvent": 0,
+                }),
+            )
+            .unwrap()
+        };
+        let mut updated = || match events.try_recv().unwrap().event {
+            super::super::EventData::DeviceUpdated(device) => device,
+            other => panic!("unexpected event {other:?}"),
+        };
+        let battery = |device_id: &str| match handle
+            .query(Query::Device {
+                device_id: device_id.into(),
+            })
+            .unwrap()
+        {
+            QueryResult::Device(Some(device)) => device.battery,
+            other => panic!("unexpected result {other:?}"),
+        };
+
+        handle.handle_peer_packet(unpaired_id, report(40, false));
+        assert_eq!(battery(unpaired_id), None);
+
+        handle.handle_peer_packet(paired_id, report(82, true));
+        let expected = Some(crate::device::BatteryStatus {
+            charge: 82,
+            charging: true,
+        });
+        assert_eq!(updated().battery, expected);
+        assert_eq!(battery(paired_id), expected);
+
+        // A repeat changes nothing, so it publishes nothing.
+        handle.handle_peer_packet(paired_id, report(82, true));
+        handle.handle_peer_packet(paired_id, report(-1, false));
+        assert_eq!(updated().battery, None);
         assert!(events.try_recv().is_err());
     }
 
