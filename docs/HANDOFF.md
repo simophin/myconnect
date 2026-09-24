@@ -648,14 +648,21 @@ against an external daemon (`--dart-define=MYCONNECT_API_URL=...`).
 
 ## Verifying in the real app
 
+Isolate every run as [`../CLAUDE.md`](../CLAUDE.md) describes: fresh
+temporary data and download dirs, a free port, loopback discovery, and a
+private display and D-Bus session.
+
 ```sh
+dir=$(mktemp -d)
 # peer
-cargo run -- --api-port 25011 run --discovery-loopback \
-  --data-dir /tmp/peer --device-name "CLI Peer"
+cargo run -- --api-port "$port" run --discovery-loopback \
+  --data-dir "$dir/peer" --download-dir "$dir/peer-downloads" \
+  --device-name "CLI Peer"
 # app (separate identity, loopback only)
 cd ui && flutter run -d linux \
   --dart-define=MYCONNECT_DISCOVERY_LOOPBACK=true \
-  --dart-define=MYCONNECT_DATA_DIR=/tmp/ui \
+  --dart-define=MYCONNECT_DATA_DIR="$dir/ui" \
+  --dart-define=MYCONNECT_DOWNLOAD_DIR="$dir/ui-downloads" \
   --dart-define=MYCONNECT_DEVICE_NAME="UI Desktop"
 ```
 
