@@ -62,9 +62,11 @@ Working and verified live (UI ↔ CLI daemon over loopback):
   single instance on Linux (item 3).
 - Sending a file from a device's page, a transfers view with progress,
   cancel, and open file/folder, and a notification for received files
-  (item 4). Files dropped on the window, or picked from the tray menu's
-  "Send files…", go to the device they were dropped on or to one chosen in
-  a dialog.
+  (item 4). Files dropped on the window go to the device they were dropped
+  on or to one chosen in a dialog.
+- A tray menu with each paired device (send files, ping, show details),
+  Settings and Quit; a left click on the icon shows the window. Linux
+  needs a patched `cnativeapi`, vendored in `ui/third_party/`.
 - A settings screen (device name, download folder, clipboard sync, close
   to tray), stored by the daemon, with renames reaching peers at once
   (item 5).

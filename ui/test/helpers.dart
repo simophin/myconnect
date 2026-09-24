@@ -32,9 +32,8 @@ class FakeDaemonHost implements DaemonHost {
 
 class FakeDesktopShell implements DesktopShell {
   VoidCallback? onCloseRequested;
-  VoidCallback? onShowRequested;
-  VoidCallback? onSendFilesRequested;
-  VoidCallback? onQuitRequested;
+  VoidCallback? onTrayClicked;
+  List<TrayMenuEntry> trayMenu = const [];
   bool visible = true;
   bool focused = true;
   bool exited = false;
@@ -42,15 +41,43 @@ class FakeDesktopShell implements DesktopShell {
   @override
   Future<void> start({
     required VoidCallback onCloseRequested,
-    required VoidCallback onShowRequested,
-    required VoidCallback onSendFilesRequested,
-    required VoidCallback onQuitRequested,
+    required VoidCallback onTrayClicked,
   }) async {
     this.onCloseRequested = onCloseRequested;
-    this.onShowRequested = onShowRequested;
-    this.onSendFilesRequested = onSendFilesRequested;
-    this.onQuitRequested = onQuitRequested;
+    this.onTrayClicked = onTrayClicked;
   }
+
+  @override
+  void setTrayMenu(List<TrayMenuEntry> entries) => trayMenu = entries;
+
+  /// The tray menu item found by following [labels] through submenus.
+  TrayMenuItem trayItem(List<String> labels) {
+    var entries = trayMenu;
+    late TrayMenuItem item;
+    for (final label in labels) {
+      item = entries.whereType<TrayMenuItem>().singleWhere(
+        (item) => item.label == label,
+      );
+      entries = item.submenu ?? const [];
+    }
+    return item;
+  }
+
+  /// Pick the tray menu item at [labels], as the user would.
+  void selectTrayItem(List<String> labels) {
+    final item = trayItem(labels);
+    expect(item.enabled, isTrue, reason: '${labels.join(' > ')} is disabled');
+    item.onSelected!();
+  }
+
+  /// The top-level tray menu's labels, with `-` for a separator.
+  List<String> get trayLabels => [
+    for (final entry in trayMenu)
+      switch (entry) {
+        TrayMenuItem(:final label) => label,
+        TrayMenuSeparator() => '-',
+      },
+  ];
 
   @override
   Future<void> showWindow() async => visible = focused = true;

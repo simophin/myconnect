@@ -125,7 +125,7 @@ void main() {
     verifyNever(() => daemon.api.sendFile(any(), any()));
   });
 
-  testWidgets('the tray sends files to the device the user picks', (
+  testWidgets('the tray sends files to the device they were picked for', (
     tester,
   ) async {
     final picker = FileSelectorPlatform.instance;
@@ -135,39 +135,13 @@ void main() {
     daemon.shell.onCloseRequested!();
     await tester.pumpAndSettle();
 
-    daemon.shell.onSendFilesRequested!();
+    daemon.shell.selectTrayItem(['Laptop', 'Send files…']);
     await tester.pumpAndSettle();
 
     expect(daemon.shell.visible, isTrue);
-    expect(find.text('Send 2 files'), findsOneWidget);
-    await tester.tap(
-      find.descendant(
-        of: find.byType(AlertDialog),
-        matching: find.text('Pixel'),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    verify(() => daemon.api.sendFile(_pixelId, photo)).called(1);
-    verify(() => daemon.api.sendFile(_pixelId, notes)).called(1);
-  });
-
-  testWidgets('without a device to send to, the dialog says so', (
-    tester,
-  ) async {
-    final picker = FileSelectorPlatform.instance;
-    addTearDown(() => FileSelectorPlatform.instance = picker);
-    FileSelectorPlatform.instance = _PickFiles([photo]);
-    final daemon = TestDaemon()..devices = [device(name: 'Pixel')];
-    await pumpApp(tester, daemon);
-
-    daemon.shell.onSendFilesRequested!();
-    await tester.pumpAndSettle();
-
-    expect(
-      find.text('No paired device is connected and able to receive files.'),
-      findsOneWidget,
-    );
+    expect(find.byType(AlertDialog), findsNothing);
+    verify(() => daemon.api.sendFile(_laptopId, photo)).called(1);
+    verify(() => daemon.api.sendFile(_laptopId, notes)).called(1);
   });
 
   testWidgets('failed uploads are reported once', (tester) async {
