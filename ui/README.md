@@ -72,7 +72,17 @@ cargo run -- --api-port 25011 pair <ui-device-id>
 dart run build_runner build --delete-conflicting-outputs  # after model changes
 flutter analyze
 flutter test
+tool/integration_test.sh  # end-to-end, see below
 ```
+
+`integration_test/` drives the real app, with its daemon embedded through
+the real FFI library, against a `myconnect run` peer it spawns (built with
+`cargo build --bin myconnect`, or set `MYCONNECT_CLI`). Both discover over
+loopback only, on fresh identities in temporary directories. It covers
+incoming pairing accept and reject, outgoing pairing, unpair, and a file each
+way. `tool/integration_test.sh` runs it under `xvfb-run` and
+`dbus-run-session` so nothing opens on your desktop; `flutter test
+integration_test -d linux` also works on a desktop session.
 
 Layout:
 
@@ -80,7 +90,7 @@ Layout:
 lib/
 ├── main.dart
 └── src/
-    ├── app.dart                 # MaterialApp, theme
+    ├── app.dart                 # MyConnectRoot (provider scope), MaterialApp, theme
     ├── core/
     │   ├── api/                 # dio client, SSE parsing, reconnecting stream, models
     │   ├── daemon/              # DaemonHost: FFI-embedded or external daemon

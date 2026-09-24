@@ -39,7 +39,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --all-targets
 (cd ui && dart run build_runner build --delete-conflicting-outputs \
-       && flutter analyze && flutter test)
+       && flutter analyze && flutter test && tool/integration_test.sh)
 git diff --check
 ```
 
@@ -67,6 +67,7 @@ Working and verified live (UI ↔ CLI daemon over loopback):
   to tray), stored by the daemon, with renames reaching peers at once
   (item 5).
 - The desktop clipboard synced with peers, in both directions (item 6).
+- End-to-end tests of the real app against a CLI peer (item 7).
 
 Only Linux bundles the native library. Nothing has been tested against a real
 KDE Connect install yet.
@@ -81,7 +82,7 @@ KDE Connect install yet.
 | 4 | ~~[Send files and a transfers view](#4-send-files-and-a-transfers-view)~~ **Done** | P1 | Flutter (+ small API) |
 | 5 | ~~[Daemon settings API and screen](#5-daemon-settings-api-and-settings-screen)~~ **Done** | P1 | Rust + Flutter |
 | 6 | ~~[OS clipboard integration](#6-os-clipboard-integration)~~ **Done** | P1 | Rust |
-| 7 | [Automated end-to-end test](#7-automated-end-to-end-test) | P1 | Test infra |
+| 7 | ~~[Automated end-to-end test](#7-automated-end-to-end-test)~~ **Done** | P1 | Test infra |
 | 8 | [Ping: send button and receiving](#8-ping-send-button-and-receiving) | P2 | Flutter + Rust |
 | 9 | [Add device by IP address](#9-add-device-by-ip-address) | P2 | Rust + Flutter |
 | 10 | [macOS and Windows packaging](#10-macos-and-windows-packaging) | P2 | Build |
@@ -425,6 +426,26 @@ in both directions, without loops. Never log clipboard contents, only lengths.
 ---
 
 ## 7. Automated end-to-end test
+
+> **Done (2026-09-24), locally; there is no CI yet.** `ui/integration_test/
+> app_test.dart` pumps `MyConnectRoot` (now shared with `main`) with the real
+> `NativeDaemonHost` and FFI library, on a fresh data dir, loopback
+> discovery and an in-memory clipboard. Only notifications are silenced. Each
+> test spawns its own `myconnect run` peer (`support/cli_peer.dart`: built
+> with `cargo build --bin myconnect` in `setUpAll`, or `MYCONNECT_CLI`) and
+> drives it over its tokenless API or `myconnect send`. Covered: incoming
+> pairing accept (the codes match on both sides) and reject, outgoing pairing
+> from Add device, unpair (the peer drops trust too), and a 300 KB file each
+> way, byte-identical, with "Send file" answered by a fake
+> `FileSelectorPlatform` instead of the GTK dialog. `ui/tool/
+> integration_test.sh` runs it under `dbus-run-session` and `xvfb-run`; the
+> five tests take about 8 s after the build and passed four runs in a row. A
+> deliberately broken Accept button fails the first test. Waits poll in real
+> time (`pumpUntil`), never `pumpAndSettle`, which spinners would hang. The
+> dart-define path (`DaemonHost.fromEnvironment`) is bypassed by the host
+> override, so a `dart fix` regression there would still go unnoticed. When
+> a CI exists, run `tool/integration_test.sh` on Linux with Flutter, Rust,
+> Xvfb and dbus installed. Not covered: settings, cancel, clipboard, the tray.
 
 **Why.** The last milestone's two worst bugs (a daemon start crash from
 isolate capture, and `dart fix` stripping `--dart-define`s) only showed up
