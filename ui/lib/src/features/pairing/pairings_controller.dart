@@ -78,11 +78,19 @@ class PairingsController extends AsyncNotifier<Map<String, Pairing>> {
     }
   }
 
+  /// Store [pairing] unless the pairing has already ended. An HTTP response
+  /// can arrive after the event that superseded it: a device that accepts
+  /// at once sends `pairing.updated` before `start` returns.
   Pairing _upsert(Pairing pairing) {
     final current = state.value;
-    if (current != null && ref.mounted) {
-      state = AsyncData({...current, pairing.id: pairing});
+    if (current == null || !ref.mounted) return pairing;
+    final existing = current[pairing.id];
+    if (existing != null &&
+        existing.status.isTerminal &&
+        !pairing.status.isTerminal) {
+      return existing;
     }
+    state = AsyncData({...current, pairing.id: pairing});
     return pairing;
   }
 
