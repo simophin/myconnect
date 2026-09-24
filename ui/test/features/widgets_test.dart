@@ -190,4 +190,37 @@ void main() {
     expect(find.text('From Phone · Cancelled'), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsNothing);
   });
+
+  testWidgets('a device can be added by IP address', (tester) async {
+    final daemon = await pumpApp(tester, TestDaemon());
+    when(daemon.api.scan).thenAnswer((_) async {});
+    when(
+      () => daemon.api.scan(address: 'desk.local'),
+    ).thenThrow(const ApiException(code: 'invalid_address', statusCode: 400));
+    when(() => daemon.api.scan(address: '192.168.1.20'))
+        .thenAnswer((_) async {});
+
+    await tester.tap(find.text('Add device'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add by IP address'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'desk.local');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Enter an IPv4 address'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), ' 192.168.1.20 ');
+    await tester.tap(find.text('Add'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    verify(() => daemon.api.scan(address: '192.168.1.20')).called(1);
+
+    // The device dials back and shows up like any scanned one.
+    daemon.events.add(
+      DeviceChanged(device(id: 'c' * 32, name: 'Laptop', paired: false)),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Laptop'), findsOneWidget);
+  });
 }

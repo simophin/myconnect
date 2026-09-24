@@ -1,5 +1,5 @@
 use std::{
-    net::{IpAddr, Ipv6Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     path::PathBuf,
 };
 
@@ -81,6 +81,10 @@ enum Command {
     },
     /// Broadcast a discovery request and list unpaired devices that answer.
     Scan {
+        /// Announce to this IPv4 address instead of broadcasting, for
+        /// networks where broadcast doesn't reach the other device.
+        #[arg(long, value_name = "IP")]
+        address: Option<Ipv4Addr>,
         /// Seconds to wait for devices to respond before listing results.
         #[arg(long, default_value_t = 3)]
         timeout: u64,
@@ -197,8 +201,12 @@ impl Cli {
                     })
                     .await?;
             }
-            Command::Scan { timeout, watch } => {
-                client.scan().await?;
+            Command::Scan {
+                address,
+                timeout,
+                watch,
+            } => {
+                client.scan(address).await?;
                 if watch {
                     client
                         .watch_devices(cancellation_on_ctrl_c(), |update| match update {
@@ -527,6 +535,7 @@ mod tests {
             vec!["myconnect", "scan"],
             vec!["myconnect", "scan", "--timeout", "5"],
             vec!["myconnect", "scan", "--watch"],
+            vec!["myconnect", "scan", "--address", "192.168.1.20"],
             vec!["myconnect", "ping", "device-id"],
             vec!["myconnect", "ping", "device-id", "hello"],
             vec!["myconnect", "pair", "device-id"],

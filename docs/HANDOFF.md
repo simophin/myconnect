@@ -86,7 +86,7 @@ KDE Connect install yet.
 | 6 | ~~[OS clipboard integration](#6-os-clipboard-integration)~~ **Done** | P1 | Rust |
 | 7 | ~~[Automated end-to-end test](#7-automated-end-to-end-test)~~ **Done** | P1 | Test infra |
 | 8 | ~~[Ping: send button and receiving](#8-ping-send-button-and-receiving)~~ **Done** | P2 | Flutter + Rust |
-| 9 | [Add device by IP address](#9-add-device-by-ip-address) | P2 | Rust + Flutter |
+| 9 | ~~[Add device by IP address](#9-add-device-by-ip-address)~~ **Done** | P2 | Rust + Flutter |
 | 10 | [macOS and Windows packaging](#10-macos-and-windows-packaging) | P2 | Build |
 
 ---
@@ -526,6 +526,26 @@ from the CLI to the app surfaces in the UI.
 
 ## 9. Add device by IP address
 
+> **Done (2026-09-24).** `POST /api/v1/discovery` takes an optional
+> `{"address": "..."}`; `ApplicationHandle::announce_to` accepts only a
+> unicast IPv4 address (else `400 invalid_address`) and queues
+> `Command::AnnounceTo`, which `LanService` sends to that address on port
+> 1716 (`LanConfig::with_peer_discovery_port` changes it for tests). The
+> Add device page has an "Add by IP address" row and dialog, and the CLI
+> has `myconnect scan --address <ip>`. Tests: `tests/lan.rs`
+> (`a_peer_added_by_address_connects_without_broadcast`), `tests/api.rs`,
+> and a widget test. Checked in the real app inside `unshare -rn` (a
+> network namespace with only loopback, so broadcast is unreachable):
+> entering `127.0.0.1` made the CLI peer appear, connected, in the list.
+> Addresses are not remembered across restarts yet (see follow-ups).
+>
+> Trap for local checks: two instances on one host share UDP 1716 through
+> `SO_REUSEPORT`/`SO_REUSEADDR`, and Linux delivers a *unicast* datagram
+> only to the socket that bound last. Start the instance being added
+> *after* the one doing the adding, or the announcement loops back to the
+> sender and is dropped as its own identity. Separate machines don't have
+> this problem.
+
 **Why.** UDP broadcast discovery fails on many networks (client isolation,
 VPNs, separate subnets). KDE Connect lets users add a device by IP address
 for these cases.
@@ -589,6 +609,15 @@ against an external daemon (`--dart-define=MYCONNECT_API_URL=...`).
 ---
 
 ## Smaller known follow-ups
+
+- Devices added by IP address are forgotten on restart. KDE Connect keeps
+  a list of such addresses and announces to them periodically; the
+  equivalent here is a daemon setting (a list of addresses, item 5's
+  `settings.json`) that `LanService` announces to on its interval, plus a
+  way to remove entries in the UI.
+- `clipboard::system::tests::clearing_the_clipboard_is_not_reported` failed
+  once under a full `cargo test --workspace` run and passed on every rerun
+  and on its own; it looks timing-sensitive under load.
 
 - Snapshots carry no sequence number, so an event emitted just before a
   snapshot response can briefly be overwritten by older data (ADR 0003).

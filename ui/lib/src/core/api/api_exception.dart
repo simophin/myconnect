@@ -43,6 +43,7 @@ class ApiException implements Exception {
     'invalid_device_name' =>
       'Use 1 to 32 characters, without . , : ; ! ? ( ) [ ] < > or quotes.',
     'invalid_download_dir' => 'That folder can’t be used for downloads.',
+    'invalid_address' => 'Enter an IPv4 address, like 192.168.1.20.',
     _ => 'Something went wrong ($code).',
   };
 

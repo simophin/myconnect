@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    net::SocketAddr,
+    net::{Ipv4Addr, SocketAddr},
     path::PathBuf,
     sync::{Arc, Mutex, RwLock},
     time::{Instant, SystemTime, UNIX_EPOCH},
@@ -90,6 +90,7 @@ pub trait ApplicationService: Send + Sync {
     fn accept_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, ApplicationError>;
     fn cancel_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, ApplicationError>;
     fn forget_device(&self, device_id: &str) -> Result<(), ApplicationError>;
+    fn announce_to(&self, address: Ipv4Addr) -> Result<(), ApplicationError>;
     fn send_ping(&self, device_id: &str, message: Option<String>) -> Result<(), ApplicationError>;
     fn set_clipboard(&self, text: String) -> Result<ClipboardSnapshot, ApplicationError>;
     fn update_settings(&self, patch: SettingsPatch) -> Result<SettingsSnapshot, ApplicationError>;
@@ -789,6 +790,18 @@ impl ApplicationHandle {
             Ok(plugins::IncomingPluginPacket::ShareRequestUpdate(_)) => {}
             Err(_) => {}
         }
+    }
+
+    /// Announce this device to one address, for networks where broadcast
+    /// discovery doesn't reach the peer. A peer that hears it dials back
+    /// over TCP, as it would after a broadcast. Only unicast addresses are
+    /// accepted, so this can't be used to spray the identity at a
+    /// broadcast or multicast group.
+    pub fn announce_to(&self, address: Ipv4Addr) -> Result<(), ApplicationError> {
+        if address.is_unspecified() || address.is_broadcast() || address.is_multicast() {
+            return Err(ApplicationError::InvalidDiscoveryAddress);
+        }
+        self.command(Command::AnnounceTo { address })
     }
 
     /// Send a `kdeconnect.ping` packet, optionally carrying a message, to a
@@ -2024,6 +2037,10 @@ impl ApplicationService for ApplicationHandle {
         ApplicationHandle::cancel_pairing(self, pairing_id)
     }
 
+    fn announce_to(&self, address: Ipv4Addr) -> Result<(), ApplicationError> {
+        ApplicationHandle::announce_to(self, address)
+    }
+
     fn forget_device(&self, device_id: &str) -> Result<(), ApplicationError> {
         ApplicationHandle::forget_device(self, device_id)
     }
@@ -2086,6 +2103,8 @@ pub enum ApplicationError {
     UnexpectedQueryResult,
     #[error("unknown device")]
     UnknownDevice,
+    #[error("discovery address must be a unicast IPv4 address")]
+    InvalidDiscoveryAddress,
     #[error("device is already paired")]
     AlreadyPaired,
     #[error("a pairing session is already in progress for this device")]
@@ -2210,6 +2229,24 @@ mod tests {
             Err(ApplicationError::CommandQueueFull)
         ));
         assert_eq!(commands.recv().await, Some(Command::AnnounceDiscovery));
+    }
+
+    #[tokio::test]
+    async fn announcing_to_an_address_accepts_only_unicast() {
+        let (handle, mut commands) = handle();
+        for address in [
+            Ipv4Addr::UNSPECIFIED,
+            Ipv4Addr::BROADCAST,
+            Ipv4Addr::new(224, 0, 0, 251),
+        ] {
+            assert!(matches!(
+                handle.announce_to(address),
+                Err(ApplicationError::InvalidDiscoveryAddress)
+            ));
+        }
+        let address = Ipv4Addr::new(192, 168, 1, 20);
+        handle.announce_to(address).unwrap();
+        assert_eq!(commands.recv().await, Some(Command::AnnounceTo { address }));
     }
 
     #[test]

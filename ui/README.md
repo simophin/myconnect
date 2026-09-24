@@ -11,8 +11,8 @@ library, on a free loopback port with a per-launch token.
 
 - Paired device list with live reachability
 - Device details and unpairing
-- Add device: scan for nearby devices and start pairing, with the
-  verification code and outcome
+- Add device: scan for nearby devices, or add one by IP address, and start
+  pairing, with the verification code and outcome
 - Incoming pairing requests prompt on any screen
 - Send a file from a device's page; a transfers page (and each device's
   recent transfers) shows progress, cancels running transfers, and opens

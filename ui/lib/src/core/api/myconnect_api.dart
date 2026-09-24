@@ -49,8 +49,15 @@ class MyConnectApi {
           .map((json) => Device.fromJson(json! as _Json))
           .toList();
 
-  /// Broadcast a discovery request so nearby devices answer promptly.
-  Future<void> scan() => _send(() => _dio.post<void>('discovery'));
+  /// Broadcast a discovery request so nearby devices answer promptly. With
+  /// an [address], announce to that IPv4 address only, for networks where
+  /// broadcast doesn't reach the device.
+  Future<void> scan({String? address}) => _send(
+    () => _dio.post<void>(
+      'discovery',
+      data: address == null ? null : {'address': address},
+    ),
+  );
 
   /// Unpair and forget a device.
   Future<void> forgetDevice(String deviceId) => _send(

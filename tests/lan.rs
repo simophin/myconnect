@@ -263,6 +263,55 @@ async fn two_peers_discover_connect_deduplicate_and_follow_address_changes() {
     b_service.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn a_peer_added_by_address_connects_without_broadcast() {
+    let a = peer("Peer A");
+    let b = peer("Peer B");
+    let a_id = a.identity.device_id().to_owned();
+    let b_id = b.identity.device_id().to_owned();
+    let b_udp = free_udp_addr();
+    // Neither side broadcasts, so only A's announcement to B's address can
+    // bring them together.
+    let a_service = LanService::start(
+        test_config(free_udp_addr(), b_udp)
+            .with_announcement_targets(Vec::new())
+            .with_peer_discovery_port(b_udp.port()),
+        local(&a_id, "Peer A"),
+        a.application.clone(),
+        a.commands,
+        a.identity.clone(),
+        a.trust_store.clone(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let b_service = LanService::start(
+        test_config(b_udp, b_udp).with_announcement_targets(Vec::new()),
+        local(&b_id, "Peer B"),
+        b.application.clone(),
+        b.commands,
+        b.identity.clone(),
+        b.trust_store.clone(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(matches!(
+        a.application.query(Query::Devices).unwrap(),
+        QueryResult::Devices(devices) if devices.is_empty()
+    ));
+
+    a.application.announce_to(Ipv4Addr::LOCALHOST).unwrap();
+    // B hears A and dials back; A learns about B from that connection.
+    wait_for_reachability(&a.application, &b_id, DeviceReachability::Connected).await;
+    wait_for_reachability(&b.application, &a_id, DeviceReachability::Connected).await;
+
+    a_service.shutdown().await.unwrap();
+    b_service.shutdown().await.unwrap();
+}
+
 // The two tests below play the KDE Connect side of the handshake byte for
 // byte as KDE Connect Android's `LanLinkProvider` does, so they catch
 // handshake changes that would still let two MyConnect peers talk to each
