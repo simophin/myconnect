@@ -49,10 +49,10 @@ so packet handling can be exercised without a live connection.
 | --- | --- | --- |
 | `protocol` | `src/protocol/{mod,packet,codec,verification}.rs` | Wire packet envelope, identity/pairing body types, bounded newline-delimited JSON codec, the protocol-v8 verification-code function. No I/O. |
 | `config` | `src/config/{mod,identity,settings,token,trust}.rs` | Local device identity (UUID + self-signed cert), the optional API bearer token (never persisted), filesystem-backed `TrustStore` of pinned peer certificates, and `settings.json` (user settings, written atomically). |
-| `transport` | `src/transport/{lan,tls,payload}.rs` | UDP discovery, TCP control-channel connect/accept, the real rustls TLS handshake and certificate pinning, and the auxiliary TLS payload connection used for file transfer. |
+| `transport` | `src/transport/{lan,tls,payload,sftp}.rs` | UDP discovery, TCP control-channel connect/accept, the real rustls TLS handshake and certificate pinning, the auxiliary TLS payload connection used for file transfer, and the SSH/SFTP client connection to a peer's file server (§12). |
 | `device` | `src/device.rs` | `DeviceSnapshot`, `DeviceReachability`, and the in-memory device registry keyed by device ID. |
-| `plugins` | `src/plugins/{mod,ping,clipboard,share}.rs` | Fixed (non-dynamic) packet-type routing table for the packet families this build understands: ping, clipboard, share. Advertises capability strings for the identity packet, all in both directions. |
-| `application` | `src/application.rs`, `src/application/{state,events,service,settings,transfer}.rs` | Orchestration: connection registry, pairing state machine, transfer state machine, clipboard sync, user settings, bounded event bus. Everything HTTP-facing is a snapshot type defined here. `RunningService` starts/stops a whole daemon (LAN + API) for the CLI and embedders. |
+| `plugins` | `src/plugins/{mod,ping,clipboard,share,sftp}.rs` | Fixed (non-dynamic) packet-type routing table for the packet families this build understands: ping, clipboard, share, sftp. Advertises capability strings for the identity packet: ping, clipboard and share in both directions; `kdeconnect.sftp.request` outgoing and `kdeconnect.sftp` incoming only, since this build browses peers but serves no files. |
+| `application` | `src/application.rs`, `src/application/{state,events,service,settings,transfer,files}.rs`, `src/application/service/browse.rs` | Orchestration: connection registry, pairing state machine, transfer state machine, clipboard sync, user settings, browse sessions with peers' files (§12), bounded event bus. Everything HTTP-facing is a snapshot type defined here. `RunningService` starts/stops a whole daemon (LAN + API) for the CLI and embedders. |
 | `clipboard` | `src/clipboard.rs`, `src/clipboard/system.rs` | `ClipboardService` trait, the desktop clipboard (`SystemClipboard`, over `arboard`) and an in-memory implementation (§6). |
 | `api` | `src/api.rs` | Axum HTTP transport only — translates HTTP requests to `ApplicationService` calls and snapshots back to JSON. Optional bearer-token auth, body-size limits, SSE. |
 | `client` | `src/client.rs` | Typed HTTP client used by the CLI (and any future frontend) to talk to `api`. |
@@ -238,6 +238,13 @@ event stream.
 | `GET` | `/transfers` | Active and recent transfers. |
 | `GET` | `/transfers/{transferId}` | State, byte counts, safe metadata. |
 | `DELETE` | `/transfers/{transferId}` | Cancel an active transfer. |
+| `GET` | `/devices/{deviceId}/files` | List a directory on a paired device (`?path=/absolute/path`), or without `path` the storage roots it shares, as `{path, entries: [{name, path, kind, size?, modifiedAt?}]}`. `kind` is `file`, `directory`, `symlink` or `other`; links are shown as what they point to. §12. |
+| `GET` | `/devices/{deviceId}/files/content` | Stream a file's bytes (`?path=`), with `Content-Length` and a media type guessed from the extension. For previews; not a transfer. |
+| `POST` | `/devices/{deviceId}/files/download` | `{"path": ...}`: save the file into the download directory as an incoming transfer; `202` with the transfer. |
+| `POST` | `/devices/{deviceId}/files/upload` | Streaming `multipart/form-data`: a `path` field naming the directory on the device, then a `file` part with `Content-Length`. Runs as an outgoing transfer; a taken name gets a ` (n)` suffix. Same body limit and idle timeout as `POST /transfers`. |
+| `POST` | `/devices/{deviceId}/files/directories` | `{"path": ...}`: create a directory; `201` with its entry. |
+| `POST` | `/devices/{deviceId}/files/move` | `{"from": ..., "to": ...}`: move or rename; `409 file_exists` rather than replacing anything. |
+| `DELETE` | `/devices/{deviceId}/files` | `?path=`: delete a file, or a directory and everything in it. Storage roots can't be moved or deleted (`400 invalid_path`). |
 | `GET` | `/clipboard` | Current synchronized text and metadata. |
 | `PUT` | `/clipboard` | Set text and send to eligible paired devices. |
 | `GET` | `/settings` | The settings in effect (§7). |
@@ -247,6 +254,14 @@ event stream.
 Mutation endpoints that require network round-trips return `202` and are
 tracked through the resource's own state (poll the resource or watch
 `/events`); events are notifications, not the source of truth.
+
+The file endpoints fail with `409 files_unavailable` when the device won't
+share its files (with the device's own reason in `detail` when it gave one),
+`404 file_not_found`, `403 file_permission_denied`, `409 not_a_directory` /
+`is_a_directory`, `400 invalid_path` (not absolute, or a `.`/`..` segment),
+`502 files_host_key_mismatch`, `502 files_failed` or `504 files_timed_out`,
+besides the device errors (`device_not_paired`, `device_not_connected`,
+`unsupported_by_peer`).
 
 ## 9. Embedding (FFI)
 
@@ -273,7 +288,10 @@ user quits (see `ui/docs/adr/0007`).
 
 Integration tests live in `tests/` and are organized by concern, not by
 phase: `protocol.rs`, `tls.rs`, `lan.rs`, `pairing.rs` / `pairing_e2e.rs`,
-`ping_e2e.rs`, `clipboard_e2e.rs`, `transfer_e2e.rs`, `client.rs`, `api.rs`.
+`ping_e2e.rs`, `clipboard_e2e.rs`, `transfer_e2e.rs`, `browse_e2e.rs`,
+`client.rs`, `api.rs`. `browse_e2e.rs` runs against a fake KDE Connect for
+Android (`tests/support/fake_phone.rs`), which `examples/fake_phone.rs`
+also runs standalone for trying the app without a phone.
 The FFI crate has its own start/stop smoke test, and the Flutter app has
 unit and widget tests under `ui/test/`.
 Most end-to-end tests spin up two in-process peers (real UDP/TCP/TLS on
@@ -317,3 +335,48 @@ Prioritized next work, with implementation notes for each item, is in
 - No Bluetooth transport, no multi-file/directory
   transfer, no durable event replay, no remote/LAN exposure of the control
   API — these are explicit non-goals for the current scope, not oversights.
+
+## 12. Browsing a device's files
+
+KDE Connect for Android shares its storage over SFTP; no other KDE Connect
+client serves files. MyConnect is a client only: the UI's reasoning is in
+[`ui/docs/adr/0008`](../ui/docs/adr/0008-browse-device-files-in-the-app.md).
+
+- **Offer.** The first file request for a device sends
+  `kdeconnect.sftp.request {"startBrowsing": true}` and waits up to 5
+  seconds for `kdeconnect.sftp`. That reply carries `port`, `user`, a
+  one-off `password` and the roots (`multiPaths` named by `pathNames`, else
+  `path`). An `errorMessage` reply becomes `files_unavailable` with that
+  message as `detail`. The `ip` field is ignored: the daemon connects to
+  the address of the existing control connection, as KDE Connect does.
+- **Connection** (`transport::sftp`, russh + russh-sftp, 8-second
+  deadline). The peer's SSH host key must equal the public key in its
+  pinned TLS certificate: Android uses its KDE Connect key pair as the host
+  key. KDE Connect's own clients skip this check. A mismatch fails with
+  `files_host_key_mismatch` before any credential is sent. The daemon signs
+  in with its own TLS key, which Android accepts from the paired device,
+  and falls back to the one-off password.
+- **Session.** One session per device, opened on demand, shared by
+  concurrent requests (opening is serialized per device) and reused. It is
+  dropped when the device disconnects, is unpaired or forgotten, when the
+  peer sends `{"serverRunning": false}` (Android's plugin reloaded), when a
+  request finds the SSH connection closed, at daemon shutdown, and after 5
+  minutes unused. A download or upload in progress keeps it open.
+- **Paths.** Every path is the peer's absolute path. The daemon rejects
+  relative paths, NUL bytes and `.`/`..` segments, and strips repeated and
+  trailing `/`. What a path can reach is up to the peer's server. `/` and
+  the roots themselves can't be moved or deleted.
+- **Copies.** Downloads are incoming transfers, saved exactly like received
+  files (a `.part` file renamed into place, a ` (n)` suffix on
+  collisions). Uploads are outgoing transfers into a file created with
+  `EXCLUDE` under a free name. SFTP v3 reports "exists" only as a generic
+  failure, so the daemon checks first. An upload that fails or is
+  cancelled is removed from the peer. Moves and new folders also refuse to
+  replace anything.
+- **No events.** Nothing tells the daemon when files change on the device,
+  so listings are fetched when needed; there is no `files.*` event.
+- **Limits.** A recursive delete runs within the 15-second request
+  deadline, so deleting a very large tree can stop partway.
+- **Checked on Android.** A Pixel 8a (KDE Connect for Android, 2026-09)
+  accepted our ECDSA key, its host key matched its certificate, and it
+  offered one root, `/storage/emulated/0` ("Internal shared storage").

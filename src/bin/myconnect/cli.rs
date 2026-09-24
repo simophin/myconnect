@@ -8,8 +8,8 @@ use clap::{Parser, Subcommand};
 use myconnect::{
     api::DEFAULT_API_PORT,
     application::{
-        ApplicationEvent, ClipboardSnapshot, EventData, PairingSnapshot, RunRequest, SettingsPatch,
-        SettingsSnapshot, TransferSnapshot,
+        ApplicationEvent, ClipboardSnapshot, DirectoryListing, EventData, FileEntry, FileKind,
+        PairingSnapshot, RunRequest, SettingsPatch, SettingsSnapshot, TransferSnapshot,
     },
     client::{
         API_TOKEN_ENV, ApiClient, ClipboardWatchUpdate, DeviceWatchUpdate, TransferWatchUpdate,
@@ -111,6 +111,13 @@ enum Command {
         #[arg(long)]
         watch: bool,
     },
+    /// Browse a paired device's files (KDE Connect for Android shares
+    /// them). Paths are absolute paths on the device.
+    Files {
+        device_id: String,
+        #[command(subcommand)]
+        action: FilesAction,
+    },
     /// Read, update, or watch synchronized clipboard text.
     Clipboard {
         #[command(subcommand)]
@@ -134,6 +141,33 @@ enum PairAction {
     Start(String),
     Accept(Uuid),
     Reject(Uuid),
+}
+
+#[derive(Debug, PartialEq, Eq, Subcommand)]
+enum FilesAction {
+    /// List a directory, or, without a path, the storage the device shares.
+    Ls { path: Option<String> },
+    /// Save a file into the download directory.
+    Get {
+        path: String,
+        #[arg(long)]
+        watch: bool,
+    },
+    /// Write a file's content to standard output.
+    Cat { path: String },
+    /// Upload a local file into a directory on the device.
+    Put {
+        file: PathBuf,
+        directory: String,
+        #[arg(long)]
+        watch: bool,
+    },
+    /// Create a directory.
+    Mkdir { path: String },
+    /// Move or rename a file or directory. Never replaces anything.
+    Mv { from: String, to: String },
+    /// Delete a file, or a directory and everything in it.
+    Rm { path: String },
 }
 
 #[derive(Debug, PartialEq, Eq, Subcommand)]
@@ -277,6 +311,69 @@ impl Cli {
                         .await?;
                 } else {
                     print_transfer(&transfer, json);
+                }
+            }
+            Command::Files { device_id, action } => {
+                let watch_transfer = |transfer: TransferSnapshot, watch: bool| {
+                    let client = &client;
+                    async move {
+                        if !watch {
+                            print_transfer(&transfer, json);
+                            return anyhow::Ok(());
+                        }
+                        client
+                            .watch_transfer(transfer.id, cancellation_on_ctrl_c(), |update| {
+                                match update {
+                                    TransferWatchUpdate::Snapshot(transfer) => {
+                                        print_transfer(&transfer, json)
+                                    }
+                                    TransferWatchUpdate::Event(event) => print_event(&event, json),
+                                }
+                            })
+                            .await?;
+                        Ok(())
+                    }
+                };
+                match action {
+                    FilesAction::Ls { path } => {
+                        print_listing(&client.list_files(&device_id, path.as_deref()).await?, json)
+                    }
+                    FilesAction::Get { path, watch } => {
+                        let transfer = client.download_file(&device_id, &path).await?;
+                        watch_transfer(transfer, watch).await?;
+                    }
+                    FilesAction::Cat { path } => {
+                        use std::io::Write;
+
+                        use futures_util::StreamExt;
+
+                        let mut content = client.file_content(&device_id, &path).await?;
+                        let mut stdout = std::io::stdout().lock();
+                        while let Some(chunk) = content.next().await {
+                            stdout.write_all(&chunk?)?;
+                        }
+                        stdout.flush()?;
+                    }
+                    FilesAction::Put {
+                        file,
+                        directory,
+                        watch,
+                    } => {
+                        let transfer = client.upload_file(&device_id, &directory, &file).await?;
+                        watch_transfer(transfer, watch).await?;
+                    }
+                    FilesAction::Mkdir { path } => {
+                        print_entry(&client.create_directory(&device_id, &path).await?, json)
+                    }
+                    FilesAction::Mv { from, to } => {
+                        print_entry(&client.move_file(&device_id, &from, &to).await?, json)
+                    }
+                    FilesAction::Rm { path } => {
+                        client.delete_file(&device_id, &path).await?;
+                        if !json {
+                            println!("Deleted {path}");
+                        }
+                    }
                 }
             }
             Command::Clipboard {
@@ -435,6 +532,46 @@ fn print_transfer(transfer: &TransferSnapshot, json_output: bool) {
     }
 }
 
+fn print_listing(listing: &DirectoryListing, json_output: bool) {
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string(listing).expect("listing serializes")
+        );
+    } else if listing.entries.is_empty() {
+        println!("Empty");
+    } else if listing.path.is_none() {
+        // Storage roots: the name the device gives each, and where it is.
+        for entry in &listing.entries {
+            println!("{}\t{}", entry.name, entry.path);
+        }
+    } else {
+        for entry in &listing.entries {
+            print_entry(entry, false);
+        }
+    }
+}
+
+fn print_entry(entry: &FileEntry, json_output: bool) {
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string(entry).expect("entry serializes")
+        );
+        return;
+    }
+    let size = entry
+        .size
+        .map(|size| size.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let suffix = if entry.kind == FileKind::Directory {
+        "/"
+    } else {
+        ""
+    };
+    println!("{size:>12}  {}{suffix}", entry.name);
+}
+
 fn print_clipboard(clipboard: &ClipboardSnapshot, json_output: bool) {
     if json_output {
         println!(
@@ -544,6 +681,27 @@ mod tests {
             vec!["myconnect", "unpair", "device-id"],
             vec!["myconnect", "send", "device-id", "photo.jpg"],
             vec!["myconnect", "send", "device-id", "photo.jpg", "--watch"],
+            vec!["myconnect", "files", "device-id", "ls"],
+            vec![
+                "myconnect",
+                "files",
+                "device-id",
+                "ls",
+                "/storage/emulated/0",
+            ],
+            vec![
+                "myconnect",
+                "files",
+                "device-id",
+                "get",
+                "/a/b.jpg",
+                "--watch",
+            ],
+            vec!["myconnect", "files", "device-id", "cat", "/a/b.txt"],
+            vec!["myconnect", "files", "device-id", "put", "photo.jpg", "/a"],
+            vec!["myconnect", "files", "device-id", "mkdir", "/a/new"],
+            vec!["myconnect", "files", "device-id", "mv", "/a/x", "/a/y"],
+            vec!["myconnect", "files", "device-id", "rm", "/a/x"],
             vec!["myconnect", "clipboard", "get"],
             vec!["myconnect", "clipboard", "set", "hello"],
             vec!["myconnect", "clipboard", "watch"],

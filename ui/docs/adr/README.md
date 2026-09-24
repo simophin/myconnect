@@ -14,6 +14,7 @@ editing it.
 | [0005](0005-libraries-and-code-conventions.md) | Library choices and code conventions | Accepted |
 | [0006](0006-build-the-rust-core-from-the-platform-build.md) | Build and bundle the Rust core from the platform build | Accepted |
 | [0007](0007-keep-running-in-the-tray.md) | Keep running in the tray when the window closes | Accepted |
+| [0008](0008-browse-device-files-in-the-app.md) | Browse a device's files in the app, fetched on demand | Accepted |
 
 Template for new records:
 

@@ -18,8 +18,8 @@ use uuid::Uuid;
 use crate::{
     api::DEFAULT_API_PORT,
     application::{
-        ApplicationEvent, ClipboardSnapshot, EventData, PairingSnapshot, SettingsPatch,
-        SettingsSnapshot, TransferSnapshot, TransferStatus,
+        ApplicationEvent, ClipboardSnapshot, DirectoryListing, EventData, FileEntry,
+        PairingSnapshot, SettingsPatch, SettingsSnapshot, TransferSnapshot, TransferStatus,
     },
     config::ApiToken,
     device::DeviceSnapshot,
@@ -30,6 +30,8 @@ pub const API_TOKEN_ENV: &str = "MYCONNECT_API_TOKEN";
 
 pub type EventStream =
     Pin<Box<dyn Stream<Item = Result<ApplicationEvent, ClientError>> + Send + 'static>>;
+pub type ByteStream =
+    Pin<Box<dyn Stream<Item = Result<bytes::Bytes, ClientError>> + Send + 'static>>;
 
 pub struct ApiClient {
     base_url: Url,
@@ -197,39 +199,10 @@ impl ApiClient {
         device_id: &str,
         path: &Path,
     ) -> Result<TransferSnapshot, ClientError> {
-        let file = File::open(path)
-            .await
-            .map_err(|source| ClientError::OpenFile {
-                path: path.to_owned(),
-                source,
-            })?;
-        let length = file
-            .metadata()
-            .await
-            .map_err(|source| ClientError::OpenFile {
-                path: path.to_owned(),
-                source,
-            })?
-            .len();
-        let file_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or(ClientError::InvalidFileName)?
-            .to_owned();
-        let stream = ReaderStream::new(file);
-        // The daemon checks the declared size before streaming, and reads it
-        // from the part's own Content-Length header, which
-        // `stream_with_length` does not set.
-        let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_LENGTH, HeaderValue::from(length));
-        let part = Part::stream_with_length(reqwest::Body::wrap_stream(stream), length)
-            .headers(headers)
-            .file_name(file_name)
-            .mime_str("application/octet-stream")
-            .map_err(ClientError::Build)?;
+        let (file_name, part) = file_part(path).await?;
         let form = Form::new()
             .text("deviceId", device_id.to_owned())
-            .part("file", part);
+            .part("file", part.file_name(file_name));
         let response = self
             .authorized(self.http.post(self.url("api/v1/transfers")?))
             .multipart(form)
@@ -237,6 +210,146 @@ impl ApiClient {
             .await
             .map_err(map_transport)?;
         decode_json(response, "transfer").await
+    }
+
+    /// List a directory on a paired device, or, without `path`, the
+    /// storage roots it shares.
+    pub async fn list_files(
+        &self,
+        device_id: &str,
+        path: Option<&str>,
+    ) -> Result<DirectoryListing, ClientError> {
+        let mut url = self.url(&format!("api/v1/devices/{device_id}/files"))?;
+        if let Some(path) = path {
+            url.query_pairs_mut().append_pair("path", path);
+        }
+        let response = self
+            .authorized(self.http.get(url))
+            .send()
+            .await
+            .map_err(map_transport)?;
+        decode_json(response, "device or directory").await
+    }
+
+    /// Stream a file's content from a paired device.
+    pub async fn file_content(
+        &self,
+        device_id: &str,
+        path: &str,
+    ) -> Result<ByteStream, ClientError> {
+        let mut url = self.url(&format!("api/v1/devices/{device_id}/files/content"))?;
+        url.query_pairs_mut().append_pair("path", path);
+        let response = self
+            .authorized(self.http.get(url))
+            .send()
+            .await
+            .map_err(map_transport)?;
+        let response = checked(response, "device or file").await?;
+        Ok(Box::pin(
+            response
+                .bytes_stream()
+                .map(|chunk| chunk.map_err(map_transport)),
+        ))
+    }
+
+    /// Save a file from a paired device into the daemon's download
+    /// directory, as an incoming transfer.
+    pub async fn download_file(
+        &self,
+        device_id: &str,
+        path: &str,
+    ) -> Result<TransferSnapshot, ClientError> {
+        let response = self
+            .authorized(
+                self.http
+                    .post(self.url(&format!("api/v1/devices/{device_id}/files/download"))?),
+            )
+            .json(&FilePath { path })
+            .send()
+            .await
+            .map_err(map_transport)?;
+        decode_json(response, "device or file").await
+    }
+
+    /// Upload a local file into `directory` on a paired device. Completes
+    /// once the whole file has been forwarded.
+    pub async fn upload_file(
+        &self,
+        device_id: &str,
+        directory: &str,
+        path: &Path,
+    ) -> Result<TransferSnapshot, ClientError> {
+        let (file_name, part) = file_part(path).await?;
+        let form = Form::new()
+            .text("path", directory.to_owned())
+            .part("file", part.file_name(file_name));
+        let response = self
+            .authorized(
+                self.http
+                    .post(self.url(&format!("api/v1/devices/{device_id}/files/upload"))?),
+            )
+            .multipart(form)
+            .send()
+            .await
+            .map_err(map_transport)?;
+        decode_json(response, "device or directory").await
+    }
+
+    /// Create a directory on a paired device.
+    pub async fn create_directory(
+        &self,
+        device_id: &str,
+        path: &str,
+    ) -> Result<FileEntry, ClientError> {
+        let response = self
+            .authorized(
+                self.http
+                    .post(self.url(&format!("api/v1/devices/{device_id}/files/directories"))?),
+            )
+            .json(&FilePath { path })
+            .send()
+            .await
+            .map_err(map_transport)?;
+        decode_json(response, "device or directory").await
+    }
+
+    /// Move or rename a file or directory on a paired device.
+    pub async fn move_file(
+        &self,
+        device_id: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<FileEntry, ClientError> {
+        #[derive(Serialize)]
+        struct Move<'a> {
+            from: &'a str,
+            to: &'a str,
+        }
+
+        let response = self
+            .authorized(
+                self.http
+                    .post(self.url(&format!("api/v1/devices/{device_id}/files/move"))?),
+            )
+            .json(&Move { from, to })
+            .send()
+            .await
+            .map_err(map_transport)?;
+        decode_json(response, "device or file").await
+    }
+
+    /// Delete a file, or a directory and everything in it, on a paired
+    /// device.
+    pub async fn delete_file(&self, device_id: &str, path: &str) -> Result<(), ClientError> {
+        let mut url = self.url(&format!("api/v1/devices/{device_id}/files"))?;
+        url.query_pairs_mut().append_pair("path", path);
+        let response = self
+            .authorized(self.http.delete(url))
+            .send()
+            .await
+            .map_err(map_transport)?;
+        checked(response, "device or file").await?;
+        Ok(())
     }
 
     pub async fn transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, ClientError> {
@@ -437,6 +550,45 @@ impl ApiClient {
             .join(path)
             .map_err(|_| ClientError::InvalidApiUrl)
     }
+}
+
+#[derive(Serialize)]
+struct FilePath<'a> {
+    path: &'a str,
+}
+
+/// A multipart part streaming the file at `path`, and the file's name.
+async fn file_part(path: &Path) -> Result<(String, Part), ClientError> {
+    let file = File::open(path)
+        .await
+        .map_err(|source| ClientError::OpenFile {
+            path: path.to_owned(),
+            source,
+        })?;
+    let length = file
+        .metadata()
+        .await
+        .map_err(|source| ClientError::OpenFile {
+            path: path.to_owned(),
+            source,
+        })?
+        .len();
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(ClientError::InvalidFileName)?
+        .to_owned();
+    let stream = ReaderStream::new(file);
+    // The daemon checks the declared size before streaming, and reads it
+    // from the part's own Content-Length header, which
+    // `stream_with_length` does not set.
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_LENGTH, HeaderValue::from(length));
+    let part = Part::stream_with_length(reqwest::Body::wrap_stream(stream), length)
+        .headers(headers)
+        .mime_str("application/octet-stream")
+        .map_err(ClientError::Build)?;
+    Ok((file_name, part))
 }
 
 pub enum DeviceWatchUpdate {

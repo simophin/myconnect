@@ -26,6 +26,7 @@ use crate::{
 };
 
 mod events;
+mod files;
 mod service;
 mod settings;
 mod state;
@@ -34,7 +35,8 @@ mod transfer;
 use settings::Settings;
 
 pub use events::{ApplicationEvent, EventBus, EventBusError, EventData};
-pub use service::{ApplicationError, ApplicationHandle, ApplicationService};
+pub use files::{DirectoryListing, FileEntry, FileKind};
+pub use service::{ApplicationError, ApplicationHandle, ApplicationService, RemoteFileContent};
 pub use settings::{SettingsDefaults, SettingsPatch, SettingsSnapshot};
 pub use state::{
     ClipboardSnapshot, Command, LocalDeviceSnapshot, MAX_CLIPBOARD_TEXT_BYTES, OperationErrorCode,
@@ -246,6 +248,7 @@ impl RunningService {
             let _ = tokio::task::spawn_blocking(move || clipboard.stop()).await;
         }
         application.shutdown_transfers(Duration::from_secs(5)).await;
+        application.shutdown_browsing().await;
         server_result?;
         lan_result?;
         Ok(())

@@ -59,6 +59,23 @@ class TransfersController extends AsyncNotifier<Map<String, Transfer>> {
     await (await ref.read(apiProvider.future)).sendFile(deviceId, path),
   );
 
+  /// Save a file from a device into the download folder. Completes once the
+  /// download has started.
+  Future<Transfer> download(String deviceId, String path) async => _upsert(
+    await (await ref.read(apiProvider.future)).downloadFile(deviceId, path),
+  );
+
+  /// Upload a local file into [directory] on a device. Completes when the
+  /// upload ends.
+  Future<Transfer> upload(
+    String deviceId,
+    String directory,
+    String localPath,
+  ) async => _upsert(
+    await (await ref.read(apiProvider.future))
+        .uploadFile(deviceId, directory, localPath),
+  );
+
   Future<Transfer> cancel(String transferId) async => _upsert(
     await (await ref.read(apiProvider.future)).cancelTransfer(transferId),
   );

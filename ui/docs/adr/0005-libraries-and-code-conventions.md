@@ -30,6 +30,7 @@ style, while keeping the dependency list short.
 | Dropping files on the window | `desktop_drop` | The widely used drop plugin (MixinNetwork) for Linux, macOS and Windows. Every `DropTarget` receives every drop inside its bounds, even on covered pages, so the app has one window-wide target (`FileDropZone`) that hit-tests for the device under the pointer. Tray icons can't take drops on Linux (StatusNotifierItem) or Windows, so the tray offers *Send files…* instead. |
 | Default device name (Rust daemon) | `gethostname` | Small, widely used crate for the host name on Linux, macOS and Windows; the standard library has no API for it. |
 | Opening files and folders | `url_launcher` | The Flutter team's plugin; opens `file:` URIs with the desktop's default app (on Linux through GIO, like `xdg-open`). |
+| SSH and SFTP client (Rust daemon) | `russh` + `russh-sftp` | Pure Rust and async on tokio, so they build for macOS and Windows with no system libraries. `russh` is used with the `ring` backend, which rustls already uses, rather than aws-lc-rs, which needs cmake and NASM on Windows. Used to browse a device's files ([0008](0008-browse-device-files-in-the-app.md)). |
 | Desktop clipboard (Rust daemon) | `arboard` | The standard cross-platform clipboard crate (maintained by 1Password), covering X11, Wayland (with the `wayland-data-control` feature), macOS and Windows. Default features are off, so it doesn't pull in image support. |
 
 Conventions:

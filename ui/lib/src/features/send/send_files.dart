@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:myconnect_ui/src/core/api/models/device.dart';
 import 'package:myconnect_ui/src/core/routing/router.dart';
 import 'package:myconnect_ui/src/features/devices/devices_controller.dart';
+import 'package:myconnect_ui/src/features/files/files_controller.dart';
 import 'package:myconnect_ui/src/features/transfers/transfers_controller.dart';
 import 'package:myconnect_ui/src/shared/widgets.dart';
 
@@ -69,6 +70,42 @@ Future<void> sendFiles(
       "Couldn't send ${fileName(path)}: ${describeError(error)}",
     [(_, final error), ...] =>
       "Couldn't send ${failures.length} files: ${describeError(error)}",
+  };
+  if (message != null) {
+    messenger.showSnackBar(SnackBar(content: Text(message)));
+  }
+}
+
+/// Upload [paths] into [directory] on a device one at a time, report any
+/// that failed in a single snackbar, then show the folder's new contents.
+///
+/// The uploads outlive the page that started them, so this works through
+/// the provider [container] and a messenger captured up front.
+Future<void> uploadFiles(
+  ProviderContainer container,
+  ScaffoldMessengerState messenger,
+  String deviceId,
+  String directory,
+  List<String> paths,
+) async {
+  final transfers = container.read(transfersProvider.notifier);
+  final failures = <(String, Object)>[];
+  for (final path in paths) {
+    try {
+      await transfers.upload(deviceId, directory, path);
+    } on Object catch (error) {
+      failures.add((path, error));
+    }
+  }
+  container.invalidate(
+    directoryProvider((deviceId: deviceId, path: directory)),
+  );
+  final message = switch (failures) {
+    [] => null,
+    [(final path, final error)] =>
+      "Couldn't upload ${fileName(path)}: ${describeError(error)}",
+    [(_, final error), ...] =>
+      "Couldn't upload ${failures.length} files: ${describeError(error)}",
   };
   if (message != null) {
     messenger.showSnackBar(SnackBar(content: Text(message)));
