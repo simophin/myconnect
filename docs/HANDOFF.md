@@ -598,8 +598,11 @@ unavailable, entering a peer's IP makes it appear in the Add device list.
 > client and server, user-selected files and Downloads. `.github/workflows/
 > build.yml` builds only macOS (a universal `MyConnect.app` in a DMG) when a
 > release is published (or by hand) and attaches it, stamped with the tag's
-> version, which Settings shows. Linux and Windows packages were dropped from
-> the release build for now; the app still builds for them locally.
+> version, which Settings shows. It also builds Debian packages for amd64 and
+> arm64 in a Debian 12 container (`ui/linux/packaging/build_deb.sh`) and, for tagged
+> builds, an Arch Linux PKGBUILD that repackages them (`pkgbuild.sh`).
+> Windows packages were dropped from the release build for now; the app
+> still builds for it locally.
 > The app has only an ad-hoc signature: users allow it once in System
 > Settings → Privacy & Security, then it opens with a double-click.
 > Nobody has launched the macOS or Windows app yet: check that the daemon
