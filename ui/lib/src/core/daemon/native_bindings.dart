@@ -42,7 +42,11 @@ class NativeBindings {
         ? override
         : switch (Platform.operatingSystem) {
             'linux' => 'libmyconnect_ffi.so',
-            'macos' => 'libmyconnect_ffi.dylib',
+            // dlopen doesn't search Contents/Frameworks for a bare name, so
+            // resolve it from Contents/MacOS/<executable>.
+            'macos' => File(Platform.resolvedExecutable).parent.parent.uri
+                .resolve('Frameworks/libmyconnect_ffi.dylib')
+                .toFilePath(),
             'windows' => 'myconnect_ffi.dll',
             final os => throw UnsupportedError('No native daemon for $os'),
           };

@@ -1,0 +1,183 @@
+# Builds the desktop app for Linux, macOS and Windows. On a published
+# release the packages are attached to it; otherwise they are workflow
+# artifacts.
+#
+# The push to main trigger is temporary, to shake out the builds; drop it
+# once they are reliable, leaving releases (and packaging changes in PRs).
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - .github/workflows/build.yml
+      - ffi/**
+      - ui/lib/src/core/daemon/**
+      - ui/linux/**
+      - ui/macos/**
+      - ui/windows/**
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FLUTTER_VERSION: 3.47.1
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-24.04
+    outputs:
+      name: ${{ steps.version.outputs.name }}
+    steps:
+      - id: version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ -n "$TAG" ]; then
+            echo "name=${TAG#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=dev-${SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+  linux:
+    name: Linux
+    needs: version
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config libgtk-3-dev \
+            libayatana-appindicator3-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      - run: flutter build linux --release
+      - name: Package
+        env:
+          PACKAGE: myconnect-${{ needs.version.outputs.name }}-linux-x64.tar.gz
+        run: |
+          bundle=build/linux/x64/release/bundle
+          test -f "$bundle/lib/libmyconnect_ffi.so"
+          mkdir -p ../dist
+          tar -czf "../dist/$PACKAGE" -C "$bundle" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS (universal)
+    needs: version
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      - run: flutter build macos --release
+      - name: Check the bundled core
+        run: |
+          app=build/macos/Build/Products/Release/myconnect_ui.app
+          dylib="$app/Contents/Frameworks/libmyconnect_ffi.dylib"
+          lipo "$dylib" -verify_arch arm64 x86_64
+          otool -D "$dylib"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --display --entitlements - "$app"
+      # Unsigned for now (ad-hoc signature only): Gatekeeper blocks it until
+      # the user allows it in System Settings → Privacy & Security.
+      - name: Package
+        env:
+          PACKAGE: myconnect-${{ needs.version.outputs.name }}-macos-universal.dmg
+        run: |
+          mkdir -p ../dist staging
+          cp -R build/macos/Build/Products/Release/myconnect_ui.app staging/MyConnect.app
+          ln -s /Applications staging/Applications
+          hdiutil create -volname MyConnect -srcfolder staging -format UDZO \
+            "../dist/$PACKAGE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows
+    needs: version
+    runs-on: windows-2025
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      - run: flutter build windows --release
+      - name: Package
+        shell: pwsh
+        env:
+          PACKAGE: myconnect-${{ needs.version.outputs.name }}-windows-x64.zip
+        run: |
+          $release = "build/windows/x64/runner/Release"
+          if (-not (Test-Path "$release/myconnect_ffi.dll")) {
+            throw "myconnect_ffi.dll is missing from $release"
+          }
+          New-Item -ItemType Directory -Force ../dist | Out-Null
+          Compress-Archive -Path "$release/*" -DestinationPath "../dist/$env:PACKAGE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Attach to release
+    if: github.event_name == 'release'
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"

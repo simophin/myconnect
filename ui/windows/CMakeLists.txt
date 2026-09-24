@@ -87,6 +87,23 @@ if(PLUGIN_BUNDLED_LIBRARIES)
     COMPONENT Runtime)
 endif()
 
+# MyConnect core: build the Rust `myconnect-ffi` cdylib from the repository
+# root with cargo and install it next to the executable, where Windows' DLL
+# search finds it for `NativeBindings.open()`. Cargo does its own
+# incremental build, so this target always runs.
+get_filename_component(MYCONNECT_RUST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+add_custom_target(myconnect_ffi ALL
+  COMMAND cargo build --package myconnect-ffi
+    --profile $<IF:$<CONFIG:Debug>,dev,release>
+  WORKING_DIRECTORY "${MYCONNECT_RUST_ROOT}"
+  COMMENT "Building MyConnect core (cargo)"
+  USES_TERMINAL)
+add_dependencies(${BINARY_NAME} myconnect_ffi)
+install(FILES
+  "${MYCONNECT_RUST_ROOT}/target/$<IF:$<CONFIG:Debug>,debug,release>/myconnect_ffi.dll"
+  DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+  COMPONENT Runtime)
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/windows/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"
