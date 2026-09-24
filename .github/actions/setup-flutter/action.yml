@@ -1,0 +1,47 @@
+# subosito/flutter-action with its SDK and pub caches, saved only from
+# main. Its own `cache: true` saves from every ref and has no switch to turn
+# that off, so this asks it for the cache paths and keys (dry run), restores
+# or caches them here, then runs it for real: it skips the download when the
+# SDK was restored.
+name: Set up Flutter
+description: Install Flutter, restoring caches everywhere and saving them only on main
+
+inputs:
+  flutter-version:
+    description: The Flutter version to install
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - id: flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: ${{ inputs.flutter-version }}
+        dry-run: true
+
+    - if: github.ref == 'refs/heads/main'
+      uses: actions/cache@v6
+      with:
+        path: ${{ steps.flutter.outputs.CACHE-PATH }}
+        key: ${{ steps.flutter.outputs.CACHE-KEY }}
+    - if: github.ref != 'refs/heads/main'
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.flutter.outputs.CACHE-PATH }}
+        key: ${{ steps.flutter.outputs.CACHE-KEY }}
+
+    - if: github.ref == 'refs/heads/main'
+      uses: actions/cache@v6
+      with:
+        path: ${{ steps.flutter.outputs.PUB-CACHE-PATH }}
+        key: ${{ steps.flutter.outputs.PUB-CACHE-KEY }}-${{ hashFiles('**/pubspec.lock') }}
+    - if: github.ref != 'refs/heads/main'
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.flutter.outputs.PUB-CACHE-PATH }}
+        key: ${{ steps.flutter.outputs.PUB-CACHE-KEY }}-${{ hashFiles('**/pubspec.lock') }}
+
+    - uses: subosito/flutter-action@v2
+      with:
+        flutter-version: ${{ inputs.flutter-version }}
