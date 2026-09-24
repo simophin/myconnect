@@ -24,6 +24,7 @@ style, while keeping the dependency list short.
 | End-to-end tests | `integration_test` | Flutter's own package for driving the real app with the widget tester; `integration_test/` runs against the real FFI daemon and a CLI peer. |
 | Faking the file dialog in end-to-end tests | `file_selector_platform_interface` | The `file_selector` plugin's official platform interface: replacing `FileSelectorPlatform.instance` answers "Send file" without a GTK dialog. |
 | Window control | `window_manager` | The standard desktop window plugin: intercepts close, hides, shows and focuses on Linux, macOS and Windows. See [0007](0007-keep-running-in-the-tray.md). |
+| Screen layout | `screen_retriever` | Same author as `window_manager`, which already depends on it. Lists the displays, so a saved window position on a monitor that is gone isn't restored. See [0009](0009-remember-the-main-window-placement.md). |
 | Tray icon | `tray_manager` | The most used tray plugin. From 0.6 it sits on `nativeapi`, and on Linux it is a D-Bus StatusNotifierItem with no libappindicator build dependency. |
 | Notifications | `flutter_local_notifications` | Widely used; covers Linux (freedesktop notifications over D-Bus), macOS and Windows, with click callbacks. |
 | File picker | `file_selector` | The Flutter team's plugin; native open dialogs on Linux (GTK, or the portal), macOS and Windows. |

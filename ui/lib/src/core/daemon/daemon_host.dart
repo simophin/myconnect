@@ -7,6 +7,11 @@ import 'package:flutter/foundation.dart';
 import 'package:myconnect_ui/src/core/daemon/external_daemon_host.dart';
 import 'package:myconnect_ui/src/core/daemon/native_daemon_host.dart';
 
+/// The data directory given with `--dart-define=MYCONNECT_DATA_DIR`, or
+/// empty for the default. Kept here with the other defines (see the note at
+/// the top of this file).
+const dataDirOverride = String.fromEnvironment('MYCONNECT_DATA_DIR');
+
 /// Where and how to reach a running daemon's control API.
 @immutable
 class DaemonEndpoint {
@@ -39,7 +44,7 @@ abstract interface class DaemonHost {
     }
     return NativeDaemonHost(
       config: const NativeDaemonConfig(
-        dataDir: String.fromEnvironment('MYCONNECT_DATA_DIR'),
+        dataDir: dataDirOverride,
         downloadDir: String.fromEnvironment('MYCONNECT_DOWNLOAD_DIR'),
         deviceName: String.fromEnvironment('MYCONNECT_DEVICE_NAME'),
         discoveryLoopback: bool.fromEnvironment('MYCONNECT_DISCOVERY_LOOPBACK'),

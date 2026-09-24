@@ -23,6 +23,9 @@ library, on a free loopback port with a per-launch token.
   menu stops it), with a desktop notification for pairing requests and
   received files that arrive while the window is hidden. Launching it again shows the running
   instance. On GNOME the tray icon needs the AppIndicator extension.
+- Remembers where the window was and how big, and whether it was open:
+  quit with the window closed and the next launch starts in the tray
+  (ADR 0009).
 - Settings: this computer's name as other devices see it, where received
   files go, clipboard sync, and whether closing the window keeps the app
   running. The daemon stores them, so they survive restarts.

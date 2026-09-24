@@ -7,7 +7,7 @@ editing it.
 
 | # | Decision | Status |
 | --- | --- | --- |
-| [0001](0001-stateless-ui-over-the-http-api.md) | The UI is a stateless client of the daemon's HTTP API | Accepted |
+| [0001](0001-stateless-ui-over-the-http-api.md) | The UI is a stateless client of the daemon's HTTP API | Accepted; window placement excepted by 0009 |
 | [0002](0002-embed-the-daemon-through-a-json-c-abi.md) | Embed the daemon through a minimal JSON-over-C ABI | Accepted |
 | [0003](0003-snapshot-plus-events-state-sync.md) | Sync state as REST snapshots patched by one shared SSE stream | Accepted |
 | [0004](0004-riverpod-for-state-and-dependency-injection.md) | Riverpod 3 (without codegen) for state and dependency injection | Accepted |
@@ -15,6 +15,7 @@ editing it.
 | [0006](0006-build-the-rust-core-from-the-platform-build.md) | Build and bundle the Rust core from the platform build | Accepted |
 | [0007](0007-keep-running-in-the-tray.md) | Keep running in the tray when the window closes | Accepted |
 | [0008](0008-browse-device-files-in-the-app.md) | Browse a device's files in the app, fetched on demand | Accepted |
+| [0009](0009-remember-the-main-window-placement.md) | Remember the main window's placement in the UI | Accepted |
 
 Template for new records:
 

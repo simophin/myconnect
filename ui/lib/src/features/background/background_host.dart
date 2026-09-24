@@ -90,6 +90,12 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
       );
     } on Object catch (error) {
       _log.warning('Tray and close-to-tray unavailable: $error');
+      // The window starts hidden and the shell didn't get to show it.
+      try {
+        await shell.showWindow();
+      } on Object catch (error) {
+        _log.warning('Could not show the window: $error');
+      }
     }
     try {
       await ref

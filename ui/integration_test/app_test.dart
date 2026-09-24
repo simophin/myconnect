@@ -16,6 +16,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:myconnect_ui/src/app.dart';
 import 'package:myconnect_ui/src/core/daemon/native_daemon_host.dart';
 import 'package:myconnect_ui/src/core/desktop/desktop_notifications.dart';
+import 'package:myconnect_ui/src/core/desktop/window_placement.dart';
 import 'package:myconnect_ui/src/core/providers.dart';
 import 'package:myconnect_ui/src/shared/widgets.dart';
 
@@ -65,6 +66,10 @@ void main() {
       MyConnectRoot(
         overrides: [
           daemonHostProvider.overrideWithValue(host),
+          // Keep the owner's own window placement out of it.
+          windowPlacementStoreProvider.overrideWithValue(
+            WindowPlacementStore(File('${appDir.path}/window.json')),
+          ),
           // Keep test runs off the desktop's notification area.
           desktopNotificationsProvider.overrideWithValue(
             notifications ?? _SilentNotifications(),
