@@ -386,11 +386,32 @@ async fn get_device(
     }
 }
 
-async fn post_discovery(State(state): State<ApiState>) -> Result<StatusCode, ApiProblem> {
-    state
-        .application
-        .command(Command::AnnounceDiscovery)
-        .map_err(map_error)?;
+#[derive(Deserialize)]
+struct DiscoveryRequest {
+    address: Option<String>,
+}
+
+/// Announce this device so peers answer promptly. Without a body (or
+/// without `address`) the announcement is broadcast; with an IPv4 address,
+/// it is sent to that address only, for networks where broadcast doesn't
+/// reach the peer.
+async fn post_discovery(
+    State(state): State<ApiState>,
+    request: Option<Json<DiscoveryRequest>>,
+) -> Result<StatusCode, ApiProblem> {
+    match request.and_then(|Json(request)| request.address) {
+        Some(address) => {
+            let address = address
+                .trim()
+                .parse()
+                .map_err(|_| ApiProblem::bad_request("invalid_address"))?;
+            state.application.announce_to(address).map_err(map_error)?;
+        }
+        None => state
+            .application
+            .command(Command::AnnounceDiscovery)
+            .map_err(map_error)?,
+    }
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -761,6 +782,7 @@ fn map_error(error: ApplicationError) -> ApiProblem {
             "application_unavailable",
         ),
         ApplicationError::UnknownDevice => ApiProblem::not_found("device_not_found"),
+        ApplicationError::InvalidDiscoveryAddress => ApiProblem::bad_request("invalid_address"),
         ApplicationError::UnknownPairing => ApiProblem::not_found("pairing_not_found"),
         ApplicationError::AlreadyPaired => {
             ApiProblem::new(StatusCode::CONFLICT, "Conflict", "already_paired")

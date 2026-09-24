@@ -148,6 +148,20 @@ void main() {
     expect(request.uri.path, '/api/v1/devices/device/ping');
   });
 
+  test('broadcasts discovery, or announces to one address', () async {
+    final adapter = FakeAdapter((_) => ResponseBody.fromString('', 202));
+    final api = apiWith(adapter);
+    await api.scan();
+    await api.scan(address: '192.168.1.20');
+
+    final [broadcast, unicast] = adapter.requests;
+    expect(broadcast.method, 'POST');
+    expect(broadcast.uri.path, '/api/v1/discovery');
+    expect(broadcast.data, isNull);
+    expect(unicast.uri.path, '/api/v1/discovery');
+    expect(unicast.data, {'address': '192.168.1.20'});
+  });
+
   test('patches settings with only the given fields', () async {
     final adapter = FakeAdapter(
       (_) => json({

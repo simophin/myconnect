@@ -1,6 +1,6 @@
 //! Client for the local MyConnect control API.
 
-use std::{env, path::Path, pin::Pin, time::Duration};
+use std::{env, net::Ipv4Addr, path::Path, pin::Pin, time::Duration};
 
 use futures_core::Stream;
 use futures_util::StreamExt;
@@ -93,13 +93,21 @@ impl ApiClient {
 
     /// Trigger an immediate discovery broadcast, so newly reachable devices
     /// show up in [`ApiClient::devices`] without waiting for the periodic
-    /// announce interval.
-    pub async fn scan(&self) -> Result<(), ClientError> {
-        let response = self
-            .authorized(self.http.post(self.url("api/v1/discovery")?))
-            .send()
-            .await
-            .map_err(map_transport)?;
+    /// announce interval. With an `address`, announce to that IPv4 address
+    /// only, for networks where broadcast doesn't reach the peer.
+    pub async fn scan(&self, address: Option<Ipv4Addr>) -> Result<(), ClientError> {
+        #[derive(Serialize)]
+        struct Discovery {
+            address: String,
+        }
+
+        let mut request = self.authorized(self.http.post(self.url("api/v1/discovery")?));
+        if let Some(address) = address {
+            request = request.json(&Discovery {
+                address: address.to_string(),
+            });
+        }
+        let response = request.send().await.map_err(map_transport)?;
         checked(response, "discovery").await?;
         Ok(())
     }

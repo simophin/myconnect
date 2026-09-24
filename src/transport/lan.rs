@@ -45,6 +45,8 @@ const CLOSE_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 pub struct LanConfig {
     discovery_bind: SocketAddr,
     announcement_targets: Vec<SocketAddr>,
+    /// Port a peer added by address is announced to.
+    peer_discovery_port: u16,
     tcp_bind_ip: Ipv4Addr,
     tcp_ports: RangeInclusive<u16>,
     announce_interval: Duration,
@@ -64,6 +66,7 @@ impl Default for LanConfig {
                 Ipv4Addr::BROADCAST,
                 DISCOVERY_PORT,
             ))],
+            peer_discovery_port: DISCOVERY_PORT,
             tcp_bind_ip: Ipv4Addr::UNSPECIFIED,
             tcp_ports: TCP_PORT_RANGE,
             announce_interval: Duration::from_secs(30),
@@ -82,6 +85,13 @@ impl LanConfig {
 
     pub fn with_announcement_targets(mut self, targets: Vec<SocketAddr>) -> Self {
         self.announcement_targets = targets;
+        self
+    }
+
+    /// Announce devices added by address on this port instead of 1716.
+    /// Tests use it to reach a peer bound to a private port.
+    pub fn with_peer_discovery_port(mut self, port: u16) -> Self {
+        self.peer_discovery_port = port;
         self
     }
 
@@ -233,6 +243,10 @@ async fn run(
             command = commands.recv(), if commands_open => match command {
                 Some(Command::AnnounceDiscovery) => {
                     announce(&udp, &config.announcement_targets, &announcement).await;
+                }
+                Some(Command::AnnounceTo { address }) => {
+                    let target = SocketAddr::V4(SocketAddrV4::new(address, config.peer_discovery_port));
+                    announce(&udp, &[target], &announcement).await;
                 }
                 Some(_) => {}
                 None => commands_open = false,

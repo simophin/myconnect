@@ -70,7 +70,11 @@ plugin marketplace.
    Each peer broadcasts a protocol-v8 identity packet containing its chosen
    TCP port (selected from `1716-1764`). Malformed, oversized, self, and
    unsupported-version identities are dropped without affecting the device
-   registry.
+   registry. Where broadcast doesn't reach a peer, its address can be given
+   (`POST /discovery` with `address`): the identity is then sent by unicast
+   to that IPv4 address on port 1716, and the peer dials back as it would
+   after a broadcast. Only unicast addresses are accepted, and the port and
+   payload are fixed, so the endpoint can't be used as a general UDP sender.
 2. **Plaintext identity, then TLS** (`transport::tls`): the peer that
    received a UDP announcement dials the announced `tcpPort` and sends its
    identity once in plaintext, carrying `targetDeviceId` and
@@ -220,7 +224,7 @@ event stream.
 | Method | Path | Notes |
 | --- | --- | --- |
 | `GET` | `/status` | Version, uptime, local device summary, protocol version. |
-| `POST` | `/discovery` | Trigger an immediate identity announcement; `202`. |
+| `POST` | `/discovery` | Trigger an immediate identity announcement; `202`. An optional `{"address": "192.168.1.20"}` sends it to that unicast IPv4 address only; anything else is `400 invalid_address`. |
 | `GET` | `/devices` | Snapshot of known devices. |
 | `GET` | `/devices/{deviceId}` | One device, or `404`. |
 | `DELETE` | `/devices/{deviceId}` | Unpair, remove trust, forget the device. |
@@ -306,6 +310,10 @@ Prioritized next work, with implementation notes for each item, is in
 - The desktop clipboard was checked live on X11 only (two daemons on
   separate Xvfb displays), not on a Wayland compositor. Compositors without
   data-control (e.g. GNOME) fall back to XWayland, which is untested.
+- Devices added by IP address are not remembered: after a restart, a
+  device only reachable that way has to be added again (or has to reach
+  this one first). Adding by address has been checked between MyConnect
+  instances only, not against KDE Connect.
 - No Bluetooth transport, no multi-file/directory
   transfer, no durable event replay, no remote/LAN exposure of the control
   API — these are explicit non-goals for the current scope, not oversights.

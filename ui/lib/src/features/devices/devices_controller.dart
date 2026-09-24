@@ -63,9 +63,10 @@ class DevicesController extends AsyncNotifier<List<Device>> {
     }
   }
 
-  /// Ask nearby devices to announce themselves.
-  Future<void> scan() async =>
-      await (await ref.read(apiProvider.future)).scan();
+  /// Ask nearby devices to announce themselves, or only the one at
+  /// [address] when broadcast discovery can't reach it.
+  Future<void> scan({String? address}) async =>
+      await (await ref.read(apiProvider.future)).scan(address: address);
 
   /// Unpair and forget a device.
   Future<void> forget(String deviceId) async {

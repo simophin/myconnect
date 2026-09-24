@@ -38,18 +38,28 @@ class _AddDevicePageState extends ConsumerState<AddDevicePage> {
     super.dispose();
   }
 
-  Future<void> _scan() async {
-    setState(() {
-      _scanTimer?.cancel();
-      _scanTimer = Timer(AddDevicePage.scanIndicatorDuration, () {
-        if (mounted) setState(() {});
-      });
+  void _showSearching() => setState(() {
+    _scanTimer?.cancel();
+    _scanTimer = Timer(AddDevicePage.scanIndicatorDuration, () {
+      if (mounted) setState(() {});
     });
+  });
+
+  Future<void> _scan() async {
+    _showSearching();
     try {
       await ref.read(devicesProvider.notifier).scan();
     } on Object catch (error) {
       if (mounted) showErrorSnackBar(context, error);
     }
+  }
+
+  Future<void> _addByAddress() async {
+    final address = await showDialog<String>(
+      context: context,
+      builder: (_) => const _AddByAddressDialog(),
+    );
+    if (address != null && mounted) _showSearching();
   }
 
   Future<void> _pair(Device device) async {
@@ -107,6 +117,15 @@ class _AddDevicePageState extends ConsumerState<AddDevicePage> {
                 starting: _startingWith == device.deviceId,
                 onPair: _startingWith == null ? () => _pair(device) : null,
               ),
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.lan_outlined),
+              title: const Text('Add by IP address'),
+              subtitle: const Text(
+                'For networks where the device doesn’t show up on its own',
+              ),
+              onTap: _addByAddress,
+            ),
           ],
         ),
         AsyncError(:final error) => ErrorView(
@@ -152,4 +171,77 @@ class _CandidateTile extends StatelessWidget {
             ),
     );
   }
+}
+
+/// Asks for a device's IP address and announces this device to it. The
+/// daemon validates the address; its objection stays on screen until fixed.
+/// Pops with the address once the announcement was sent.
+class _AddByAddressDialog extends ConsumerStatefulWidget {
+  const new();
+
+  @override
+  ConsumerState<_AddByAddressDialog> createState() =>
+      _AddByAddressDialogState();
+}
+
+class _AddByAddressDialogState extends ConsumerState<_AddByAddressDialog> {
+  final _address = TextEditingController();
+  String? _error;
+  bool _sending = false;
+
+  Future<void> _send() async {
+    final navigator = Navigator.of(context);
+    final address = _address.text.trim();
+    setState(() {
+      _sending = true;
+      _error = null;
+    });
+    try {
+      await ref.read(devicesProvider.notifier).scan(address: address);
+      navigator.pop(address);
+    } on Object catch (error) {
+      if (mounted) setState(() => _error = describeError(error));
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _address.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Add by IP address'),
+    content: TextField(
+      controller: _address,
+      autofocus: true,
+      keyboardType: TextInputType.url,
+      decoration: InputDecoration(
+        labelText: 'IP address',
+        hintText: '192.168.1.20',
+        helperText:
+            'MyConnect or KDE Connect must be running on that device. '
+            'It appears in the list once it answers.',
+        helperMaxLines: 3,
+        errorText: _error,
+        errorMaxLines: 3,
+      ),
+      // Replaces the default unfocus on Enter, so the field keeps focus to
+      // fix a rejected address.
+      onEditingComplete: _sending ? null : () => unawaited(_send()),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        onPressed: _sending ? null : () => unawaited(_send()),
+        child: const Text('Add'),
+      ),
+    ],
+  );
 }

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{net::Ipv4Addr, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -299,6 +299,7 @@ pub struct ReceivedPing {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     AnnounceDiscovery,
+    AnnounceTo { address: Ipv4Addr },
     ForgetDevice { device_id: String },
     StartPairing { device_id: String },
     AcceptPairing { pairing_id: Uuid },

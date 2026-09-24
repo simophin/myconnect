@@ -772,3 +772,60 @@ async fn transfer_upload_to_unpaired_device_is_rejected() {
 
     server.server.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn discovery_can_be_sent_to_one_unicast_address() {
+    let mut server = TestServer::start().await;
+
+    let unicast = request_with_body(
+        &server,
+        "POST",
+        "/api/v1/discovery",
+        r#"{"address":" 192.168.1.20 "}"#,
+    )
+    .await;
+    assert!(
+        unicast.starts_with("HTTP/1.1 202 Accepted"),
+        "unexpected response: {unicast}"
+    );
+    assert_eq!(
+        server.commands.recv().await,
+        Some(Command::AnnounceTo {
+            address: "192.168.1.20".parse().unwrap()
+        })
+    );
+
+    // A body without an address broadcasts, like no body at all.
+    let broadcast = request_with_body(&server, "POST", "/api/v1/discovery", "{}").await;
+    assert!(broadcast.starts_with("HTTP/1.1 202 Accepted"));
+    assert_eq!(
+        server.commands.recv().await,
+        Some(Command::AnnounceDiscovery)
+    );
+
+    for address in [
+        "192.168.1",
+        "desk.local",
+        "192.168.1.20:1716",
+        "::1",
+        "0.0.0.0",
+        "255.255.255.255",
+        "224.0.0.251",
+    ] {
+        let rejected = request_with_body(
+            &server,
+            "POST",
+            "/api/v1/discovery",
+            &format!(r#"{{"address":"{address}"}}"#),
+        )
+        .await;
+        assert!(
+            rejected.starts_with("HTTP/1.1 400 Bad Request"),
+            "{address} was not rejected: {rejected}"
+        );
+        assert!(body(&rejected).contains("invalid_address"), "{rejected}");
+    }
+    assert!(server.commands.try_recv().is_err());
+
+    server.server.shutdown().await.unwrap();
+}

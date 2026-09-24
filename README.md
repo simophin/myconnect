@@ -35,8 +35,10 @@ The CLI interface is command based, allowing users to interact with MyConnect th
   came from, so two instances on one machine otherwise can't discover each
   other over a real NIC), at the cost of not discovering real devices.
 - `myconnect devices [--watch]` - List devices and optionally follow changes.
-- `myconnect scan [--timeout <seconds>] [--watch]` - Broadcast a discovery
-  request and list unpaired devices that answer.
+- `myconnect scan [--address <ip>] [--timeout <seconds>] [--watch]` -
+  Broadcast a discovery request and list unpaired devices that answer.
+  `--address` announces to that IPv4 address instead, for networks where
+  broadcast doesn't reach the other device.
 - `myconnect pair <device-id>` - Start pairing with a discovered device.
 - `myconnect pair accept|reject <pairing-id>` - Resolve a pairing request.
 - `myconnect unpair <device-id>` - Remove trust and forget a device.
