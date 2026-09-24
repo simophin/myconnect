@@ -355,7 +355,7 @@ impl ApplicationHandle {
 
     /// Remove trust, disconnect, and forget a device entirely.
     pub fn forget_device(&self, device_id: &str) -> Result<(), ApplicationError> {
-        let (existed, cancellation, failed_pairing) = {
+        let (forgotten, cancellation, failed_pairing) = {
             let mut state = self
                 .state
                 .write()
@@ -366,13 +366,13 @@ impl ApplicationHandle {
                 .map(|c| c.cancellation.clone());
             let failed_pairing =
                 fail_active_pairing(&mut state, device_id, OperationErrorCode::Internal);
-            let existed = state.devices.forget(device_id).is_some();
+            let forgotten = state.devices.forget(device_id);
             state.connections.remove(device_id);
-            (existed, cancellation, failed_pairing)
+            (forgotten, cancellation, failed_pairing)
         };
-        if !existed {
+        let Some(forgotten) = forgotten else {
             return Err(ApplicationError::UnknownDevice);
-        }
+        };
         self.trust_store
             .remove(device_id)
             .map_err(ApplicationError::Trust)?;
@@ -384,6 +384,9 @@ impl ApplicationHandle {
                 .events
                 .publish(super::EventData::PairingUpdated(snapshot));
         }
+        let _ = self
+            .events
+            .publish(super::EventData::DeviceForgotten(forgotten));
         Ok(())
     }
 
@@ -1742,6 +1745,13 @@ impl ApplicationService for ApplicationHandle {
             Query::Status => unreachable!("handled before locking state"),
             Query::Devices => QueryResult::Devices(state.devices.snapshot()),
             Query::Device { device_id } => QueryResult::Device(state.devices.get(&device_id)),
+            Query::Pairings => QueryResult::Pairings(
+                state
+                    .pairings
+                    .values()
+                    .map(|runtime| runtime.pairing.snapshot())
+                    .collect(),
+            ),
             Query::Pairing { pairing_id } => QueryResult::Pairing(
                 state
                     .pairings

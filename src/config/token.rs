@@ -1,45 +1,46 @@
-use std::{
-    fs,
-    io::Write,
-    path::{Path, PathBuf},
-};
+use std::fmt;
 
 use thiserror::Error;
 use uuid::Uuid;
 
-use super::{create_private_dir, private_file_options};
+/// Upper bound on a caller-supplied token, so a misconfigured value cannot
+/// turn every request's header comparison into an unbounded operation.
+const MAX_TOKEN_LENGTH: usize = 256;
 
-const TOKEN_FILE: &str = "api-token";
-const TOKEN_LENGTH: usize = 64;
-
-/// Persistent secret used to authenticate local API clients.
+/// Optional shared secret used to authenticate local API clients.
 ///
-/// This type intentionally does not implement `Debug` or serialization.
+/// The control API only requires authentication when the daemon was started
+/// with a token (for example, by an embedding GUI that wants to be the only
+/// client of the instance it started). The token is never persisted, so a
+/// token is scoped to the process that chose it.
+///
+/// `Debug` is implemented but redacts the value; the type is intentionally not
+/// serializable.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ApiToken(String);
 
 impl ApiToken {
+    /// Accept a caller-chosen secret. It must be non-empty, at most 256 bytes,
+    /// and consist only of visible ASCII so it round-trips through an HTTP
+    /// `Authorization` header unchanged.
     pub fn from_secret(value: impl Into<String>) -> Result<Self, ApiTokenError> {
-        Self::parse(value.into())
+        let value = value.into();
+        if value.is_empty()
+            || value.len() > MAX_TOKEN_LENGTH
+            || !value.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(ApiTokenError::Invalid);
+        }
+        Ok(Self(value))
     }
 
-    pub fn load_or_create(config_dir: impl AsRef<Path>) -> Result<Self, ApiTokenError> {
-        let config_dir = config_dir.as_ref();
-        let path = config_dir.join(TOKEN_FILE);
-        match fs::read_to_string(&path) {
-            Ok(value) => Self::parse(value),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                create_private_dir(config_dir).map_err(ApiTokenError::Io)?;
-                let token = Self(format!(
-                    "{}{}",
-                    Uuid::new_v4().simple(),
-                    Uuid::new_v4().simple()
-                ));
-                token.persist_atomically(&path)?;
-                Ok(token)
-            }
-            Err(error) => Err(ApiTokenError::Io(error)),
-        }
+    /// Generate a random 64-character hex token.
+    pub fn generate() -> Self {
+        Self(format!(
+            "{}{}",
+            Uuid::new_v4().simple(),
+            Uuid::new_v4().simple()
+        ))
     }
 
     /// Reveal the token only at the boundary that constructs authentication.
@@ -59,53 +60,18 @@ impl ApiToken {
             })
             == 0
     }
+}
 
-    fn parse(value: String) -> Result<Self, ApiTokenError> {
-        if value.len() != TOKEN_LENGTH || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(ApiTokenError::Corrupt);
-        }
-        Ok(Self(value))
+impl fmt::Debug for ApiToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ApiToken(<redacted>)")
     }
-
-    fn persist_atomically(&self, destination: &Path) -> Result<(), ApiTokenError> {
-        let temporary = temporary_path(destination);
-        let result = (|| {
-            let mut file = private_file_options()
-                .open(&temporary)
-                .map_err(ApiTokenError::Io)?;
-            file.write_all(self.0.as_bytes())
-                .map_err(ApiTokenError::Io)?;
-            file.sync_all().map_err(ApiTokenError::Io)?;
-            fs::rename(&temporary, destination).map_err(ApiTokenError::Io)?;
-            sync_parent(destination).map_err(ApiTokenError::Io)
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        result
-    }
-}
-
-fn temporary_path(destination: &Path) -> PathBuf {
-    destination.with_file_name(format!(".api-token-{}.tmp", Uuid::new_v4().simple()))
-}
-
-#[cfg(unix)]
-fn sync_parent(destination: &Path) -> std::io::Result<()> {
-    fs::File::open(destination.parent().expect("token has a parent"))?.sync_all()
-}
-
-#[cfg(not(unix))]
-fn sync_parent(_destination: &Path) -> std::io::Result<()> {
-    Ok(())
 }
 
 #[derive(Debug, Error)]
 pub enum ApiTokenError {
-    #[error("API token storage operation failed")]
-    Io(#[source] std::io::Error),
-    #[error("API token file is corrupt")]
-    Corrupt,
+    #[error("API token must be 1-256 visible ASCII characters")]
+    Invalid,
 }
 
 #[cfg(test)]
@@ -113,45 +79,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn token_is_random_well_formed_and_persistent() {
-        let directory = tempfile::tempdir().unwrap();
-        let first = ApiToken::load_or_create(directory.path()).unwrap();
-        let second = ApiToken::load_or_create(directory.path()).unwrap();
-        assert_eq!(first.expose_secret(), second.expose_secret());
-        assert_eq!(first.expose_secret().len(), TOKEN_LENGTH);
+    fn generated_tokens_are_random_and_well_formed() {
+        let first = ApiToken::generate();
+        let second = ApiToken::generate();
+        assert_ne!(first, second);
+        assert_eq!(first.expose_secret().len(), 64);
         assert!(
             first
                 .expose_secret()
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit())
         );
-        assert!(first.constant_time_matches(second.expose_secret()));
+        assert!(first.constant_time_matches(first.expose_secret()));
+        assert!(!first.constant_time_matches(second.expose_secret()));
         assert!(!first.constant_time_matches("wrong"));
     }
 
     #[test]
-    fn malformed_token_is_rejected_without_replacement() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join(TOKEN_FILE);
-        fs::write(&path, "unfinished").unwrap();
-        assert!(matches!(
-            ApiToken::load_or_create(directory.path()),
-            Err(ApiTokenError::Corrupt)
-        ));
-        assert_eq!(fs::read_to_string(path).unwrap(), "unfinished");
+    fn caller_secrets_are_validated() {
+        assert!(ApiToken::from_secret("s3cr3t-token").is_ok());
+        assert!(ApiToken::from_secret("").is_err());
+        assert!(ApiToken::from_secret("has space").is_err());
+        assert!(ApiToken::from_secret("line\nbreak").is_err());
+        assert!(ApiToken::from_secret("é").is_err());
+        assert!(ApiToken::from_secret("a".repeat(MAX_TOKEN_LENGTH + 1)).is_err());
     }
 
-    #[cfg(unix)]
     #[test]
-    fn token_file_has_private_permissions() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let directory = tempfile::tempdir().unwrap();
-        ApiToken::load_or_create(directory.path()).unwrap();
-        let mode = fs::metadata(directory.path().join(TOKEN_FILE))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o077, 0);
+    fn debug_output_never_reveals_the_secret() {
+        let token = ApiToken::from_secret("visible-secret").unwrap();
+        assert!(!format!("{token:?}").contains("visible-secret"));
     }
 }

@@ -22,6 +22,10 @@ pub enum EventData {
     DeviceUpdated(DeviceSnapshot),
     #[serde(rename = "device.disconnected")]
     DeviceDisconnected(DeviceSnapshot),
+    /// The device was unpaired and removed from the registry; carries its
+    /// last snapshot.
+    #[serde(rename = "device.forgotten")]
+    DeviceForgotten(DeviceSnapshot),
     #[serde(rename = "pairing.requested")]
     PairingRequested(PairingSnapshot),
     #[serde(rename = "pairing.updated")]
@@ -45,6 +49,7 @@ impl EventData {
             Self::DeviceConnected(_) => "device.connected",
             Self::DeviceUpdated(_) => "device.updated",
             Self::DeviceDisconnected(_) => "device.disconnected",
+            Self::DeviceForgotten(_) => "device.forgotten",
             Self::PairingRequested(_) => "pairing.requested",
             Self::PairingUpdated(_) => "pairing.updated",
             Self::TransferStarted(_) => "transfer.started",

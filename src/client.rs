@@ -1,4 +1,4 @@
-//! Authenticated client for the local MyConnect control API.
+//! Client for the local MyConnect control API.
 
 use std::{env, path::Path, pin::Pin, time::Duration};
 
@@ -20,7 +20,7 @@ use crate::{
         ApplicationEvent, ClipboardSnapshot, EventData, PairingSnapshot, TransferSnapshot,
         TransferStatus,
     },
-    config::{ApiToken, default_config_dir},
+    config::ApiToken,
     device::DeviceSnapshot,
 };
 
@@ -32,36 +32,39 @@ pub type EventStream =
 
 pub struct ApiClient {
     base_url: Url,
-    token: ApiToken,
+    token: Option<ApiToken>,
     http: Client,
 }
 
 impl ApiClient {
     pub fn from_environment() -> Result<Self, ClientError> {
-        Self::from_environment_with_url(None)
+        Self::from_environment_with(None, None)
     }
 
-    /// Like [`ApiClient::from_environment`], but `base_url_override` (when
-    /// given) takes precedence over the `MYCONNECT_API_URL` environment
-    /// variable, e.g. to honor an explicit `--api-host`/`--api-port` flag.
-    pub fn from_environment_with_url(
+    /// Like [`ApiClient::from_environment`], but explicit values (e.g. from
+    /// `--api-host`/`--api-port`/`--api-token` flags) take precedence over the
+    /// `MYCONNECT_API_URL` and `MYCONNECT_API_TOKEN` environment variables.
+    /// Without a token from either source, requests are sent unauthenticated.
+    pub fn from_environment_with(
         base_url_override: Option<String>,
+        token_override: Option<ApiToken>,
     ) -> Result<Self, ClientError> {
         let base_url = base_url_override.unwrap_or_else(|| {
             env::var(API_URL_ENV).unwrap_or_else(|_| format!("http://127.0.0.1:{DEFAULT_API_PORT}"))
         });
-        let token = match env::var(API_TOKEN_ENV) {
-            Ok(secret) => ApiToken::from_secret(secret)?,
-            Err(env::VarError::NotPresent) => {
-                let directory = default_config_dir().ok_or(ClientError::ConfigurationDirectory)?;
-                ApiToken::load_or_create(directory)?
-            }
-            Err(env::VarError::NotUnicode(_)) => return Err(ClientError::InvalidToken),
+        let token = match token_override {
+            Some(token) => Some(token),
+            None => match env::var(API_TOKEN_ENV) {
+                Ok(secret) if secret.is_empty() => None,
+                Ok(secret) => Some(ApiToken::from_secret(secret)?),
+                Err(env::VarError::NotPresent) => None,
+                Err(env::VarError::NotUnicode(_)) => return Err(ClientError::InvalidToken),
+            },
         };
         Self::new(&base_url, token)
     }
 
-    pub fn new(base_url: &str, token: ApiToken) -> Result<Self, ClientError> {
+    pub fn new(base_url: &str, token: Option<ApiToken>) -> Result<Self, ClientError> {
         let mut base_url = Url::parse(base_url).map_err(|_| ClientError::InvalidApiUrl)?;
         if base_url.scheme() != "http" {
             return Err(ClientError::UnsupportedScheme);
@@ -391,7 +394,10 @@ impl ApiClient {
     }
 
     fn authorized(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        request.bearer_auth(self.token.expose_secret())
+        match &self.token {
+            Some(token) => request.bearer_auth(token.expose_secret()),
+            None => request,
+        }
     }
 
     fn url(&self, path: &str) -> Result<Url, ClientError> {
@@ -423,6 +429,7 @@ fn is_device_event(event: &EventData) -> bool {
             | EventData::DeviceConnected(_)
             | EventData::DeviceUpdated(_)
             | EventData::DeviceDisconnected(_)
+            | EventData::DeviceForgotten(_)
     )
 }
 
@@ -529,7 +536,7 @@ struct Problem {
 pub enum ClientError {
     #[error("the MyConnect daemon is unavailable; start it with `myconnect run`")]
     DaemonUnavailable,
-    #[error("the daemon rejected the API token; restart it or check {API_TOKEN_ENV}")]
+    #[error("the daemon requires a valid API token; pass --api-token or set {API_TOKEN_ENV}")]
     Unauthorized,
     #[error("the requested {0} was not found")]
     NotFound(&'static str),
@@ -545,8 +552,6 @@ pub enum ClientError {
     UnsupportedScheme,
     #[error("the API token is invalid")]
     InvalidToken,
-    #[error("could not determine the configuration directory")]
-    ConfigurationDirectory,
     #[error("could not open {path}")]
     OpenFile {
         path: std::path::PathBuf,
@@ -559,6 +564,6 @@ pub enum ClientError {
     Build(#[source] reqwest::Error),
     #[error("local API request failed")]
     Transport(#[source] reqwest::Error),
-    #[error("API token configuration is invalid")]
+    #[error("the API token is invalid")]
     Token(#[from] crate::config::ApiTokenError),
 }

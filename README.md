@@ -11,14 +11,15 @@ Provides a desktop application for MacOS/Linux/Windows.
 The MVP is implemented: LAN discovery, protocol-v8 TLS connections with
 certificate pinning, user-confirmed pairing, persistent identity and trust,
 text clipboard synchronization, file transfer with progress and
-cancellation, and a versioned authenticated local HTTP API that the CLI (and
-any future GUI) uses exclusively — no frontend touches KDE Connect sockets or
-state directly.
+cancellation, and a versioned local HTTP API that the CLI and the Flutter
+desktop UI ([`ui/`](ui/README.md)) use exclusively — no frontend touches KDE
+Connect sockets or state directly.
 
 Manual interoperability testing against a real KDE Connect (Android/desktop)
 installation has not yet been performed; see
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#9-known-gaps) for the current
-list of gaps.
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#10-known-gaps) for the current
+list of gaps, and [`docs/HANDOFF.md`](docs/HANDOFF.md) for what to build
+next.
 
 ### CLI interface
 
@@ -46,38 +47,42 @@ The CLI interface is command based, allowing users to interact with MyConnect th
 
 Add `--json` for machine-readable output. `--api-host`/`--api-port` (global
 flags, default `127.0.0.1:24816`) set the address the control API listens on
-for `run` and the address every other command connects to. API clients use
-the same persistent token as the daemon. For development, `MYCONNECT_API_URL`
-and `MYCONNECT_API_TOKEN` override the API URL and stored token (superseded
-by `--api-host`/`--api-port` when either is given).
+for `run` and the address every other command connects to. `--api-token`
+(global, or `MYCONNECT_API_TOKEN`; empty by default) makes `run` require that
+bearer token from every API client, and makes every other command send it;
+with no token the API is unauthenticated. Prefer the environment variable
+over the flag so the token does not show up in process listings. For
+development, `MYCONNECT_API_URL` overrides the API URL (superseded by
+`--api-host`/`--api-port` when either is given).
 
 ### Project structure
 
-MyConnect is a single Cargo package with a shared library and a thin binary
-entry point:
+MyConnect is a Cargo workspace — the main package with a shared library and a
+thin binary entry point, plus an FFI crate — and a Flutter desktop app:
 
 ```text
 src/
 ├── lib.rs           # shared library
 ├── protocol/        # wire packet models and bounded framing
-├── config/          # persistent identity, API token, peer trust
+├── config/          # persistent identity, optional API token, peer trust
 ├── transport/        # UDP discovery, TCP/TLS, auxiliary payload connections
 ├── device.rs         # device registry and snapshots
 ├── plugins/           # fixed packet routing: ping, clipboard, share
 ├── application(.rs/*) # orchestration: pairing/transfer state machines, event bus
 ├── clipboard.rs        # clipboard service trait + in-memory implementation
-├── api.rs               # authenticated local HTTP control plane
+├── api.rs               # local HTTP control plane (optional token auth)
 ├── client.rs             # HTTP client used by the CLI
 └── bin/
     └── myconnect/        # CLI binary
         ├── cli.rs
         └── main.rs
+ffi/                      # myconnect-ffi: C ABI to embed a daemon (start/stop)
+ui/                       # Flutter desktop app (see ui/README.md, ui/docs/adr/)
 ```
 
 Keeping behavior in the library lets other frontends use the same application
-API. A GUI can be introduced later as another binary, for example at
-`src/bin/myconnect-gui/main.rs`, without coupling GUI dependencies to the CLI
-entry point. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for module
+API. The Flutter UI embeds a daemon through `ffi/` and then talks to it only
+over HTTP, so no GUI dependencies leak into the Rust crates. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for module
 boundaries, data flow, the full HTTP API, and the pairing/transfer state
 machines.
 
@@ -92,8 +97,8 @@ cargo run -- send <device-id> <file> --watch
 Use `RUST_LOG` to control log output, for example
 `RUST_LOG=myconnect=debug cargo run -- run`.
 
-All commands except `run` communicate with the daemon through its authenticated
-local HTTP API.
+All commands except `run` communicate with the daemon through its local HTTP
+API.
 
 The current architecture — module map, connection lifecycle, state machines,
 and HTTP API reference — is documented in

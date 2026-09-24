@@ -1,4 +1,5 @@
-//! Authenticated HTTP control plane, bound to loopback by default.
+//! HTTP control plane, bound to loopback by default. Requests must carry a
+//! bearer token only when the server was started with one.
 
 use std::{
     convert::Infallible,
@@ -132,7 +133,7 @@ impl ApiServer {
     pub async fn start(
         config: ApiServerConfig,
         application: Arc<dyn ApplicationService>,
-        token: ApiToken,
+        token: Option<ApiToken>,
         shutdown: CancellationToken,
     ) -> Result<Self, ApiServerError> {
         let listener = TcpListener::bind(config.bind_addr())
@@ -192,7 +193,7 @@ impl Drop for ApiServer {
     }
 }
 
-fn router(state: ApiState, token: ApiToken, config: &ApiServerConfig) -> Router {
+fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) -> Router {
     let request_id_header = HeaderName::from_static(REQUEST_ID_HEADER);
     let middleware = ServiceBuilder::new()
         .layer(SetRequestIdLayer::new(
@@ -225,7 +226,7 @@ fn router(state: ApiState, token: ApiToken, config: &ApiServerConfig) -> Router 
             get(get_device).delete(delete_device),
         )
         .route("/devices/{device_id}/ping", post(post_ping))
-        .route("/pairings", post(post_pairing))
+        .route("/pairings", get(get_pairings).post(post_pairing))
         .route(
             "/pairings/{pairing_id}",
             get(get_pairing).delete(delete_pairing),
@@ -251,12 +252,17 @@ fn router(state: ApiState, token: ApiToken, config: &ApiServerConfig) -> Router 
         .layer(middleware::from_fn_with_state(
             config.request_timeout,
             enforce_request_timeout,
-        ))
-        .layer(middleware::from_fn_with_state(
+        ));
+    // Without a configured token the API is open to any local client, which
+    // is the default for a CLI-started daemon bound to loopback.
+    let api = match token {
+        Some(token) => api.layer(middleware::from_fn_with_state(
             Arc::new(token),
             require_authentication,
-        ))
-        .with_state(state);
+        )),
+        None => api,
+    }
+    .with_state(state);
 
     Router::new()
         .nest("/api/v1", api)
@@ -426,6 +432,22 @@ async fn post_pairing(
         .start_outgoing_pairing(&request.device_id)
         .map_err(map_error)?;
     Ok((StatusCode::ACCEPTED, Json(pairing)))
+}
+
+/// Every pairing this daemon process knows about, including terminal ones,
+/// so a client that (re)connects can find incoming requests still awaiting
+/// confirmation without having observed their `pairing.requested` event.
+async fn get_pairings(
+    State(state): State<ApiState>,
+) -> Result<Json<Vec<PairingSnapshot>>, ApiProblem> {
+    match state
+        .application
+        .query(Query::Pairings)
+        .map_err(map_error)?
+    {
+        QueryResult::Pairings(pairings) => Ok(Json(pairings)),
+        _ => Err(ApiProblem::internal()),
+    }
 }
 
 async fn get_pairing(

@@ -1,0 +1,71 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:myconnect_ui/src/core/api/models/device.dart';
+import 'package:myconnect_ui/src/core/api/models/event.dart';
+import 'package:myconnect_ui/src/core/api/models/pairing.dart';
+
+Map<String, Object?> deviceJson({String reachability = 'connected'}) => {
+  'deviceId': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  'deviceName': 'Phone',
+  'deviceType': 'phone',
+  'protocolVersion': 8,
+  'incomingCapabilities': ['kdeconnect.ping'],
+  'outgoingCapabilities': <String>[],
+  'reachability': reachability,
+  'paired': true,
+  'pairing': false,
+  'lastSeenAt': 10,
+};
+
+void main() {
+  test('decodes device events, including forgotten devices', () {
+    final changed = DaemonEvent.fromJson({
+      'sequence': 1,
+      'timestamp': 2,
+      'type': 'device.connected',
+      'data': deviceJson(),
+    });
+    expect(
+      changed,
+      isA<DeviceChanged>().having(
+        (e) => e.device.reachability,
+        'reachability',
+        DeviceReachability.connected,
+      ),
+    );
+    expect(
+      DaemonEvent.fromJson({'type': 'device.forgotten', 'data': deviceJson()}),
+      isA<DeviceForgotten>(),
+    );
+  });
+
+  test('decodes pairing events with snake_case enums', () {
+    final event = DaemonEvent.fromJson({
+      'type': 'pairing.requested',
+      'data': {
+        'id': '00000000-0000-0000-0000-000000000001',
+        'deviceId': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'deviceName': 'Phone',
+        'direction': 'incoming',
+        'status': 'awaiting_confirmation',
+        'verificationCode': 'ABCD1234',
+        'createdAt': 1,
+        'expiresAt': 2,
+      },
+    });
+    final pairing = (event as PairingChanged).pairing;
+    expect(pairing.status, PairingStatus.awaitingConfirmation);
+    expect(pairing.needsLocalConfirmation, isTrue);
+  });
+
+  test('tolerates event types and enum values from a newer daemon', () {
+    expect(
+      DaemonEvent.fromJson({
+        'type': 'battery.changed',
+        'data': <String, Object?>{},
+      }),
+      isA<UnhandledEvent>().having((e) => e.type, 'type', 'battery.changed'),
+    );
+    final device = Device.fromJson(deviceJson(reachability: 'sleeping'));
+    expect(device.reachability, DeviceReachability.unknown);
+  });
+}

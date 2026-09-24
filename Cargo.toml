@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "ffi"]
+
 [package]
 name = "myconnect"
 version = "0.1.0"
@@ -9,7 +12,7 @@ anyhow = "1"
 async-stream = "0.3"
 axum = { version = "0.8", features = ["multipart"] }
 bytes = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 dotenvy = "0.15"
 directories = "6"
 futures-core = "0.3"

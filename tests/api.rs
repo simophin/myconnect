@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 
 struct TestServer {
     _directory: tempfile::TempDir,
-    token: ApiToken,
+    token: Option<ApiToken>,
     application: ApplicationHandle,
     commands: tokio::sync::mpsc::Receiver<Command>,
     server: ApiServer,
@@ -29,8 +29,11 @@ struct TestServer {
 
 impl TestServer {
     async fn start() -> Self {
+        Self::start_with_token(Some(ApiToken::generate())).await
+    }
+
+    async fn start_with_token(token: Option<ApiToken>) -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let token = ApiToken::load_or_create(directory.path()).unwrap();
         let identity =
             Arc::new(LocalIdentity::load_or_create(directory.path().join("identity")).unwrap());
         let (application, commands) = ApplicationHandle::new(
@@ -86,7 +89,10 @@ impl TestServer {
     }
 
     fn authorization(&self) -> String {
-        format!("Authorization: Bearer {}\r\n", self.token.expose_secret())
+        match &self.token {
+            Some(token) => format!("Authorization: Bearer {}\r\n", token.expose_secret()),
+            None => String::new(),
+        }
     }
 
     /// Register a live, paired connection for `device_id`, as the transport
@@ -96,6 +102,14 @@ impl TestServer {
     fn connect_and_pair(
         &self,
         device_id: &str,
+    ) -> tokio::sync::mpsc::Receiver<myconnect::protocol::Packet> {
+        self.connect(device_id, true)
+    }
+
+    fn connect(
+        &self,
+        device_id: &str,
+        paired: bool,
     ) -> tokio::sync::mpsc::Receiver<myconnect::protocol::Packet> {
         let identity = IdentityBody {
             device_id: device_id.to_owned(),
@@ -110,13 +124,17 @@ impl TestServer {
             extra: Map::new(),
         };
         self.application
-            .discover_device(&identity, true, 20)
+            .discover_device(&identity, paired, 20)
             .unwrap();
+        // A real certificate, so pairing can derive a verification code.
+        let peer =
+            LocalIdentity::load_or_create(self._directory.path().join(format!("peer-{device_id}")))
+                .unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel(8);
         self.application
             .register_connection(
                 device_id,
-                vec![1, 2, 3],
+                peer.certificate_der().to_vec(),
                 8,
                 tx,
                 CancellationToken::new(),
@@ -268,6 +286,54 @@ async fn control_plane_is_authenticated_and_runs_on_ephemeral_loopback() {
         server.commands.recv().await,
         Some(Command::AnnounceDiscovery)
     );
+
+    server.server.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn control_plane_without_a_token_accepts_unauthenticated_requests() {
+    let server = TestServer::start_with_token(None).await;
+
+    for (method, path) in [
+        ("GET", "/api/v1/status"),
+        ("GET", "/api/v1/devices"),
+        ("GET", "/api/v1/pairings"),
+    ] {
+        let response = request(&server, method, path, false).await;
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{method} {path}");
+    }
+    let unknown = request(&server, "GET", "/api/v1/nope", false).await;
+    assert!(unknown.starts_with("HTTP/1.1 404 Not Found"));
+
+    server.server.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn pairings_are_listed_so_clients_can_recover_after_reconnecting() {
+    let server = TestServer::start().await;
+    let empty = request(&server, "GET", "/api/v1/pairings", true).await;
+    assert!(empty.starts_with("HTTP/1.1 200 OK"));
+    assert_eq!(body(&empty), "[]");
+
+    let device_id = "cccccccccccccccccccccccccccccccc";
+    let _packets = server.connect(device_id, false);
+    let started = request_with_body(
+        &server,
+        "POST",
+        "/api/v1/pairings",
+        &format!(r#"{{"deviceId":"{device_id}"}}"#),
+    )
+    .await;
+    assert!(started.starts_with("HTTP/1.1 202 Accepted"), "{started}");
+    let started: serde_json::Value = serde_json::from_str(body(&started)).unwrap();
+
+    let listed = request(&server, "GET", "/api/v1/pairings", true).await;
+    let listed: serde_json::Value = serde_json::from_str(body(&listed)).unwrap();
+    let listed = listed.as_array().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["id"], started["id"]);
+    assert_eq!(listed[0]["direction"], "outgoing");
+    assert_eq!(listed[0]["deviceId"], device_id);
 
     server.server.shutdown().await.unwrap();
 }

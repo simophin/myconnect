@@ -11,7 +11,10 @@ use myconnect::{
         ApplicationEvent, ClipboardSnapshot, EventData, PairingSnapshot, RunRequest,
         TransferSnapshot,
     },
-    client::{ApiClient, ClipboardWatchUpdate, DeviceWatchUpdate, TransferWatchUpdate},
+    client::{
+        API_TOKEN_ENV, ApiClient, ClipboardWatchUpdate, DeviceWatchUpdate, TransferWatchUpdate,
+    },
+    config::ApiToken,
     device::DeviceSnapshot,
 };
 use serde_json::json;
@@ -33,6 +36,18 @@ pub struct Cli {
     /// every other command. Defaults to 24816.
     #[arg(long, global = true, value_name = "PORT")]
     api_port: Option<u16>,
+    /// Bearer token for the local control API: required from clients by
+    /// `run` when set, and sent by every other command. Empty (the default)
+    /// disables API authentication.
+    #[arg(
+        long,
+        global = true,
+        value_name = "TOKEN",
+        env = API_TOKEN_ENV,
+        hide_env_values = true,
+        default_value = ""
+    )]
+    api_token: String,
     #[command(subcommand)]
     command: Command,
 }
@@ -43,7 +58,7 @@ enum Command {
     Run {
         #[arg(long, value_name = "DIRECTORY")]
         download_dir: Option<PathBuf>,
-        /// Directory holding local identity, trust, and token state.
+        /// Directory holding local identity and trust state.
         #[arg(long, value_name = "DIRECTORY")]
         data_dir: Option<PathBuf>,
         /// Name this device advertises to peers.
@@ -114,8 +129,13 @@ impl Cli {
             json,
             api_host,
             api_port,
+            api_token,
             command,
         } = self;
+        let api_token = (!api_token.is_empty())
+            .then(|| ApiToken::from_secret(api_token))
+            .transpose()
+            .context("invalid --api-token")?;
         if let Command::Run {
             download_dir,
             data_dir,
@@ -124,6 +144,7 @@ impl Cli {
         } = command
         {
             let mut request = RunRequest {
+                api_token,
                 download_dir,
                 data_dir,
                 device_name,
@@ -146,7 +167,7 @@ impl Cli {
             let port = api_port.unwrap_or(DEFAULT_API_PORT);
             format!("http://{}:{port}", format_host_for_url(&host))
         });
-        let client = ApiClient::from_environment_with_url(base_url_override)?;
+        let client = ApiClient::from_environment_with(base_url_override, api_token)?;
         match command {
             Command::Run { .. } => unreachable!("run handled before client configuration"),
             Command::Devices { watch: false } => print_devices(&client.devices().await?, json),
@@ -306,7 +327,8 @@ fn event_device_unpaired(event: &ApplicationEvent) -> bool {
         EventData::DeviceDiscovered(device)
         | EventData::DeviceConnected(device)
         | EventData::DeviceUpdated(device)
-        | EventData::DeviceDisconnected(device) => !device.paired,
+        | EventData::DeviceDisconnected(device)
+        | EventData::DeviceForgotten(device) => !device.paired,
         _ => false,
     }
 }
@@ -398,6 +420,9 @@ fn print_event(event: &ApplicationEvent, json_output: bool) {
                     enum_name(device.reachability)
                 )
             }
+            EventData::DeviceForgotten(device) => {
+                println!("Device {}: forgotten", device.device_name)
+            }
             EventData::ClipboardChanged(clipboard) => println!("{}", clipboard.text),
             EventData::TransferStarted(transfer)
             | EventData::TransferProgress(transfer)
@@ -440,6 +465,8 @@ mod tests {
                 "run",
             ],
             vec!["myconnect", "--api-host", "192.168.1.5", "devices"],
+            vec!["myconnect", "--api-token", "secret", "run"],
+            vec!["myconnect", "--api-token", "secret", "devices"],
             vec!["myconnect", "devices"],
             vec!["myconnect", "devices", "--watch"],
             vec!["myconnect", "scan"],

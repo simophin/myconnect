@@ -91,7 +91,7 @@ impl MockServer {
     }
 
     fn client(&self) -> ApiClient {
-        ApiClient::new(&self.url, ApiToken::from_secret(TOKEN).unwrap()).unwrap()
+        ApiClient::new(&self.url, Some(ApiToken::from_secret(TOKEN).unwrap())).unwrap()
     }
 }
 
@@ -431,12 +431,21 @@ async fn errors_are_distinct_and_actionable() {
     let server = MockServer::start().await;
     let wrong = ApiClient::new(
         &server.url,
-        ApiToken::from_secret("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        Some(
+            ApiToken::from_secret(
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            )
             .unwrap(),
+        ),
     )
     .unwrap();
     assert!(matches!(
         wrong.devices().await,
+        Err(ClientError::Unauthorized)
+    ));
+    let anonymous = ApiClient::new(&server.url, None).unwrap();
+    assert!(matches!(
+        anonymous.devices().await,
         Err(ClientError::Unauthorized)
     ));
 
@@ -467,7 +476,7 @@ async fn errors_are_distinct_and_actionable() {
     drop(listener);
     let absent = ApiClient::new(
         &format!("http://{address}"),
-        ApiToken::from_secret(TOKEN).unwrap(),
+        Some(ApiToken::from_secret(TOKEN).unwrap()),
     )
     .unwrap();
     assert!(matches!(
@@ -478,13 +487,22 @@ async fn errors_are_distinct_and_actionable() {
 
 #[test]
 fn client_allows_non_loopback_hosts() {
-    assert!(ApiClient::new("http://example.com", ApiToken::from_secret(TOKEN).unwrap()).is_ok());
+    assert!(
+        ApiClient::new(
+            "http://example.com",
+            Some(ApiToken::from_secret(TOKEN).unwrap())
+        )
+        .is_ok()
+    );
 }
 
 #[test]
 fn client_rejects_non_http_schemes() {
     assert!(matches!(
-        ApiClient::new("https://127.0.0.1", ApiToken::from_secret(TOKEN).unwrap()),
+        ApiClient::new(
+            "https://127.0.0.1",
+            Some(ApiToken::from_secret(TOKEN).unwrap())
+        ),
         Err(ClientError::UnsupportedScheme)
     ));
 }

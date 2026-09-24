@@ -444,6 +444,12 @@ async fn forgetting_a_device_removes_trust_and_reports_unknown_afterwards() {
     assert_eq!(accepted.status, PairingStatus::Accepted);
 
     harness.application.forget_device(&harness.peer_id).unwrap();
+    let forgotten = loop {
+        if let EventData::DeviceForgotten(device) = next_pairing_event(&mut harness.events).await {
+            break device;
+        }
+    };
+    assert_eq!(forgotten.device_id, harness.peer_id);
     assert!(matches!(
         harness
             .application

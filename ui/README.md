@@ -1,0 +1,82 @@
+# MyConnect UI
+
+Flutter desktop app for MyConnect. It is a thin client: all state lives in
+the Rust daemon, and the app reads and writes it only through the daemon's
+HTTP API (see [docs/adr](docs/adr/README.md) for why and how).
+
+By default the app starts its own daemon in-process via the `myconnect-ffi`
+library, on a free loopback port with a per-launch token.
+
+## Features
+
+- Paired device list with live reachability
+- Device details and unpairing
+- Add device: scan for nearby devices and start pairing, with the
+  verification code and outcome
+- Incoming pairing requests prompt on any screen
+
+## Running
+
+Requires Flutter and a Rust toolchain (the Linux build runs `cargo` to build
+the core, see [ADR 0006](docs/adr/0006-build-the-rust-core-from-the-platform-build.md)).
+
+```sh
+flutter run -d linux
+```
+
+### Options (`--dart-define`)
+
+| Define | Effect |
+| --- | --- |
+| `MYCONNECT_API_URL` | Use an already-running daemon (e.g. `http://127.0.0.1:24816`) instead of starting one. |
+| `MYCONNECT_API_TOKEN` | Token for that external daemon, if it was started with `--api-token`. |
+| `MYCONNECT_DATA_DIR` | Identity/trust directory for the embedded daemon. |
+| `MYCONNECT_DOWNLOAD_DIR` | Where the embedded daemon saves received files. |
+| `MYCONNECT_DEVICE_NAME` | Name advertised to peers (defaults to the hostname). |
+| `MYCONNECT_DISCOVERY_LOOPBACK` | `true` to discover only instances on this machine. |
+
+### Two instances on one machine
+
+Pair the app with a CLI daemon without a second computer:
+
+```sh
+# terminal 1: a CLI peer
+cargo run -- --api-port 25011 run --discovery-loopback \
+  --data-dir /tmp/peer --device-name "CLI Peer"
+
+# terminal 2: the app, isolated from your real identity
+cd ui && flutter run -d linux \
+  --dart-define=MYCONNECT_DISCOVERY_LOOPBACK=true \
+  --dart-define=MYCONNECT_DATA_DIR=/tmp/ui \
+  --dart-define=MYCONNECT_DEVICE_NAME="UI Desktop"
+
+# then, e.g., request pairing from the CLI and accept it in the app
+cargo run -- --api-port 25011 scan
+cargo run -- --api-port 25011 pair <ui-device-id>
+```
+
+## Development
+
+```sh
+dart run build_runner build --delete-conflicting-outputs  # after model changes
+flutter analyze
+flutter test
+```
+
+Layout:
+
+```text
+lib/
+├── main.dart
+└── src/
+    ├── app.dart                 # MaterialApp, theme, daemon shutdown on exit
+    ├── core/
+    │   ├── api/                 # dio client, SSE parsing, reconnecting stream, models
+    │   ├── daemon/              # DaemonHost: FFI-embedded or external daemon
+    │   ├── routing/router.dart
+    │   └── providers.dart       # host → endpoint → api → event hub
+    ├── features/
+    │   ├── devices/             # list, details, add device (scan)
+    │   └── pairing/             # outgoing pairing page, incoming prompt
+    └── shared/widgets.dart
+```
