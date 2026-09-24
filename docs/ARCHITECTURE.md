@@ -105,6 +105,13 @@ States: `requested → awaiting_confirmation → accepted | rejected | expired |
   peer's accept for outgoing) — never before.
 - `DELETE /pairings/{id}` cancels an in-flight pairing or unpairs/forgets an
   already-trusted device, removing its pinned certificate.
+- Unpairing (`DELETE /devices/{id}`) sends `kdeconnect.pair {pair: false}`
+  to a connected peer before closing the connection; the transport writes
+  out packets already queued when a connection is cancelled, so the notice
+  isn't lost to the close. A `pair: false` received outside a pairing
+  session from a paired peer removes its trust, sets `paired: false`, and
+  publishes `device.updated`; the connection stays open (as in KDE
+  Connect), so the device remains reachable and can be paired again.
 - Verification codes, certificates, and private keys never appear in a
   pairing snapshot or in logs.
 
@@ -227,9 +234,6 @@ Prioritized next work, with implementation notes for each item, is in
 - No manual interoperability check against a real KDE Connect
   (Android/desktop) implementation has been performed in this environment.
   Everything above is verified against this codebase's own peers only.
-- Unpairing (`DELETE /devices/{id}`) forgets the device locally but does
-  not send `kdeconnect.pair {pair: false}` to the peer, so the peer keeps
-  treating the device as paired until it is unpaired there too.
 - Ping is outgoing only: incoming `kdeconnect.ping` packets are dropped and
   not advertised in `incomingCapabilities`.
 - No OS clipboard backend, no Bluetooth transport, no multi-file/directory

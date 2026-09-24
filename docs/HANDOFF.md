@@ -66,7 +66,7 @@ KDE Connect install yet.
 
 | # | Item | Priority | Mostly |
 | --- | --- | --- | --- |
-| 1 | [Tell the peer when unpairing](#1-tell-the-peer-when-unpairing) | P0 | Rust |
+| 1 | ~~[Tell the peer when unpairing](#1-tell-the-peer-when-unpairing)~~ **Done** | P0 | Rust |
 | 2 | [Interop check against real KDE Connect](#2-interop-check-against-real-kde-connect) | P0 | Manual + Rust fixes |
 | 3 | [Keep running in the background](#3-keep-running-in-the-background-tray-and-notifications) | P0 | Flutter |
 | 4 | [Send files and a transfers view](#4-send-files-and-a-transfers-view) | P1 | Flutter (+ small API) |
@@ -80,6 +80,14 @@ KDE Connect install yet.
 ---
 
 ## 1. Tell the peer when unpairing
+
+> **Done (2026-09-24).** `forget_device` queues `pair: false` before
+> cancelling the connection, and the LAN connection loop now flushes queued
+> packets on cancel (bounded by `CLOSE_FLUSH_TIMEOUT`). A `pair: false` from
+> a paired peer outside a pairing session removes trust and publishes
+> `device.updated` with `paired: false`, keeping the connection open. Covered
+> by unit tests in `src/application/service.rs` and the unpair step of
+> `tests/pairing_e2e.rs`. See ARCHITECTURE §4.
 
 **Why.** Unpairing is one-sided today. If A unpairs B, B still shows A as
 paired, reconnects, and has trust that A no longer honours. We saw this live:

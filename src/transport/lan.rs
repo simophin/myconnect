@@ -37,6 +37,9 @@ const MAX_IDENTITY_LINE: usize = 8 * 1024;
 const MAX_PACKET_LINE: usize = 64 * 1024;
 const MAX_PENDING_CONNECTIONS: usize = 32;
 const PACKET_QUEUE_CAPACITY: usize = 32;
+/// How long a cancelled connection may spend writing out packets that were
+/// queued before it was cancelled.
+const CLOSE_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug)]
 pub struct LanConfig {
@@ -548,7 +551,13 @@ async fn handle_connection(
     loop {
         tokio::select! {
             _ = shutdown.cancelled() => { debug!(local_id = %local.device_id, %device_id, "loop end: shutdown"); break },
-            _ = reservation.cancellation.cancelled() => { debug!(local_id = %local.device_id, %device_id, "loop end: cancelled"); break },
+            _ = reservation.cancellation.cancelled() => {
+                debug!(local_id = %local.device_id, %device_id, "loop end: cancelled");
+                // Packets queued just before cancelling (e.g. the unpair
+                // notice from `forget_device`) still reach the peer.
+                let _ = timeout(CLOSE_FLUSH_TIMEOUT, flush_queued(&mut packet_rx, &mut codec, &mut writer)).await;
+                break
+            },
             outgoing = packet_rx.recv() => {
                 let Some(packet) = outgoing else { debug!(local_id = %local.device_id, %device_id, "loop end: packet_rx none"); break };
                 match codec.encode(&packet) {
@@ -579,6 +588,20 @@ async fn handle_connection(
     debug!(local_id = %local.device_id, %device_id, "session ended, unregistering");
     application.unregister_connection(&device_id);
     registry.release(&device_id, reservation.id);
+}
+
+/// Write every packet already waiting in `packet_rx`, then flush.
+async fn flush_queued(
+    packet_rx: &mut mpsc::Receiver<Packet>,
+    codec: &mut PacketCodec,
+    writer: &mut BoxedWriter,
+) -> std::io::Result<()> {
+    while let Ok(packet) = packet_rx.try_recv() {
+        if let Ok(bytes) = codec.encode(&packet) {
+            writer.write_all(&bytes).await?;
+        }
+    }
+    writer.flush().await
 }
 
 type BoxedReader = Box<dyn AsyncRead + Send + Unpin>;

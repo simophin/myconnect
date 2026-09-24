@@ -249,10 +249,25 @@ async fn valid_peer_pairs_reconnects_with_pinned_trust_and_unpairs() {
         other => panic!("unexpected {other:?}"),
     }
 
-    // Unpair from A's side: trust is removed and B is forced to disconnect.
+    // Unpair from A's side: trust is removed, A tells B, and B drops its
+    // trust in A too, before the connection is closed.
+    let mut b2_events = b2.application.subscribe();
     a2.application.forget_device(&b_id).unwrap();
     assert!(a2.trust_store.get(&b_id).unwrap().is_none());
-    wait_for_reachability(&b2.application, &a_id, DeviceReachability::Unavailable).await;
+    timeout(Duration::from_secs(3), async {
+        loop {
+            if let EventData::DeviceUpdated(device) = b2_events.recv().await.unwrap().event
+                && device.device_id == a_id
+                && !device.paired
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    wait_for_paired(&b2.application, &a_id, false).await;
+    assert!(b2.trust_store.get(&a_id).unwrap().is_none());
 
     a2_service.shutdown().await.unwrap();
     b2_service.shutdown().await.unwrap();

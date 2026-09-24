@@ -360,10 +360,21 @@ impl ApplicationHandle {
                 .state
                 .write()
                 .map_err(|_| ApplicationError::StateUnavailable)?;
-            let cancellation = state
-                .connections
-                .get(device_id)
-                .map(|c| c.cancellation.clone());
+            let connection = state.connections.get(device_id);
+            let cancellation = connection.map(|c| c.cancellation.clone());
+            // Tell the peer before the connection closes, so it drops its
+            // trust in us too. The transport flushes packets already queued
+            // when the connection is cancelled.
+            if let Some(connection) = connection {
+                let body = PairingBody {
+                    pair: false,
+                    timestamp: None,
+                    extra: Default::default(),
+                };
+                if let Ok(packet) = Packet::from_body(unix_millis(), "kdeconnect.pair", &body) {
+                    let _ = connection.packets.try_send(packet);
+                }
+            }
             let failed_pairing =
                 fail_active_pairing(&mut state, device_id, OperationErrorCode::Internal);
             let forgotten = state.devices.forget(device_id);
@@ -869,6 +880,8 @@ impl ApplicationHandle {
                     return;
                 };
                 let Some(&pairing_id) = state.pairing_by_device.get(device_id) else {
+                    drop(state);
+                    self.handle_peer_unpair(device_id);
                     return;
                 };
                 let Some(runtime) = state.pairings.get_mut(&pairing_id) else {
@@ -922,6 +935,27 @@ impl ApplicationHandle {
             Outcome::NewIncoming => self.begin_incoming_pairing(device_id, body, received_at),
             Outcome::Ignore => {}
         }
+    }
+
+    /// Handle `kdeconnect.pair {"pair": false}` outside a pairing session:
+    /// the peer has unpaired us. Remove its trust and mark it unpaired, but
+    /// keep the connection open, as KDE Connect does, so the device stays
+    /// reachable and can be paired again.
+    fn handle_peer_unpair(&self, device_id: &str) {
+        let was_paired = self
+            .state
+            .read()
+            .ok()
+            .and_then(|state| state.devices.get(device_id))
+            .is_some_and(|device| device.paired);
+        let was_trusted = self.trust_store.remove(device_id).unwrap_or(false);
+        if !was_paired && !was_trusted {
+            return;
+        }
+        if let Ok(mut state) = self.state.write() {
+            let _ = state.devices.set_paired(device_id, false);
+        }
+        self.publish_device_update(device_id);
     }
 
     fn confirm_outgoing_pairing(&self, pairing_id: Uuid) {
@@ -2059,6 +2093,89 @@ mod tests {
             rx.try_recv().unwrap().packet_type,
             plugins::ping::PACKET_TYPE
         );
+    }
+
+    fn unpair_packet() -> Packet {
+        let body = PairingBody {
+            pair: false,
+            timestamp: None,
+            extra: Default::default(),
+        };
+        Packet::from_body(1, "kdeconnect.pair", &body).unwrap()
+    }
+
+    #[test]
+    fn forgetting_a_connected_device_tells_the_peer_before_disconnecting() {
+        let (handle, _commands) = handle();
+        let device_id = "740bd4b9b4184ee497d6caf1da8151be";
+        handle
+            .discover_device(&make_identity(device_id, Vec::new()), true, 1)
+            .unwrap();
+        let (tx, mut rx) = mpsc::channel(4);
+        let cancellation = CancellationToken::new();
+        handle
+            .register_connection(device_id, vec![1, 2, 3], 8, tx, cancellation.clone(), 1)
+            .unwrap();
+
+        handle.forget_device(device_id).unwrap();
+
+        let sent = rx.try_recv().unwrap();
+        assert_eq!(sent.packet_type, "kdeconnect.pair");
+        let body: PairingBody = sent.body_as().unwrap();
+        assert!(!body.pair);
+        assert!(cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn unpair_from_a_paired_peer_removes_trust_and_keeps_the_connection() {
+        let (handle, _commands) = handle();
+        let device_id = "740bd4b9b4184ee497d6caf1da8151be";
+        handle
+            .trust_store
+            .put(&TrustedDevice {
+                device_id: device_id.into(),
+                certificate_der: vec![1, 2, 3],
+                last_trusted_protocol_version: 8,
+            })
+            .unwrap();
+        handle
+            .discover_device(&make_identity(device_id, Vec::new()), true, 1)
+            .unwrap();
+        let (tx, _rx) = mpsc::channel(4);
+        let cancellation = CancellationToken::new();
+        handle
+            .register_connection(device_id, vec![1, 2, 3], 8, tx, cancellation.clone(), 1)
+            .unwrap();
+        let mut events = handle.subscribe();
+
+        handle.handle_peer_packet(device_id, unpair_packet());
+
+        assert!(handle.trust_store.get(device_id).unwrap().is_none());
+        match events.try_recv().unwrap().event {
+            super::super::EventData::DeviceUpdated(device) => {
+                assert!(!device.paired);
+                assert_eq!(
+                    device.reachability,
+                    crate::device::DeviceReachability::Connected
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        assert!(!cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn unpair_from_an_unpaired_peer_is_ignored() {
+        let (handle, _commands) = handle();
+        let device_id = "740bd4b9b4184ee497d6caf1da8151be";
+        handle
+            .discover_device(&make_identity(device_id, Vec::new()), false, 1)
+            .unwrap();
+        let mut events = handle.subscribe();
+
+        handle.handle_peer_packet(device_id, unpair_packet());
+
+        assert!(events.try_recv().is_err());
     }
 
     fn connect_paired_clipboard_peer(
