@@ -14,6 +14,9 @@ enum DeviceReachability { discovered, connected, unavailable, unknown }
 /// The capability a peer lists when it accepts files.
 const shareCapability = 'kdeconnect.share.request';
 
+/// The capability a peer lists when it accepts pings.
+const pingCapability = 'kdeconnect.ping';
+
 /// Mirror of the daemon's `DeviceSnapshot`.
 @freezed
 abstract class Device with _$Device {
@@ -41,4 +44,8 @@ abstract class Device with _$Device {
   /// Whether a file sent now would be accepted.
   bool get acceptsFiles =>
       isConnected && incomingCapabilities.contains(shareCapability);
+
+  /// Whether a ping sent now would be accepted.
+  bool get acceptsPings =>
+      isConnected && incomingCapabilities.contains(pingCapability);
 }

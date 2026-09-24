@@ -55,6 +55,19 @@ Future<void> sendFiles(
   Device device,
   List<String> paths,
 ) async {
+  final message = await startTransfers(transfers, device, paths);
+  if (message != null) {
+    messenger.showSnackBar(SnackBar(content: Text(message)));
+  }
+}
+
+/// Send [paths] to [device] one at a time. Returns one sentence about any
+/// that failed, or `null` when all of them started.
+Future<String?> startTransfers(
+  TransfersController transfers,
+  Device device,
+  List<String> paths,
+) async {
   final failures = <(String, Object)>[];
   for (final path in paths) {
     try {
@@ -63,16 +76,13 @@ Future<void> sendFiles(
       failures.add((path, error));
     }
   }
-  final message = switch (failures) {
+  return switch (failures) {
     [] => null,
     [(final path, final error)] =>
       "Couldn't send ${fileName(path)}: ${describeError(error)}",
     [(_, final error), ...] =>
       "Couldn't send ${failures.length} files: ${describeError(error)}",
   };
-  if (message != null) {
-    messenger.showSnackBar(SnackBar(content: Text(message)));
-  }
 }
 
 /// The last segment of [path], on any platform's separators.

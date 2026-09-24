@@ -37,6 +37,11 @@ dev_dependencies:
   mocktail: ^1.0.5
   very_good_analysis: ^11.0.0
 
+# Patched so a Linux tray icon reports clicks; see third_party/README.md.
+dependency_overrides:
+  cnativeapi:
+    path: third_party/cnativeapi
+
 flutter:
   uses-material-design: true
   assets:
