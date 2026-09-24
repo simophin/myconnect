@@ -593,9 +593,12 @@ unavailable, entering a peer's IP makes it appear in the Add device list.
 > CMake step exist, and `NativeBindings.open()` loads the macOS dylib from
 > `Contents/Frameworks`. The sandbox entitlements now include network
 > client and server, user-selected files and Downloads. `.github/workflows/
-> build.yml` builds all three platforms when a release is published (or by
-> hand) and attaches them to it, stamped with the tag's version, which
-> Settings shows.
+> build.yml` builds only macOS (a universal `MyConnect.app` in a DMG) when a
+> release is published (or by hand) and attaches it, stamped with the tag's
+> version, which Settings shows. Linux and Windows packages were dropped from
+> the release build for now; the app still builds for them locally.
+> The app has only an ad-hoc signature: users allow it once in System
+> Settings → Privacy & Security, then it opens with a double-click.
 > Nobody has launched the macOS or Windows app yet: check that the daemon
 > starts, and on macOS that a download folder chosen in Settings still works
 > after a restart (the sandbox forgets it without a security-scoped
