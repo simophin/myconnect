@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
+import 'package:myconnect_ui/src/core/api/event_stream.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 import 'package:myconnect_ui/src/core/providers.dart';
@@ -39,14 +40,18 @@ class TransfersController extends AsyncNotifier<Map<String, Transfer>> {
         .listen(_onEvent);
     ref.onDispose(subscription.cancel);
     final api = await ref.watch(apiProvider.future);
-    return _byId(await api.transfers());
+    return await _replay.fetch(() async => _byId(await api.transfers()));
   }
+
+  final _replay = SnapshotReplay<Map<String, Transfer>>(_applied);
 
   Future<void> refresh() async {
     try {
       final api = await ref.read(apiProvider.future);
-      final transfers = await api.transfers();
-      if (ref.mounted) state = AsyncData(_byId(transfers));
+      final transfers = await _replay.fetch(
+        () async => _byId(await api.transfers()),
+      );
+      if (ref.mounted) state = AsyncData(transfers);
     } on Object catch (error) {
       _log.warning('Transfer refresh failed: $error');
     }
@@ -81,6 +86,7 @@ class TransfersController extends AsyncNotifier<Map<String, Transfer>> {
   );
 
   void _onEvent(DaemonEvent event) {
+    _replay.record(event);
     switch (event) {
       case EventStreamConnected():
         unawaited(refresh());
@@ -91,17 +97,33 @@ class TransfersController extends AsyncNotifier<Map<String, Transfer>> {
     }
   }
 
-  /// Store [transfer] unless a newer snapshot is already held. An HTTP
-  /// response can arrive after events that superseded it: a send returns
-  /// only once the upload ends, by which time `transfer.completed` may
-  /// already be in.
   Transfer _upsert(Transfer transfer) {
     final current = state.value;
     if (current == null || !ref.mounted) return transfer;
-    final existing = current[transfer.id];
-    if (existing != null && _isNewer(existing, transfer)) return existing;
-    state = AsyncData({...current, transfer.id: transfer});
-    return transfer;
+    final updated = _with(current, transfer);
+    if (!identical(updated, current)) state = AsyncData(updated);
+    return updated[transfer.id]!;
+  }
+
+  static Map<String, Transfer> _applied(
+    Map<String, Transfer> transfers,
+    DaemonEvent event,
+  ) => switch (event) {
+    TransferChanged(:final transfer) => _with(transfers, transfer),
+    _ => transfers,
+  };
+
+  /// [transfers] with [transfer] stored, unless a newer snapshot is already
+  /// held. An HTTP response can arrive after events that superseded it: a
+  /// send returns only once the upload ends, by which time
+  /// `transfer.completed` may already be in.
+  static Map<String, Transfer> _with(
+    Map<String, Transfer> transfers,
+    Transfer transfer,
+  ) {
+    final existing = transfers[transfer.id];
+    if (existing != null && _isNewer(existing, transfer)) return transfers;
+    return {...transfers, transfer.id: transfer};
   }
 
   static bool _isNewer(Transfer a, Transfer b) =>

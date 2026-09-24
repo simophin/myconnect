@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
@@ -83,4 +85,24 @@ void main() {
       expect(container.read(deviceProvider('b' * 32)), isNull);
     },
   );
+
+  test('events that arrive during a refetch survive it', () async {
+    await container.read(devicesProvider.future);
+    final fetched = Completer<List<Device>>();
+    when(daemon.api.devices).thenAnswer((_) => fetched.future);
+
+    await daemon.emit(const EventStreamConnected());
+    await daemon.emit(DeviceChanged(device(id: 'c' * 32, name: 'Laptop')));
+    await daemon.emit(DeviceForgotten(device(id: 'a' * 32)));
+    fetched.complete([
+      device(id: 'b' * 32, name: 'Tablet'),
+      device(id: 'a' * 32, name: 'phone', paired: false),
+    ]);
+    await pumpEventQueue();
+
+    expect(container.read(devicesProvider).value!.map((d) => d.deviceName), [
+      'Laptop',
+      'Tablet',
+    ]);
+  });
 }

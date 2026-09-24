@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
+import 'package:myconnect_ui/src/core/api/event_stream.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/settings.dart';
 import 'package:myconnect_ui/src/core/providers.dart';
@@ -25,13 +26,20 @@ class SettingsController extends AsyncNotifier<DaemonSettings> {
         .listen(_onEvent);
     ref.onDispose(subscription.cancel);
     final api = await ref.watch(apiProvider.future);
-    return await api.settings();
+    return await _replay.fetch(api.settings);
   }
+
+  final _replay = SnapshotReplay<DaemonSettings>(
+    (current, event) => switch (event) {
+      SettingsChanged(:final settings) => settings,
+      _ => current,
+    },
+  );
 
   Future<void> refresh() async {
     try {
       final api = await ref.read(apiProvider.future);
-      final settings = await api.settings();
+      final settings = await _replay.fetch(api.settings);
       if (ref.mounted) state = AsyncData(settings);
     } on Object catch (error) {
       _log.warning('Settings refresh failed: $error');
@@ -60,6 +68,7 @@ class SettingsController extends AsyncNotifier<DaemonSettings> {
   }
 
   void _onEvent(DaemonEvent event) {
+    _replay.record(event);
     switch (event) {
       case EventStreamConnected():
         unawaited(refresh());
