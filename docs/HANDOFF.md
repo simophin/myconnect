@@ -491,6 +491,20 @@ against an external daemon (`--dart-define=MYCONNECT_API_URL=...`).
 - `--dart-define` reads live only in `DaemonHost.fromEnvironment`, with an
   ignore for `avoid_redundant_argument_values`. Never run `dart fix` on
   that file without checking the diff.
+- In debug builds the DEBUG banner covers the rightmost app bar action,
+  which on the home screen is the Transfers button (at about x 1244–1268,
+  y 14–38 in a 1280-wide window). It is there and clickable, just hidden.
+  Don't mistake it for a missing widget, and use `find.byTooltip` in tests.
+- `myconnect send` prints only the upload's response, which is taken once
+  the last byte has been forwarded, so it ends on
+  `transferring (N/N)` rather than `completed`. Waiting for the terminal
+  state (or watching `/events`) would make the CLI report the real
+  outcome.
+- A transfer the sender cancels shows up on the receiver as `failed` with
+  `connection_failed`, not `cancelled`, because the receiver only sees the
+  payload connection close early. KDE Connect has no cancel notice in the
+  share protocol either, so this probably stays; a UI could word it as
+  "stopped by the sender" if it becomes confusing.
 
 ## Verifying in the real app
 
@@ -510,3 +524,23 @@ Without a display (e.g. in an agent sandbox), run the built bundle under
 click with XTest (`libXtst` through Python `ctypes`). Don't open windows on
 the user's own session, and don't pair with or send to real devices on
 their network without asking.
+
+Tips from the item 4 check:
+
+- Launch the app under `dbus-run-session -- env DISPLAY=:NN
+  GDK_BACKEND=x11 ...` so its D-Bus services (file chooser portal,
+  notifications) stay private. The "Send file" picker then opens as a GTK
+  dialog on the virtual display; press Ctrl+L, type the absolute path, and
+  press Return, all through XTest key events.
+- The dialog starts in "Recent" and lists the user's real recent files. Pick
+  files by typed path, and don't browse or screenshot more of it than you
+  need.
+- Loopback transfers in a debug build run at tens of MB/s, so use a file of
+  1–2 GB (from `/dev/zero`, in the scratchpad) to catch progress mid-flight
+  or to cancel it.
+- "Open file" and "Open folder" launch the desktop's real default app (e.g.
+  Thunar) on the virtual display, and it may start helpers (`xfconfd`,
+  `tumblerd`) that outlive it. Kill them afterwards, checking
+  `/proc/<pid>/environ` first to make sure they belong to the private bus.
+- Don't clean up with `pkill -f <pattern>`: the pattern also matches the
+  shell running the command, and kills it. Kill by PID.
