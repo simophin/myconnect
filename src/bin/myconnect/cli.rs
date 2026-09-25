@@ -104,6 +104,8 @@ enum Command {
         device_id: String,
         message: Option<String>,
     },
+    /// Make a paired device ring so you can find it.
+    Ring { device_id: String },
     /// Send a file to a paired device.
     Send {
         device_id: String,
@@ -295,6 +297,14 @@ impl Cli {
                     println!("{}", json!({"deviceId": device_id, "status": "sent"}));
                 } else {
                     println!("Ping sent to {device_id}");
+                }
+            }
+            Command::Ring { device_id } => {
+                client.ring(&device_id).await?;
+                if json {
+                    println!("{}", json!({"deviceId": device_id, "status": "sent"}));
+                } else {
+                    println!("Asked {device_id} to ring");
                 }
             }
             Command::Send {
@@ -698,6 +708,7 @@ mod tests {
             vec!["myconnect", "scan", "--address", "192.168.1.20"],
             vec!["myconnect", "ping", "device-id"],
             vec!["myconnect", "ping", "device-id", "hello"],
+            vec!["myconnect", "ring", "device-id"],
             vec!["myconnect", "pair", "device-id"],
             vec!["myconnect", "pair", "accept", ID],
             vec!["myconnect", "pair", "reject", ID],
