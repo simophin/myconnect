@@ -103,22 +103,8 @@ impl Settings {
         }
     }
 
-    /// Hold the plugins' sections. A setting stored under a key a section
-    /// has moved from is read into the section.
+    /// Hold the plugins' sections.
     pub(crate) fn with_sections(mut self, sections: Vec<SettingsSection>) -> Self {
-        let stored = &mut self.stored;
-        for section in &sections {
-            for (old, field) in section.moved_from {
-                if let Some(value) = stored.unrecognized.remove(*old) {
-                    stored
-                        .plugins
-                        .entry(section.id.to_owned())
-                        .or_default()
-                        .entry(*field)
-                        .or_insert(value);
-                }
-            }
-        }
         self.sections = sections;
         self
     }
@@ -355,7 +341,6 @@ mod tests {
 
     impl super::super::PluginSettings for Waving {
         const ID: &'static str = "wave";
-        const MOVED_FROM: &'static [(&'static str, &'static str)] = &[("wavingEnabled", "enabled")];
     }
 
     #[test]
@@ -366,13 +351,15 @@ mod tests {
             .with_file(
                 file.clone(),
                 StoredSettings {
-                    unrecognized: Map::from_iter([("wavingEnabled".into(), false.into())]),
+                    plugins: BTreeMap::from([(
+                        "wave".into(),
+                        Map::from_iter([("enabled".into(), false.into())]),
+                    )]),
                     ..Default::default()
                 },
             )
             .with_sections(vec![SettingsSection::of::<Waving>()]);
 
-        // A setting stored before the section existed is read into it.
         let expected = serde_json::json!({"enabled": false, "hand": "left"});
         assert_eq!(settings.snapshot().plugins["wave"], expected);
         assert_eq!(settings.section("wave"), Some(expected));
@@ -385,11 +372,9 @@ mod tests {
             snapshot.plugins["wave"],
             serde_json::json!({"enabled": false, "hand": "right"})
         );
-        // Saved in its new place, and only what the user set.
-        let saved = file.load().unwrap();
-        assert!(saved.unrecognized.is_empty());
+        // Only what the user set is saved.
         assert_eq!(
-            serde_json::to_value(&saved.plugins).unwrap(),
+            serde_json::to_value(&file.load().unwrap().plugins).unwrap(),
             serde_json::json!({"wave": {"enabled": false, "hand": "right"}})
         );
 

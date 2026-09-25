@@ -216,9 +216,9 @@ the platform download directory, `true`.
   stores only the fields the user set, merges a patch into them (`null`
   resets a field, a `null` section resets the section) and answers `400
   invalid_settings` for an unknown section or a value the plugin can't
-  read. `GET /settings` always lists every section, defaults filled in. A
-  setting from before its section existed (`clipboardSyncEnabled`) is read
-  into the section and saved there on the next change.
+  read. `GET /settings` always lists every section, defaults filled in.
+  The old top-level `clipboardSyncEnabled` is not migrated: a file that
+  still has it is read as if it didn't, and it is dropped on the next save.
 - **Precedence.** A start option (`myconnect run --device-name` /
   `--download-dir`, or the FFI config's `deviceName` / `downloadDir`)
   overrides the stored value for that run only and is not saved. Changing

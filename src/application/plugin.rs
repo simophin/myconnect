@@ -179,12 +179,6 @@ impl PluginEvent {
 pub trait PluginSettings: Serialize + DeserializeOwned + Default {
     /// The plugin's [`Plugin::id`].
     const ID: &'static str;
-
-    /// Top-level keys of `settings.json` from before this section existed,
-    /// as `(old key, field)`. A stored old key is read into the section when
-    /// the section doesn't set that field, and dropped when the file is next
-    /// saved.
-    const MOVED_FROM: &'static [(&'static str, &'static str)] = &[];
 }
 
 /// A settings section, as the core handles it: [`PluginSettings`] with the
@@ -192,7 +186,6 @@ pub trait PluginSettings: Serialize + DeserializeOwned + Default {
 #[derive(Clone, Copy, Debug)]
 pub struct SettingsSection {
     pub(super) id: &'static str,
-    pub(super) moved_from: &'static [(&'static str, &'static str)],
     resolve: fn(&Map<String, Value>) -> Option<Value>,
 }
 
@@ -200,7 +193,6 @@ impl SettingsSection {
     pub fn of<T: PluginSettings>() -> Self {
         Self {
             id: T::ID,
-            moved_from: T::MOVED_FROM,
             resolve: |stored| {
                 let settings: T = serde_json::from_value(Value::Object(stored.clone())).ok()?;
                 serde_json::to_value(settings).ok()

@@ -441,15 +441,12 @@ Moving clipboard (phase 2) showed:
   lock. §5.3's watch wasn't needed: nothing in clipboard has to react to a
   change as it happens. A plugin that must (e.g. to stop a server) can get
   a `settings_changed` hook then.
-- **Old settings move with the plugin.** `PluginSettings::MOVED_FROM`
-  names top-level keys a section replaced; the core reads a stored
-  `clipboardSyncEnabled` into the section and writes it in its new place
-  on the next save. Without this, everyone who had turned sync off would
-  have had it silently turned back on. Unknown top-level keys are now held
-  in memory to make that possible, but, as before, never written back.
-  Checked in the app: a `settings.json` holding only
-  `{"clipboardSyncEnabled": false}` showed the switch off, and toggling it
-  saved `plugins.clipboard.syncEnabled`.
+- **No migration, by the owner's call.** The project is pre-release, so
+  a stored `clipboardSyncEnabled` is ignored like any unknown key (sync
+  falls back to its default, on) and dropped on the next save. A migration
+  was written and then removed in review; if a later plugin needs one, it
+  would need the file's unknown top-level keys kept in memory, which
+  `StoredSettings` doesn't do.
 - **`connected` runs after `device.connected` is published,** with the
   device's snapshot, never under the core's lock. Clipboard offers its text
   there as `kdeconnect.clipboard.connect` through `ctx.send`, so the

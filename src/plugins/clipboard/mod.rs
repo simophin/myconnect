@@ -95,8 +95,6 @@ impl Default for ClipboardSettings {
 
 impl PluginSettings for ClipboardSettings {
     const ID: &'static str = ID;
-    const MOVED_FROM: &'static [(&'static str, &'static str)] =
-        &[("clipboardSyncEnabled", "syncEnabled")];
 }
 
 impl ClipboardSettings {

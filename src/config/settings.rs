@@ -28,10 +28,6 @@ pub struct StoredSettings {
     /// fields the user set.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plugins: BTreeMap<String, Map<String, Value>>,
-    /// Top-level keys this build doesn't know, such as a setting that has
-    /// since moved into a plugin's section. Read but never written back.
-    #[serde(flatten, skip_serializing)]
-    pub unrecognized: Map<String, Value>,
 }
 
 /// `settings.json` under the configuration directory.
@@ -132,20 +128,13 @@ mod tests {
     }
 
     #[test]
-    fn unknown_fields_are_read_but_not_saved_and_garbage_is_corrupt() {
+    fn unknown_fields_are_ignored_and_garbage_is_corrupt() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         let file = SettingsFile::new(directory.path());
 
         fs::write(&path, r#"{"deviceName":"Desk","fromTheFuture":1}"#).unwrap();
-        let loaded = file.load().unwrap();
-        assert_eq!(loaded.device_name.as_deref(), Some("Desk"));
-        assert_eq!(loaded.unrecognized["fromTheFuture"], 1);
-        file.save(&loaded).unwrap();
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            "{\n  \"deviceName\": \"Desk\"\n}"
-        );
+        assert_eq!(file.load().unwrap().device_name.as_deref(), Some("Desk"));
 
         fs::write(&path, "not json").unwrap();
         assert!(matches!(file.load(), Err(SettingsError::Corrupt)));
