@@ -3,7 +3,7 @@
 //! `kdeconnect.clipboard` is a plain notification carrying only the current
 //! text content; it has no timestamp and is applied unconditionally (subject
 //! to duplicate-content and feedback-loop guards enforced by the
-//! application layer). `kdeconnect.clipboard.connect` additionally carries a
+//! plugin). `kdeconnect.clipboard.connect` additionally carries a
 //! Unix millisecond timestamp and is sent once when a connection to a paired
 //! peer is established, so the receiver can decide whether the peer's
 //! clipboard is newer than what it already has before applying it: a stale

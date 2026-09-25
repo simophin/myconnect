@@ -1,10 +1,12 @@
 use std::{
+    collections::BTreeMap,
     fs,
     io::Write,
     path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -19,11 +21,17 @@ pub struct StoredSettings {
     pub device_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub download_dir: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub clipboard_sync_enabled: Option<bool>,
     /// Owned by the UI; the daemon stores it without interpreting it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub close_to_tray: Option<bool>,
+    /// Plugins' settings sections, keyed by plugin id. Each holds only the
+    /// fields the user set.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins: BTreeMap<String, Map<String, Value>>,
+    /// Top-level keys this build doesn't know, such as a setting that has
+    /// since moved into a plugin's section. Read but never written back.
+    #[serde(flatten, skip_serializing)]
+    pub unrecognized: Map<String, Value>,
 }
 
 /// `settings.json` under the configuration directory.
@@ -110,7 +118,10 @@ mod tests {
 
         let settings = StoredSettings {
             device_name: Some("Desk".into()),
-            clipboard_sync_enabled: Some(false),
+            plugins: BTreeMap::from([(
+                "wave".into(),
+                Map::from_iter([("enabled".into(), Value::Bool(false))]),
+            )]),
             ..Default::default()
         };
         file.save(&settings).unwrap();
@@ -121,13 +132,20 @@ mod tests {
     }
 
     #[test]
-    fn unknown_fields_are_ignored_and_garbage_is_corrupt() {
+    fn unknown_fields_are_read_but_not_saved_and_garbage_is_corrupt() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         let file = SettingsFile::new(directory.path());
 
         fs::write(&path, r#"{"deviceName":"Desk","fromTheFuture":1}"#).unwrap();
-        assert_eq!(file.load().unwrap().device_name.as_deref(), Some("Desk"));
+        let loaded = file.load().unwrap();
+        assert_eq!(loaded.device_name.as_deref(), Some("Desk"));
+        assert_eq!(loaded.unrecognized["fromTheFuture"], 1);
+        file.save(&loaded).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "{\n  \"deviceName\": \"Desk\"\n}"
+        );
 
         fs::write(&path, "not json").unwrap();
         assert!(matches!(file.load(), Err(SettingsError::Corrupt)));

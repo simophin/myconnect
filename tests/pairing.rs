@@ -8,8 +8,8 @@ use myconnect::{
         EventData, LocalDeviceSnapshot, PairingDirection, PairingStatus, Query, QueryResult,
         TransferConfig,
     },
-    clipboard::InMemoryClipboard,
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
+    plugins::clipboard::InMemoryClipboard,
     protocol::{DeviceType, IdentityBody, Packet, PairingBody},
     transport::tls::subject_public_key_info,
 };
@@ -45,7 +45,7 @@ fn harness() -> Harness {
         8,
         local_public_key,
         trust_store.clone(),
-        InMemoryClipboard::shared(),
+        myconnect::plugins::builtin(InMemoryClipboard::shared()),
         8,
         32,
         local_identity,

@@ -12,12 +12,14 @@ use tracing::{info, warn};
 
 use crate::{
     api::{ApiServer, ApiServerConfig, DEFAULT_API_PORT},
-    clipboard::{ClipboardService, InMemoryClipboard, SystemClipboard},
     config::{
         ApiToken, FilesystemTrustStore, LocalIdentity, SettingsFile, StoredSettings, TrustStore,
         default_config_dir,
     },
-    plugins,
+    plugins::{
+        self,
+        clipboard::{ClipboardPlugin, ClipboardService, InMemoryClipboard, SystemClipboard},
+    },
     protocol::{DeviceType, is_forbidden_name_character, is_valid_device_name},
     transport::{
         lan::{DISCOVERY_PORT, LanConfig, LanService, LocalDeviceInfo},
@@ -39,14 +41,17 @@ use settings::Settings;
 
 pub use events::{ApplicationEvent, EventBus, EventBusError, EventData};
 pub use files::{DirectoryListing, FileEntry, FileKind};
-pub use plugin::{Plugin, PluginContext, PluginEvent, PluginEventKind, PluginRegistry};
+pub use plugin::{
+    Plugin, PluginContext, PluginEvent, PluginEventKind, PluginRegistry, PluginSettings,
+    SettingsSection,
+};
 pub use service::{ApplicationError, ApplicationHandle, ApplicationService, RemoteFileContent};
 pub use settings::{SettingsDefaults, SettingsPatch, SettingsSnapshot};
 pub use state::{
-    ClipboardSnapshot, Command, LocalDeviceSnapshot, MAX_CLIPBOARD_TEXT_BYTES, OperationErrorCode,
-    Pairing, PairingDirection, PairingSnapshot, PairingStatus, PairingTransitionError, Query,
-    QueryResult, StatusSnapshot, Transfer, TransferDirection, TransferProgressError,
-    TransferSnapshot, TransferStatus, TransferTransitionError,
+    Command, LocalDeviceSnapshot, OperationErrorCode, Pairing, PairingDirection, PairingSnapshot,
+    PairingStatus, PairingTransitionError, Query, QueryResult, StatusSnapshot, Transfer,
+    TransferDirection, TransferProgressError, TransferSnapshot, TransferStatus,
+    TransferTransitionError,
 };
 pub use transfer::{DEFAULT_MAX_TRANSFER_BYTES, FileNameError, TransferConfig};
 
@@ -167,7 +172,7 @@ impl RunningService {
             8,
             local_public_key_der,
             trust_store.clone(),
-            clipboard,
+            plugins::builtin(clipboard),
             32,
             256,
             identity.clone(),
@@ -177,7 +182,13 @@ impl RunningService {
         let shutdown = CancellationToken::new();
         let system_clipboard = system_clipboard.map(|clipboard| {
             let follower = application
-                .follow_local_clipboard(clipboard.local_changes(), shutdown.child_token());
+                .plugin::<ClipboardPlugin>()
+                .expect("the clipboard plugin is built in")
+                .follow_local_changes(
+                    application.plugin_context(),
+                    clipboard.local_changes(),
+                    shutdown.child_token(),
+                );
             (clipboard, follower)
         });
         let capabilities = plugins::capabilities();

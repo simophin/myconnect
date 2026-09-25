@@ -21,14 +21,15 @@ use axum::{
 use futures_util::StreamExt;
 use myconnect::{
     application::{
-        ApplicationEvent, ClipboardSnapshot, EventData, PairingDirection, PairingSnapshot,
-        PairingStatus, TransferDirection, TransferSnapshot, TransferStatus,
+        ApplicationEvent, EventData, PairingDirection, PairingSnapshot, PairingStatus, PluginEvent,
+        TransferDirection, TransferSnapshot, TransferStatus,
     },
     client::{
         ApiClient, ClientError, ClipboardWatchUpdate, DeviceWatchUpdate, TransferWatchUpdate,
     },
     config::ApiToken,
     device::{DeviceReachability, DeviceSnapshot},
+    plugins::clipboard::ClipboardSnapshot,
     protocol::DeviceType,
 };
 use serde::Deserialize;
@@ -317,11 +318,14 @@ async fn events() -> Response {
     let event = ApplicationEvent {
         sequence: 1,
         timestamp: 12,
-        event: EventData::ClipboardChanged(ClipboardSnapshot {
-            text: "changed".into(),
-            updated_at: 12,
-            source_device_id: None,
-        }),
+        event: EventData::Plugin(
+            PluginEvent::new(&ClipboardSnapshot {
+                text: "changed".into(),
+                updated_at: 12,
+                source_device_id: None,
+            })
+            .unwrap(),
+        ),
     };
     let body = format!(
         "event: clipboard.changed\ndata: {}\n\n",
@@ -385,10 +389,10 @@ async fn every_client_operation_uses_the_expected_http_contract() {
         "updated"
     );
     let mut events = client.events().await.unwrap();
-    assert!(matches!(
-        events.next().await.unwrap().unwrap().event,
-        EventData::ClipboardChanged(_)
-    ));
+    let EventData::Plugin(event) = events.next().await.unwrap().unwrap().event else {
+        panic!("expected a plugin event");
+    };
+    assert_eq!(event.decode::<ClipboardSnapshot>().unwrap().text, "changed");
 }
 
 #[tokio::test]

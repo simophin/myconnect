@@ -1,6 +1,6 @@
 //! Platform-neutral text clipboard service.
 //!
-//! The application core depends only on the [`ClipboardService`] trait, not
+//! The clipboard plugin depends only on the [`ClipboardService`] trait, not
 //! on any particular desktop clipboard API. [`SystemClipboard`] is the
 //! desktop clipboard; [`InMemoryClipboard`] is a plain in-process store for
 //! tests and headless runs, where there is no display server.

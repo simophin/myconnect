@@ -10,14 +10,15 @@ _DaemonSettings _$DaemonSettingsFromJson(Map<String, dynamic> json) =>
     _DaemonSettings(
       deviceName: json['deviceName'] as String,
       downloadDir: json['downloadDir'] as String,
-      clipboardSyncEnabled: json['clipboardSyncEnabled'] as bool,
       closeToTray: json['closeToTray'] as bool,
+      plugins:
+          json['plugins'] as Map<String, dynamic>? ?? const <String, Object?>{},
     );
 
 Map<String, dynamic> _$DaemonSettingsToJson(_DaemonSettings instance) =>
     <String, dynamic>{
       'deviceName': instance.deviceName,
       'downloadDir': instance.downloadDir,
-      'clipboardSyncEnabled': instance.clipboardSyncEnabled,
       'closeToTray': instance.closeToTray,
+      'plugins': instance.plugins,
     };

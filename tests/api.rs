@@ -3,12 +3,11 @@ use std::{sync::Arc, time::Duration};
 use myconnect::{
     api::{ApiServer, ApiServerConfig},
     application::{
-        ApplicationHandle, ClipboardSnapshot, Command, EventData, LocalDeviceSnapshot,
-        TransferConfig,
+        ApplicationHandle, Command, EventData, LocalDeviceSnapshot, PluginEvent, TransferConfig,
     },
-    clipboard::InMemoryClipboard,
     config::{ApiToken, FilesystemTrustStore, LocalIdentity},
     device::DeviceRegistry,
+    plugins::clipboard::{ClipboardSettings, ClipboardSnapshot, InMemoryClipboard},
     protocol::{DeviceType, IdentityBody},
 };
 use serde_json::Map;
@@ -48,7 +47,7 @@ impl TestServer {
             8,
             b"test-local-pubkey".to_vec(),
             Arc::new(FilesystemTrustStore::new(directory.path())),
-            InMemoryClipboard::shared(),
+            myconnect::plugins::builtin(InMemoryClipboard::shared()),
             4,
             4,
             identity,
@@ -372,11 +371,14 @@ async fn sse_delivers_typed_events_and_shutdown_cleans_up_clients() {
     server
         .application
         .event_bus()
-        .publish(EventData::ClipboardChanged(ClipboardSnapshot {
-            text: "event payload".into(),
-            updated_at: 12,
-            source_device_id: None,
-        }))
+        .publish(EventData::Plugin(
+            PluginEvent::new(&ClipboardSnapshot {
+                text: "event payload".into(),
+                updated_at: 12,
+                source_device_id: None,
+            })
+            .unwrap(),
+        ))
         .unwrap();
 
     timeout(Duration::from_secs(2), async {
@@ -452,20 +454,23 @@ async fn settings_can_be_read_changed_and_are_announced() {
     assert!(initial.starts_with("HTTP/1.1 200 OK"));
     let initial: serde_json::Value = serde_json::from_str(body(&initial)).unwrap();
     assert_eq!(initial["deviceName"], "Test Device");
-    assert_eq!(initial["clipboardSyncEnabled"], true);
+    assert_eq!(
+        initial["plugins"],
+        serde_json::json!({"clipboard": {"syncEnabled": true}})
+    );
     assert_eq!(initial["closeToTray"], true);
 
     let patched = request_with_body(
         &server,
         "PATCH",
         "/api/v1/settings",
-        r#"{"deviceName":"Renamed","clipboardSyncEnabled":false}"#,
+        r#"{"deviceName":"Renamed","plugins":{"clipboard":{"syncEnabled":false}}}"#,
     )
     .await;
     assert!(patched.starts_with("HTTP/1.1 200 OK"), "{patched}");
     let patched: serde_json::Value = serde_json::from_str(body(&patched)).unwrap();
     assert_eq!(patched["deviceName"], "Renamed");
-    assert_eq!(patched["clipboardSyncEnabled"], false);
+    assert_eq!(patched["plugins"]["clipboard"]["syncEnabled"], false);
     assert_eq!(patched["downloadDir"], initial["downloadDir"]);
 
     let event = timeout(Duration::from_secs(1), events.recv())
@@ -476,7 +481,7 @@ async fn settings_can_be_read_changed_and_are_announced() {
         event.event,
         EventData::SettingsChanged(ref settings) if settings.device_name == "Renamed"
     ));
-    assert!(!server.application.clipboard_sync_enabled());
+    assert!(!ClipboardSettings::of(&server.application.settings().unwrap()).sync_enabled);
     let status = request(&server, "GET", "/api/v1/status", true).await;
     let status: serde_json::Value = serde_json::from_str(body(&status)).unwrap();
     assert_eq!(status["localDevice"]["deviceName"], "Renamed");
@@ -484,6 +489,15 @@ async fn settings_can_be_read_changed_and_are_announced() {
     for (patch, code) in [
         (r#"{"deviceName":"no.dots"}"#, "invalid_device_name"),
         (r#"{"downloadDir":"relative"}"#, "invalid_download_dir"),
+        (
+            r#"{"plugins":{"clipboard":{"syncEnabled":"no"}}}"#,
+            "invalid_settings",
+        ),
+        (
+            r#"{"plugins":{"clipboard":{"sync":true}}}"#,
+            "invalid_settings",
+        ),
+        (r#"{"plugins":{"nope":{}}}"#, "invalid_settings"),
     ] {
         let response = request_with_body(&server, "PATCH", "/api/v1/settings", patch).await;
         assert!(
@@ -492,8 +506,11 @@ async fn settings_can_be_read_changed_and_are_announced() {
         );
         assert!(body(&response).contains(code));
     }
-    let unknown = request_with_body(&server, "PATCH", "/api/v1/settings", r#"{"nope":1}"#).await;
-    assert!(!unknown.starts_with("HTTP/1.1 200"), "{unknown}");
+    for unknown in [r#"{"nope":1}"#, r#"{"clipboardSyncEnabled":true}"#] {
+        let response = request_with_body(&server, "PATCH", "/api/v1/settings", unknown).await;
+        assert!(!response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+    assert!(!ClipboardSettings::of(&server.application.settings().unwrap()).sync_enabled);
 
     server.server.shutdown().await.unwrap();
 }

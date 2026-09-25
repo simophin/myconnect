@@ -6,7 +6,6 @@
 pub mod api;
 pub mod application;
 pub mod client;
-pub mod clipboard;
 pub mod config;
 pub mod device;
 pub mod plugins;

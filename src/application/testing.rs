@@ -1,6 +1,7 @@
-//! A real core for unit tests, of the core and of plugins: an in-memory
-//! trust store and clipboard, no LAN transport. Register a connection with
-//! an `mpsc` channel to see the packets a device is sent.
+//! A real core for unit tests, of the core and of plugins: every built-in
+//! plugin, an in-memory trust store and clipboard, no LAN transport.
+//! Register a connection with an `mpsc` channel to see the packets a device
+//! is sent.
 
 use std::sync::{Arc, Mutex};
 
@@ -67,7 +68,7 @@ pub(crate) fn handle_with_trust(
         8,
         b"local-pubkey".to_vec(),
         Arc::new(trust_store),
-        crate::clipboard::InMemoryClipboard::shared(),
+        crate::plugins::builtin(crate::plugins::clipboard::InMemoryClipboard::shared()),
         1,
         1,
         identity,
