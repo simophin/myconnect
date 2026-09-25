@@ -93,6 +93,8 @@ first needs one adds it to the `gui` feature.
 | Tray (Linux) | `ksni` 0.3 (step 13) | A StatusNotifierItem over D-Bus in pure Rust, with no libappindicator or GTK. Spawned with `assume_sni_available(true)`, so a tray host that starts, stops or restarts later is followed. Its `async-io` feature, not the default `tokio`, for the same reason as `zbus`. |
 | Monitor list | `display-info` (step 13) | iced exposes only the size of the window's current monitor; the `window.json` fits-on-screen check needs every monitor's bounds. |
 | Tray (macOS, Windows) | `tray-icon` (step 13b) | The Tauri team's tray crate, with `muda` menus. |
+| Windows exe resources | `winresource` (step 15, build dependency of `gui` on Windows only) | Embeds the icon Explorer and the taskbar show, and the name Task Manager lists, in `myConnect.exe`. |
+| Packaging | Shell scripts in `packaging/`, NSIS on Windows (step 15) | See "Packaging" below. |
 
 ## Desktop integration (plan step 10)
 
@@ -161,6 +163,39 @@ Decisions for steps 11 and 13:
   Xvfb runs must set `XDG_SESSION_TYPE=x11` next to unsetting
   `WAYLAND_DISPLAY`, or it looks for a Wayland compositor. Don't use its
   `is_primary`.
+
+## Packaging (plan step 15)
+
+- **Hand-written scripts, not `cargo-packager`.** The app is one binary
+  per platform, so a package is a few files around it:
+  `packaging/linux/build_deb.sh` (the `.deb`, with dependencies from
+  `dpkg-shlibdeps` plus the libraries winit loads at runtime),
+  `packaging/macos/build_app.sh` (a universal `.app` from `lipo`,
+  `iconutil` and an ad-hoc `codesign`, and the DMG from `hdiutil`) and
+  `packaging/windows/installer.nsi` (NSIS). `cargo-packager` would be one
+  more tool and config for the same result, and it can't derive the
+  `.deb`'s dependencies or join two architectures into one binary.
+- **The CLI is built on its own** (`cargo build -p myconnect`): built
+  together with `myconnect-gui`, feature unification turns `gui` on for it
+  and puts iced in it. `build_deb.sh` refuses a CLI with iced in it.
+- **One app id, `org.myconnect.MyConnect`** (`ui::desktop::APP_ID`): the
+  Linux window's app id and X11 class, the `.desktop` file, the icons and
+  the notifications' `desktop-entry`; the macOS bundle id; the Windows
+  notification id (AUMID), which the installer registers under
+  `HKCU\Software\Classes\AppUserModelId`. The Flutter app's was
+  `org.myconnect.myconnect_ui`.
+- **Names** (owner's decision): `/usr/bin/myConnect` and the CLI as
+  `/usr/bin/myconnect` in the same `.deb`; `MyConnect.app/Contents/MacOS/myConnect`
+  (no CLI); `myConnect.exe` and the CLI as `cli\myconnect.exe`. The
+  Windows installer is per user (`%LOCALAPPDATA%\Programs\MyConnect`, no
+  administrator rights), with a Start menu shortcut.
+- **Icons** come from `assets/icon/*.svg` through `assets/generate_icons.sh`,
+  which writes every platform's: the hicolor theme, the macOS iconset, the
+  Windows `.ico`, the window icon and the tray icons.
+- The `.deb` is built on Debian 12 and checked by `packaging/linux/check_deb.sh`
+  on a clean Debian 12: it installs with its Depends only (no GPU driver,
+  so the app draws with tiny-skia), opens its window with its class and
+  icon, and the CLI reaches its API.
 
 ## Consequences
 

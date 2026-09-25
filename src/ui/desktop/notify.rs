@@ -50,7 +50,10 @@ mod dbus {
     use tokio::sync::mpsc;
     use zbus::{Connection, Proxy, zvariant::Value};
 
-    use super::{super::DesktopEvent, Events, Notifier};
+    use super::{
+        super::{APP_ID, DesktopEvent},
+        Events, Notifier,
+    };
 
     const DESTINATION: &str = "org.freedesktop.Notifications";
     const PATH: &str = "/org/freedesktop/Notifications";
@@ -111,7 +114,10 @@ mod dbus {
                 request = requests.recv() => match request {
                     None => return Ok(()),
                     Some(Request::Show { id, title, body }) => {
-                        let hints: HashMap<&str, Value<'_>> = HashMap::new();
+                        // Lets the server show the app's name and icon
+                        // from its `.desktop` file.
+                        let hints: HashMap<&str, Value<'_>> =
+                            HashMap::from([("desktop-entry", Value::from(APP_ID))]);
                         let shown = server
                             .call::<_, _, u32>(
                                 "Notify",

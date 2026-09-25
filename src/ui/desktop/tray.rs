@@ -1,6 +1,6 @@
 //! The tray icon and its menu. The shell decides what the menu holds
 //! ([`TrayItem`]s carrying [`TrayCommand`]s); the tray shows it and reports
-//! what was chosen as a [`DesktopEvent`].
+//! what was chosen as a [`DesktopEvent`](super::DesktopEvent).
 //!
 //! Linux has a StatusNotifierItem over D-Bus (`ksni`). macOS and Windows
 //! have no tray yet (plan step 13b): the window always shows and closing it
@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use super::{DesktopEvent, Events};
+use super::Events;
 use crate::ui::plugin::PluginMessage;
 
 /// What choosing a tray menu item does.
@@ -90,7 +90,8 @@ impl Tray for NoTray {
 }
 
 /// The platform's tray, reporting to `events`, and whether a tray host
-/// shows it now. Later changes arrive as [`DesktopEvent::TrayAvailable`].
+/// shows it now. Later changes arrive as
+/// [`DesktopEvent::TrayAvailable`](super::DesktopEvent::TrayAvailable).
 pub fn spawn(runtime: &tokio::runtime::Handle, events: Events) -> (Arc<dyn Tray>, bool) {
     #[cfg(target_os = "linux")]
     {
@@ -125,7 +126,7 @@ mod sni {
     };
     use tokio::sync::watch;
 
-    use super::{DesktopEvent, Events, Tray, TrayItem};
+    use super::{super::DesktopEvent, Events, Tray, TrayItem};
 
     const ICON: &[u8] = include_bytes!("../../../assets/tray_icon.png");
 

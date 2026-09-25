@@ -7,13 +7,13 @@ early steps build the ground the later ones stand on. Steps marked
 landed.
 
 Status (2026-09-26): decided by the owner. Steps 1 to 9 are done: `gui/`
-is the thin composition root, the spike's device list lives in `src/ui/`,
-features plug in through the `UiPlugin` seam (battery first), the shell
-has routing, toasts, dialogs, startup screens and error wording, the
-store caches devices, pairings, transfers and settings for the pages, the
-devices page is finished, the device page has ping, ring, send
-clipboard, recent transfers and unpair, and Add device, the pairing page
-and the incoming pairing prompt pair in both directions, and the
+is the thin composition root, the spike's device list lives in
+`src/ui/`, features plug in through the `UiPlugin` seam (battery first),
+the shell has routing, toasts, dialogs, startup screens and error
+wording, the store caches devices, pairings, transfers and settings for
+the pages, the devices page is finished, the device page has ping, ring,
+send clipboard, recent transfers and unpair, and Add device, the pairing
+page and the incoming pairing prompt pair in both directions, and the
 Transfers page shows progress, cancels, and opens received files, and
 Settings renames this computer, picks the download folder and flips its
 switches, the clipboard plugin's included. Step 10's desktop spike is
@@ -28,9 +28,14 @@ menu, close-to-tray, quit, notifications, the saved window placement and
 a single instance; macOS and Windows get their tray and notifications in
 step 13b, on those machines. Step 14 is done: `tests/ui_e2e.rs` runs the
 whole UI headless in `iced_test`'s emulator against a second daemon (the
-seven Flutter scenarios) and the fake phone (browsing). Next is step 15
-(or 13b, given a Mac or a Windows machine). Each finished step says so
-under its heading, with what differs from the plan.
+seven Flutter scenarios) and the fake phone (browsing). Step 15 is done:
+`packaging/` builds the `.deb`s (the app as `myConnect` and the CLI),
+the Arch PKGBUILD, a universal macOS DMG and a Windows installer, the
+Build workflow checks the `.deb` on a clean Debian 12, and CI dropped
+Flutter and checks macOS and Windows compile. Next is 13b, given a Mac
+and a Windows machine (it also owes step 15's Finder check), then step
+16 once the owner has used the app. Each finished step says so under its
+heading, with what differs from the plan.
 
 ## Read first
 
@@ -1435,7 +1440,9 @@ On a Mac and a Windows machine (step 13 had neither):
   on Windows) and placement with several monitors.
 
 **Done when:** the step 13 real check passes on both, and Appendix A §10's
-tray icon item is ticked.
+tray icon item is ticked. Also check what step 15 couldn't: the DMG's app
+launches from Finder with its tray icon, and the installed Windows app's
+notifications carry its name and icon.
 
 ### 14. End-to-end tests
 
@@ -1504,6 +1511,70 @@ tray icon item is ticked.
 **Done when:** the suite passes in CI.
 
 ### 15. Packaging and CI
+
+**Done (2026-09-26), except the macOS Finder check.** Where it differs
+from the text below:
+- **Hand-written scripts in `packaging/`**, not `cargo-packager` (ADR
+  0001's "Packaging" says why): `linux/build_deb.sh`,
+  `linux/check_deb.sh`, `linux/pkgbuild.sh` with `PKGBUILD.in`,
+  `macos/build_app.sh` with `Info.plist.in`, and
+  `windows/installer.nsi`. The Flutter `install.sh` (for unpacked
+  bundles) is gone: nothing ships a bundle any more.
+- **App id `org.myconnect.MyConnect` everywhere** (`ui::desktop::APP_ID`):
+  the window's Linux app id and X11 class (`StartupWMClass`), the
+  `.desktop` file and icon names, the notifications' `desktop-entry`
+  hint, the macOS bundle id and the Windows AUMID. The window got an icon
+  (`assets/window_icon.png`) for X11 and Windows. Flutter's was
+  `org.myconnect.myconnect_ui`, so a Linux dock pin of the old app
+  doesn't carry over.
+- **The `.deb`** holds `/usr/bin/myConnect` and `/usr/bin/myconnect`
+  (stripped), the `.desktop` file and the hicolor icons. Depends:
+  `dpkg-shlibdeps` (libc6, libgcc-s1, libxcb1) plus what winit loads at
+  runtime (xkbcommon, Wayland, X11 libraries), fontconfig and a font;
+  the GPU (Vulkan, EGL) and `xdg-desktop-portal` are Recommends, since
+  the app falls back to tiny-skia. Still built in a `debian:12`
+  container. The PKGBUILD's depends follow, under Arch's names.
+- **Two cargo builds, not one**: `cargo build -p myconnect-gui -p
+  myconnect` turns `gui` on for the CLI too (feature unification), which
+  put iced in it. `build_deb.sh` refuses a CLI with iced in it.
+- **macOS**: `MyConnect.app` from `lipo` of both architectures'
+  `myconnect-gui`, `AppIcon.icns` from `assets/macos/AppIcon.iconset`,
+  `LSMinimumSystemVersion` 12.0 (`MACOSX_DEPLOYMENT_TARGET`), a local
+  network usage string, ad-hoc signed, in a DMG. No CLI: it would need a
+  folder of its own in the bundle, and nobody asked for it there. A dev
+  build's bundle version is 0.0.0.
+- **Windows**: NSIS (from Chocolatey; the runner image has none), per
+  user into `%LOCALAPPDATA%\Programs\MyConnect` without administrator
+  rights: `myConnect.exe`, `cli\myconnect.exe`, a Start menu shortcut,
+  an uninstaller in Settings → Apps, and the AUMID registered under
+  `HKCU\Software\Classes\AppUserModelId\org.myconnect.MyConnect`.
+  `gui/build.rs` embeds the icon and names in the exe (`winresource`),
+  and release builds have no console window.
+- **Icons**: `assets/icon/*.svg` and `assets/generate_icons.sh`, which
+  now writes `assets/linux/hicolor/`, `assets/macos/AppIcon.iconset/`,
+  `assets/windows/app_icon.ico`, `assets/window_icon.png` and the tray
+  icons. The Flutter app's copies aren't regenerated (its Linux build
+  now misses its packaging files; it isn't maintained).
+- **CI** (`ci.yml`): the Flutter and Flutter-integration jobs are gone
+  (and `.github/actions/setup-flutter`); the Rust job gained
+  `libxcb1-dev` (`display-info` links it), and a new job runs clippy on
+  macOS and Windows, which found an import unused off Linux. `build.yml`
+  builds the Linux packages, the macOS DMG and the Windows installer,
+  then installs each `.deb` on a clean Debian 12 (`check_deb.sh`: Depends
+  only, so no GPU driver; the window opens with its class and icon; the
+  installed CLI reaches the app's API), and installs, checks and
+  uninstalls the Windows installer silently. Settings shows the release
+  version (`MYCONNECT_VERSION` from the tag).
+- Checked: manual runs of `build.yml`
+  (https://github.com/simophin/myconnect/actions/runs/36201273616) and
+  `ci.yml` (https://github.com/simophin/myconnect/actions/runs/36200250059)
+  on this work passed: every artifact built, both `.deb`s passed
+  `check_deb.sh`, and the Windows installer installed, registered its
+  AUMID and uninstalled cleanly; the `.deb` built here in `debian:12` installs
+  on a clean `debian:12` and draws its devices page in software; the
+  PKGBUILD, pointed at that `.deb`, installs with `makepkg -si` on Arch.
+  Not checked: launching the app from Finder (no Mac; step 13b's real
+  check covers it, with the tray).
 
 **Build:**
 - Release builds of `myconnect-gui` for:
@@ -1628,7 +1699,7 @@ are to the Flutter app under `ui/lib/src/`.
 - [x] Starting screen while the daemon starts; error screen with Retry that retries the start (`core/daemon/daemon_gate.dart`)
 - [x] Tray and close-to-tray work even when the daemon failed to start (Linux; step 13b for macOS and Windows)
 - [x] Flags/env: data dir, download dir, device name, discovery loopback, system clipboard (default on), API port/token; `window.json` goes to the data dir when one is given
-- [ ] Version in Settings
+- [x] Version in Settings
 - [ ] Light and dark themes follow the system
 
 ### §2 Devices (home) (`features/devices/devices_page.dart`)
@@ -1728,7 +1799,7 @@ Dropping applies on X11, macOS and Windows, not on Wayland (see Owner decisions)
 - [ ] Tray icon assets (template image on macOS): Linux done in step 13; the macOS template image in step 13b
 
 ### §12 Platform
-- [ ] Linux: installed as `myConnect`, with the CLI in the same package; `.desktop` file, icons, window class matching the desktop file
+- [x] Linux: installed as `myConnect`, with the CLI in the same package; `.desktop` file, icons, window class matching the desktop file
 - [ ] macOS: app bundle, icon, tray template icon, Downloads access works without the sandbox
 - [ ] Windows: single instance, notification identity, installer
 

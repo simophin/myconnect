@@ -82,8 +82,10 @@ show details), with its
 battery; the device list and details
 page show the battery too (`kdeconnect.battery`, read-only); on Linux it needs a patched `cnativeapi`, vendored in
 `ui/third_party/`. Releases (`.github/workflows/build.yml`) build the
-macOS app, Debian packages for amd64 and arm64, and for tagged builds an
-Arch Linux PKGBUILD; Windows is built only locally.
+native (iced) app, not the Flutter one: a universal macOS app in a DMG, a
+Windows installer, Debian packages for amd64 and arm64 holding the app and
+the CLI, and for tagged builds an Arch Linux PKGBUILD. The scripts are in
+`packaging/`.
 
 ## Open work
 

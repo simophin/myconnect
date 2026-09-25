@@ -16,8 +16,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Keep in step with the version used locally; bump deliberately.
-  FLUTTER_VERSION: 3.47.1
 
 jobs:
   # The workspace, which includes the native UI (gui/ turns on the "gui"
@@ -35,7 +33,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libxkbcommon-dev libwayland-dev libvulkan1 \
-            mesa-vulkan-drivers libdbus-1-dev
+            mesa-vulkan-drivers libdbus-1-dev libxcb1-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -54,45 +52,22 @@ jobs:
             exit 1
           fi
 
-  flutter:
-    name: Flutter
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: ui
+  # The app and the CLI on the other desktops, whose platform-specific code
+  # the Rust job never compiles. Their tests aren't run: the end-to-end ones
+  # need Linux's loopback discovery.
+  desktop:
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup-flutter
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-      - run: flutter pub get --enforce-lockfile
-      - name: Generated code is up to date
-        run: |
-          dart run build_runner build --delete-conflicting-outputs
-          git diff --exit-code
-      - run: flutter analyze
-      - run: flutter test
-
-  integration:
-    name: Integration (Linux app + CLI peer)
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: ui
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install Linux build and test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            clang cmake ninja-build pkg-config libgtk-3-dev \
-            libayatana-appindicator3-dev xvfb dbus
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: ./.github/actions/setup-flutter
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-      - run: flutter pub get --enforce-lockfile
-      - run: tool/integration_test.sh
+      - run: cargo clippy -p myconnect-gui -p myconnect --all-targets --locked -- -D warnings

@@ -1,0 +1,38 @@
+# Repackages the release's .deb for Arch Linux. The release workflow fills in
+# the @...@ fields (see pkgbuild.sh) and attaches the result to the release:
+# download it into an empty directory and run `makepkg -si`.
+
+pkgname=myconnect-bin
+pkgver=@PKGVER@
+pkgrel=1
+pkgdesc='Pair with your devices and share files and the clipboard over the local network'
+arch=(x86_64 aarch64)
+url='https://github.com/simophin/myconnect'
+# No license chosen yet.
+license=(LicenseRef-unknown)
+# The .deb's Depends under Arch's names: glibc, libgcc and libxcb from the ELF files,
+# and the libraries winit loads at runtime. Without a GPU driver the app
+# draws in software.
+depends=(
+  glibc gcc-libs hicolor-icon-theme fontconfig ttf-font
+  libxcb libxkbcommon libxkbcommon-x11 wayland libx11 libxcursor libxi libxrandr
+)
+optdepends=(
+  'vulkan-icd-loader: GPU rendering'
+  'libglvnd: GPU rendering through OpenGL'
+  'xdg-desktop-portal: file pickers'
+)
+provides=(myconnect)
+conflicts=(myconnect)
+# Ship the binaries exactly as they are in the .deb.
+options=(!strip !debug)
+_tag=@TAG@
+_release=$url/releases/download/$_tag
+source_x86_64=("$_release/myconnect_@DEBVER@_amd64.deb")
+source_aarch64=("$_release/myconnect_@DEBVER@_arm64.deb")
+sha256sums_x86_64=('@SHA256_AMD64@')
+sha256sums_aarch64=('@SHA256_ARM64@')
+
+package() {
+  bsdtar -xf data.tar.* -C "$pkgdir"
+}

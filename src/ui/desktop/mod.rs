@@ -19,6 +19,11 @@ use tokio::sync::mpsc;
 
 use tray::TrayCommand;
 
+/// The app's id: the Linux window's app id and class, which the `.desktop`
+/// file and the icons are named after, and the bundle id on macOS and the
+/// notification id (AUMID) on Windows. The packages use the same string.
+pub const APP_ID: &str = "org.myconnect.MyConnect";
+
 /// What the desktop tells the shell, from outside iced's event loop.
 #[derive(Debug, Clone)]
 pub enum DesktopEvent {

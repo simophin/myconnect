@@ -4,6 +4,10 @@
 //! its UI half; the UI starts it (again on Retry) and shuts it down on
 //! exit.
 
+// No console window behind the app on Windows, except in debug builds,
+// where it shows the logs.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::{
     net::{IpAddr, Ipv4Addr},
     path::PathBuf,

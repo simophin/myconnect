@@ -12,3 +12,7 @@ myconnect = { path = "..", features = ["gui"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(windows)'.build-dependencies]
+# The exe's icon and the name Task Manager shows.
+winresource = "0.1"

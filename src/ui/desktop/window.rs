@@ -6,6 +6,8 @@ use iced::{Rectangle, Size, Task, window};
 
 use super::placement::{self, Placement, Seen};
 
+const ICON: &[u8] = include_bytes!("../../../assets/window_icon.png");
+
 /// The main window's size when nothing is saved.
 pub const DEFAULT_SIZE: Size = Size::new(440.0, 620.0);
 
@@ -76,8 +78,27 @@ pub fn settings(placement: &Placement, screens: &[Rectangle]) -> window::Setting
         maximized: placement.maximized,
         // The shell decides what closing means: to the tray, or quit.
         exit_on_close_request: false,
+        icon: icon(),
+        #[cfg(target_os = "linux")]
+        platform_specific: window::settings::PlatformSpecific {
+            application_id: super::APP_ID.into(),
+            ..Default::default()
+        },
         ..window::Settings::default()
     }
+}
+
+/// The title bar's and task switcher's icon where the window sets its own
+/// (X11, Windows); elsewhere the bundle or the `.desktop` file names it.
+fn icon() -> Option<window::Icon> {
+    let image = image::load_from_memory(ICON)
+        .inspect_err(|error| tracing::warn!(%error, "window icon unreadable"))
+        .ok()?
+        .into_rgba8();
+    let (width, height) = image.dimensions();
+    window::icon::from_rgba(image.into_raw(), width, height)
+        .inspect_err(|error| tracing::warn!(%error, "window icon unusable"))
+        .ok()
 }
 
 #[cfg(test)]
@@ -105,6 +126,7 @@ mod tests {
         ));
         assert!(restored.maximized);
         assert!(!restored.exit_on_close_request);
+        assert!(restored.icon.is_some());
 
         let unplugged = settings(&placement, &[]);
         assert_eq!(unplugged.size, Size::new(500.0, 700.0));

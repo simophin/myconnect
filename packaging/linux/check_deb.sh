@@ -1,0 +1,74 @@
+#!/bin/sh
+# Install a .deb on this (clean, Debian or Ubuntu) system and check the app
+# starts: under Xvfb and a private D-Bus session it must open its window,
+# with its app id as the window class and its icon, and serve the API the
+# installed CLI talks to. Only the package's Depends are installed, not its
+# Recommends, so it also checks the app draws with no GPU driver.
+#
+#   check_deb.sh PACKAGE
+#
+# Needs root (apt). Meant for a throwaway container, as the Build workflow
+# runs it.
+set -eu
+
+if [ $# -ne 1 ]; then
+  echo "usage: $0 PACKAGE" >&2
+  exit 2
+fi
+package=$(realpath "$1")
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq --no-install-recommends "$package" \
+  xvfb xauth dbus x11-utils python3 desktop-file-utils >/dev/null
+
+test -x /usr/bin/myConnect
+test -x /usr/bin/myconnect
+# Debian 12's validator predates SingleMainWindow (Desktop Entry 1.5).
+problems=$(desktop-file-validate /usr/share/applications/org.myconnect.MyConnect.desktop |
+  grep -v '"SingleMainWindow"' || true)
+if [ -n "$problems" ]; then
+  echo "$problems" >&2
+  exit 1
+fi
+test -f /usr/share/icons/hicolor/256x256/apps/org.myconnect.MyConnect.png
+myConnect --version
+myconnect --version
+
+run=$(mktemp -d)
+trap 'rm -rf "$run"' EXIT
+port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+
+cat >"$run/session.sh" <<SESSION
+set -eu
+myConnect --data-dir "$run/data" --download-dir "$run/downloads" \
+  --discovery-loopback --no-system-clipboard --device-name "Package check" \
+  --api-port $port --api-token check >"$run/app.log" 2>&1 &
+app=\$!
+trap 'kill \$app 2>/dev/null || true' EXIT
+for _ in \$(seq 60); do
+  if xwininfo -root -tree 2>/dev/null | grep -q '"MyConnect"' &&
+    MYCONNECT_API_TOKEN=check myconnect --api-port $port settings >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 \$app 2>/dev/null; then
+    echo "the app exited"
+    exit 1
+  fi
+  sleep 1
+done
+xwininfo -root -tree | grep '"MyConnect"'
+xprop -name MyConnect WM_CLASS | tee /dev/stderr | grep -q '"org.myconnect.MyConnect"'
+xprop -name MyConnect _NET_WM_ICON | grep -q 'Icon'
+MYCONNECT_API_TOKEN=check myconnect --api-port $port settings
+kill \$app
+wait \$app || true
+SESSION
+
+if ! dbus-run-session -- xvfb-run --auto-servernum sh "$run/session.sh"; then
+  cat "$run/app.log"
+  echo "check_deb.sh: the app didn't start" >&2
+  exit 1
+fi
+cat "$run/app.log"
+echo "check_deb.sh: $package installs and starts"

@@ -1,6 +1,7 @@
 //! Works out the version the app shows in Settings: `MYCONNECT_VERSION` if
 //! the build sets it (a release), otherwise the crate's version plus
-//! `git describe` when the source is a git checkout.
+//! `git describe` when the source is a git checkout. On Windows it also
+//! embeds the exe's icon and names.
 
 use std::{env, path::PathBuf, process::Command};
 
@@ -17,6 +18,26 @@ fn main() {
         }
     };
     println!("cargo:rustc-env=MYCONNECT_APP_VERSION={version}");
+    #[cfg(windows)]
+    windows_resources();
+}
+
+/// The icon Explorer, the taskbar and the installer's shortcuts show, and
+/// the name Task Manager lists the app under.
+#[cfg(windows)]
+fn windows_resources() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    let icon = "../assets/windows/app_icon.ico";
+    println!("cargo:rerun-if-changed={icon}");
+    winresource::WindowsResource::new()
+        .set_icon(icon)
+        .set("FileDescription", "MyConnect")
+        .set("ProductName", "MyConnect")
+        .set("OriginalFilename", "myConnect.exe")
+        .compile()
+        .expect("could not embed the Windows resources");
 }
 
 /// `git describe`, and a rerun whenever the commit it describes changes.
