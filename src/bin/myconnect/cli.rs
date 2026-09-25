@@ -12,9 +12,9 @@ use myconnect::{
     },
     config::ApiToken,
     core::{
-        CoreEvent, EventData, PairingSnapshot, RunRequest, SettingsPatch, SettingsSnapshot,
-        TransferSnapshot,
+        CoreEvent, EventData, PairingSnapshot, SettingsPatch, SettingsSnapshot, TransferSnapshot,
     },
+    daemon::RunRequest,
     device::DeviceSnapshot,
     plugins::{
         battery::BatteryStatus,
@@ -231,7 +231,7 @@ impl Cli {
             if let Some(port) = api_port {
                 request.api_port = port;
             }
-            return myconnect::core::run_service(request).await;
+            return myconnect::daemon::run_service(request).await;
         }
 
         let base_url_override = (api_host.is_some() || api_port.is_some()).then(|| {

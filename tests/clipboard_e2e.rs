@@ -11,7 +11,7 @@ use std::{
 
 use myconnect::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
-    core::{Core, LanCommand, LocalDeviceSnapshot},
+    core::{Core, LanCommand, LocalDeviceSnapshot, Plugin},
     device::DeviceReachability,
     plugins,
     plugins::clipboard::{
@@ -30,6 +30,7 @@ struct Peer {
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     application: Core,
+    clipboard: Arc<ClipboardPlugin>,
     commands: mpsc::Receiver<LanCommand>,
     _directory: tempfile::TempDir,
 }
@@ -40,6 +41,7 @@ fn peer(name: &str) -> Peer {
     let trust_store: Arc<dyn TrustStore + Send + Sync> =
         Arc::new(FilesystemTrustStore::new(directory.path()));
     let public_key_der = subject_public_key_info(identity.certificate_der()).unwrap();
+    let clipboard = Arc::new(ClipboardPlugin::new(InMemoryClipboard::shared()));
     let (application, commands) = Core::new(
         LocalDeviceSnapshot {
             device_id: identity.device_id().to_owned(),
@@ -48,7 +50,7 @@ fn peer(name: &str) -> Peer {
         8,
         public_key_der,
         trust_store.clone(),
-        myconnect::plugins::builtin(InMemoryClipboard::shared()),
+        builtin_with(clipboard.clone()),
         32,
         128,
         identity.clone(),
@@ -59,15 +61,24 @@ fn peer(name: &str) -> Peer {
         identity,
         trust_store,
         application,
+        clipboard,
         commands,
         _directory: directory,
     }
 }
 
-/// A `LocalDeviceInfo` that advertises every registered plugin capability,
-/// as production code does via `plugins::capabilities()`.
-fn local(device_id: &str, name: &str) -> LocalDeviceInfo {
-    let capabilities = plugins::capabilities();
+/// A `LocalDeviceInfo` that advertises every capability of `core`'s
+/// plugins, as production code does.
+/// The built-in plugins, with `clipboard` the instance the test drives.
+fn builtin_with(clipboard: Arc<ClipboardPlugin>) -> Vec<Arc<dyn Plugin>> {
+    let mut plugins = plugins::builtin(InMemoryClipboard::shared());
+    plugins.retain(|plugin| plugin.id() != clipboard.id());
+    plugins.push(clipboard);
+    plugins
+}
+
+fn local(core: &Core, device_id: &str, name: &str) -> LocalDeviceInfo {
+    let capabilities = core.capabilities();
     LocalDeviceInfo {
         device_id: device_id.into(),
         device_name: name.into(),
@@ -125,18 +136,18 @@ async fn wait_for_paired(application: &Core, device_id: &str, expected: bool) {
     .unwrap();
 }
 
-fn clipboard(application: &Core) -> Arc<ClipboardPlugin> {
-    application.plugin::<ClipboardPlugin>().unwrap()
+fn set_clipboard(
+    application: &Core,
+    clipboard: &ClipboardPlugin,
+    text: &str,
+) -> Result<ClipboardSnapshot, ClipboardSyncError> {
+    clipboard.set_text(&application.plugin_context(), text.into())
 }
 
-fn set_clipboard(application: &Core, text: &str) -> Result<ClipboardSnapshot, ClipboardSyncError> {
-    clipboard(application).set_text(&application.plugin_context(), text.into())
-}
-
-async fn wait_for_clipboard_text(application: &Core, expected_text: &str) {
+async fn wait_for_clipboard_text(clipboard: &ClipboardPlugin, expected_text: &str) {
     timeout(Duration::from_secs(3), async {
         loop {
-            if clipboard(application).snapshot().text == expected_text {
+            if clipboard.snapshot().text == expected_text {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -196,7 +207,7 @@ async fn discovery_pairing_and_clipboard_sync_are_bidirectional() {
 
     let a_service = LanService::start(
         test_config(a_udp, b_udp),
-        local(&a_id, "Peer A"),
+        local(&a.application, &a_id, "Peer A"),
         a.application.clone(),
         a.commands,
         a.identity.clone(),
@@ -207,7 +218,7 @@ async fn discovery_pairing_and_clipboard_sync_are_bidirectional() {
     .unwrap();
     let b_service = LanService::start(
         test_config(b_udp, a_udp),
-        local(&b_id, "Peer B"),
+        local(&b.application, &b_id, "Peer B"),
         b.application.clone(),
         b.commands,
         b.identity.clone(),
@@ -224,20 +235,20 @@ async fn discovery_pairing_and_clipboard_sync_are_bidirectional() {
 
     // Local-to-remote: A sets its clipboard and B observes the same text
     // over the encrypted connection.
-    set_clipboard(&a.application, "hello from A").unwrap();
-    wait_for_clipboard_text(&b.application, "hello from A").await;
+    set_clipboard(&a.application, &a.clipboard, "hello from A").unwrap();
+    wait_for_clipboard_text(&b.clipboard, "hello from A").await;
 
     // Remote-to-local: B sets its clipboard and A observes it, proving the
     // dispatch path is symmetric.
-    set_clipboard(&b.application, "hello from B").unwrap();
-    wait_for_clipboard_text(&a.application, "hello from B").await;
+    set_clipboard(&b.application, &b.clipboard, "hello from B").unwrap();
+    wait_for_clipboard_text(&a.clipboard, "hello from B").await;
 
     // Setting the same text again on B must not disturb A (duplicate
     // content is ignored, not resent). The bus also carries unrelated
     // device lifecycle events from periodic discovery announcements, so
     // only clipboard events are counted.
     let mut a_events = a.application.subscribe();
-    set_clipboard(&b.application, "hello from B")
+    set_clipboard(&b.application, &b.clipboard, "hello from B")
         .expect("setting identical text is a no-op, not an error");
     // Give any (unwanted) event a moment to arrive before asserting none did.
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -258,7 +269,7 @@ async fn remote_clipboard_update_is_not_echoed_back_to_its_source() {
 
     let a_service = LanService::start(
         test_config(a_udp, b_udp),
-        local(&a_id, "Peer A"),
+        local(&a.application, &a_id, "Peer A"),
         a.application.clone(),
         a.commands,
         a.identity.clone(),
@@ -269,7 +280,7 @@ async fn remote_clipboard_update_is_not_echoed_back_to_its_source() {
     .unwrap();
     let b_service = LanService::start(
         test_config(b_udp, a_udp),
-        local(&b_id, "Peer B"),
+        local(&b.application, &b_id, "Peer B"),
         b.application.clone(),
         b.commands,
         b.identity.clone(),
@@ -287,8 +298,8 @@ async fn remote_clipboard_update_is_not_echoed_back_to_its_source() {
     // without bouncing it straight back to A, which would otherwise be an
     // infinite feedback loop between exactly two paired peers.
     let mut a_events = a.application.subscribe();
-    set_clipboard(&a.application, "from A").unwrap();
-    wait_for_clipboard_text(&b.application, "from A").await;
+    set_clipboard(&a.application, &a.clipboard, "from A").unwrap();
+    wait_for_clipboard_text(&b.clipboard, "from A").await;
 
     // A must not observe a second `clipboard.changed` event caused by its
     // own content bouncing back from B. The first, expected event (from A's

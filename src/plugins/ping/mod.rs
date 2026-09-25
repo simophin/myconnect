@@ -105,14 +105,14 @@ mod tests {
     use super::*;
     use crate::core::{
         EventData,
-        testing::{handle, make_identity},
+        testing::{handle_with_plugin, make_identity},
     };
 
     const DEVICE_ID: &str = "740bd4b9b4184ee497d6caf1da8151be";
 
     #[test]
     fn unpaired_devices_cannot_be_pinged() {
-        let (handle, _commands) = handle();
+        let (handle, _plugin, _commands) = handle_with_plugin(PingPlugin);
         let identity = make_identity(DEVICE_ID, vec![PACKET_TYPE.into()]);
         handle.discover_device(&identity, false, 1).unwrap();
         let (tx, _rx) = mpsc::channel(4);
@@ -132,7 +132,7 @@ mod tests {
     fn paired_devices_that_accept_pings_can_be_pinged() {
         // Refusals for other devices are the core's, tested in
         // `core::plugin`.
-        let (handle, _commands) = handle();
+        let (handle, _plugin, _commands) = handle_with_plugin(PingPlugin);
         let identity = make_identity(DEVICE_ID, vec![PACKET_TYPE.into()]);
         handle.discover_device(&identity, true, 1).unwrap();
         let (tx, mut rx) = mpsc::channel(4);
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn pings_from_paired_devices_are_published_and_others_are_dropped() {
-        let (handle, _commands) = handle();
+        let (handle, _plugin, _commands) = handle_with_plugin(PingPlugin);
         let unpaired_id = "850bd4b9b4184ee497d6caf1da8151be";
         handle
             .discover_device(&make_identity(DEVICE_ID, Vec::new()), true, 1)

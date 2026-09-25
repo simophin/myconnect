@@ -71,10 +71,10 @@ fn peer(name: &str) -> Peer {
     }
 }
 
-/// A `LocalDeviceInfo` advertising exactly what production code does via
-/// `plugins::capabilities()`.
-fn local_production(device_id: &str, name: &str) -> LocalDeviceInfo {
-    let capabilities = plugins::capabilities();
+/// A `LocalDeviceInfo` advertising exactly what production code does: the
+/// capabilities of `core`'s plugins.
+fn local_production(core: &Core, device_id: &str, name: &str) -> LocalDeviceInfo {
+    let capabilities = core.capabilities();
     LocalDeviceInfo {
         device_id: device_id.into(),
         device_name: name.into(),
@@ -209,7 +209,7 @@ async fn ping_reaches_a_paired_kde_connect_peer_over_tls() {
     let kde_udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let service = LanService::start(
         test_config(free_udp_addr(), kde_udp.local_addr().unwrap()),
-        local_production(&local_id, "Local"),
+        local_production(&local_peer.application, &local_id, "Local"),
         local_peer.application.clone(),
         local_peer.commands,
         local_peer.identity.clone(),
@@ -303,7 +303,7 @@ async fn paired_myconnect_peers_ping_each_other() {
 
     let a_service = LanService::start(
         test_config(a_udp, b_udp),
-        local_production(&a_id, "Peer A"),
+        local_production(&a.application, &a_id, "Peer A"),
         a.application.clone(),
         a.commands,
         a.identity.clone(),
@@ -314,7 +314,7 @@ async fn paired_myconnect_peers_ping_each_other() {
     .unwrap();
     let b_service = LanService::start(
         test_config(b_udp, a_udp),
-        local_production(&b_id, "Peer B"),
+        local_production(&b.application, &b_id, "Peer B"),
         b.application.clone(),
         b.commands,
         b.identity.clone(),

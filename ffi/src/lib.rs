@@ -25,7 +25,7 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use myconnect::{
     config::ApiToken,
-    core::{RunRequest, RunningService},
+    daemon::{RunRequest, RunningService},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;

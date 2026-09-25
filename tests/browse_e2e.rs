@@ -22,13 +22,12 @@ use myconnect::{
     client::{ApiClient, ClientError},
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     core::{
-        Core, LocalDeviceSnapshot, TransferConfig, TransferDirection, TransferSnapshot,
+        Core, LocalDeviceSnapshot, Plugin, TransferConfig, TransferDirection, TransferSnapshot,
         TransferStatus,
     },
     device::DeviceReachability,
     plugins::clipboard::InMemoryClipboard,
     plugins::{
-        self,
         battery::BatteryStatus,
         browse::{BrowsePlugin, FileKind},
     },
@@ -47,6 +46,7 @@ const SD_CARD: &str = "/storage/sdcard";
 
 struct Harness {
     desktop: Core,
+    browse: Arc<BrowsePlugin>,
     phone: FakePhone,
     phone_id: String,
     client: ApiClient,
@@ -57,6 +57,14 @@ struct Harness {
     _api: ApiServer,
     _desktop_dir: tempfile::TempDir,
     _phone_dir: tempfile::TempDir,
+}
+
+/// The built-in plugins, with `browse` the instance the test drives.
+fn builtin_with(browse: Arc<BrowsePlugin>) -> Vec<Arc<dyn Plugin>> {
+    let mut plugins = myconnect::plugins::builtin(InMemoryClipboard::shared());
+    plugins.retain(|plugin| plugin.id() != browse.id());
+    plugins.push(browse);
+    plugins
 }
 
 impl Harness {
@@ -141,6 +149,7 @@ async fn harness(reply: BrowseReply, wrong_host_key: bool) -> Harness {
     let desktop_id = identity.device_id().to_owned();
     let trust_store: Arc<dyn TrustStore + Send + Sync> =
         Arc::new(FilesystemTrustStore::new(desktop_dir.path()));
+    let browse = Arc::new(BrowsePlugin::default());
     let (desktop, commands) = Core::new(
         LocalDeviceSnapshot {
             device_id: desktop_id.clone(),
@@ -149,7 +158,7 @@ async fn harness(reply: BrowseReply, wrong_host_key: bool) -> Harness {
         8,
         subject_public_key_info(identity.certificate_der()).unwrap(),
         trust_store.clone(),
-        myconnect::plugins::builtin(InMemoryClipboard::shared()),
+        builtin_with(browse.clone()),
         32,
         256,
         identity.clone(),
@@ -168,7 +177,7 @@ async fn harness(reply: BrowseReply, wrong_host_key: bool) -> Harness {
     .await;
     let phone_id = phone.device_id.clone();
 
-    let capabilities = plugins::capabilities();
+    let capabilities = desktop.capabilities();
     let lan = LanService::start(
         test_config(free_udp_addr(), phone.discovery_addr()),
         LocalDeviceInfo {
@@ -205,6 +214,7 @@ async fn harness(reply: BrowseReply, wrong_host_key: bool) -> Harness {
 
     Harness {
         desktop,
+        browse,
         phone,
         phone_id,
         client,
@@ -632,9 +642,7 @@ async fn shutting_down_closes_open_sessions() {
 async fn a_cancelled_upload_leaves_nothing_behind() {
     let harness = harness(android_roots(), false).await;
     let (transfer, sender) = harness
-        .desktop
-        .plugin::<BrowsePlugin>()
-        .unwrap()
+        .browse
         .upload(
             &harness.desktop.plugin_context(),
             &harness.phone_id,

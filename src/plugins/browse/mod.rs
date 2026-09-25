@@ -604,7 +604,7 @@ mod tests {
     use super::*;
     use crate::core::{
         Core,
-        testing::{handle, make_identity},
+        testing::{handle_with_plugin, make_identity},
     };
 
     const PHONE: &str = "740bd4b9b4184ee497d6caf1da8151be";
@@ -626,9 +626,8 @@ mod tests {
 
     #[tokio::test]
     async fn only_devices_that_serve_files_are_asked() {
-        let (handle, _commands) = handle();
+        let (handle, plugin, _commands) = handle_with_plugin(BrowsePlugin::default());
         let ctx = handle.plugin_context();
-        let plugin = handle.plugin::<BrowsePlugin>().unwrap();
         assert!(matches!(
             plugin.list_files(&ctx, PHONE, None).await,
             Err(BrowseError::Core(CoreError::UnknownDevice))
@@ -643,9 +642,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_device_that_cannot_serve_says_why() {
-        let (handle, _commands) = handle();
+        let (handle, plugin, _commands) = handle_with_plugin(BrowsePlugin::default());
         let ctx = handle.plugin_context();
-        let plugin = handle.plugin::<BrowsePlugin>().unwrap();
         let mut packets = phone(&handle, &[REQUEST_PACKET_TYPE]);
 
         let listing = tokio::spawn({
@@ -673,9 +671,8 @@ mod tests {
 
     #[tokio::test]
     async fn waiting_for_an_offer_ends_when_the_device_disconnects() {
-        let (handle, _commands) = handle();
+        let (handle, plugin, _commands) = handle_with_plugin(BrowsePlugin::default());
         let ctx = handle.plugin_context();
-        let plugin = handle.plugin::<BrowsePlugin>().unwrap();
         let mut packets = phone(&handle, &[REQUEST_PACKET_TYPE]);
 
         let listing = tokio::spawn({

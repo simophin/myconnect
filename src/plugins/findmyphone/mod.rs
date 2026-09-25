@@ -55,13 +55,13 @@ mod tests {
 
     use super::*;
     use crate::{
-        core::testing::{handle, make_identity},
+        core::testing::{handle_with_plugin, make_identity},
         plugins::ping,
     };
 
     #[test]
     fn devices_that_accept_it_can_be_asked_to_ring() {
-        let (handle, _commands) = handle();
+        let (handle, _plugin, _commands) = handle_with_plugin(FindMyPhonePlugin);
         let ctx = handle.plugin_context();
         let device_id = "740bd4b9b4184ee497d6caf1da8151be";
         let identity = make_identity(device_id, vec![ping::PACKET_TYPE.into()]);

@@ -4,13 +4,13 @@
 //! and sends, handles packets from paired devices, and brings its own HTTP
 //! routes. The core owns connections, pairing and the event bus, and gives
 //! plugins a [`PluginContext`] to reach them. The set of plugins is fixed at
-//! compile time ([`crate::plugins::builtin`]); nothing is loaded at runtime.
+//! compile time: the composition root ([`crate::daemon`]) passes the
+//! built-in plugins to [`super::Core::new`]; nothing is loaded at runtime.
 //!
-//! See `docs/research/feature-modules.md` for how the daemon got this
-//! shape.
+//! See `docs/ARCHITECTURE.md` §2 for the shape, and
+//! `docs/research/feature-modules.md` for how the daemon got it.
 
 use std::{
-    any::Any,
     collections::{BTreeMap, HashMap},
     sync::Arc,
 };
@@ -24,7 +24,7 @@ use super::{Core, CoreError, EventData, PayloadPeer, Transfers};
 use crate::{device::DeviceSnapshot, protocol::Packet};
 
 /// A feature of the daemon, plugged into the core.
-pub trait Plugin: Any + Send + Sync {
+pub trait Plugin: Send + Sync + 'static {
     /// Stable identifier, e.g. `"ping"`.
     fn id(&self) -> &'static str;
 
@@ -251,6 +251,15 @@ impl SettingsSection {
     }
 }
 
+/// The capability strings a device advertises in its identity packet's
+/// `incomingCapabilities` and `outgoingCapabilities`: the union over its
+/// plugins.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Capabilities {
+    pub incoming: Vec<String>,
+    pub outgoing: Vec<String>,
+}
+
 /// The plugins of this build, indexed by the packet types they handle.
 pub struct PluginRegistry {
     plugins: Vec<Arc<dyn Plugin>>,
@@ -301,6 +310,15 @@ impl PluginRegistry {
             .map(|index| &self.plugins[*index])
     }
 
+    /// The packet types these plugins receive and send, for the identity
+    /// packet.
+    pub fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            incoming: self.incoming().map(str::to_owned).collect(),
+            outgoing: self.outgoing().map(str::to_owned).collect(),
+        }
+    }
+
     pub fn incoming(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.plugins
             .iter()
@@ -324,14 +342,6 @@ impl PluginRegistry {
                 Some((plugin.id().to_owned(), state))
             })
             .collect()
-    }
-
-    /// The plugin of type `T`, if this build has one.
-    pub fn get<T: Plugin>(&self) -> Option<Arc<T>> {
-        self.plugins.iter().find_map(|plugin| {
-            let plugin: Arc<dyn Any + Send + Sync> = plugin.clone();
-            plugin.downcast::<T>().ok()
-        })
     }
 
     /// Every plugin's settings section.

@@ -7,6 +7,7 @@ pub mod api;
 pub mod client;
 pub mod config;
 pub mod core;
+pub mod daemon;
 pub mod device;
 pub mod plugins;
 pub mod protocol;

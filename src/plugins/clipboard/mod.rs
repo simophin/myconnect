@@ -423,7 +423,7 @@ mod tests {
     use super::*;
     use crate::core::{
         Core, EventData,
-        testing::{handle, make_identity},
+        testing::{handle_with_plugin, make_identity},
     };
 
     const DEVICE_ID: &str = "740bd4b9b4184ee497d6caf1da8151be";
@@ -431,8 +431,8 @@ mod tests {
 
     /// A core with the clipboard plugin, and the plugin's context.
     fn clipboard() -> (Core, Arc<ClipboardPlugin>, PluginContext) {
-        let (handle, _commands) = handle();
-        let plugin = handle.plugin::<ClipboardPlugin>().unwrap();
+        let (handle, plugin, _commands) =
+            handle_with_plugin(ClipboardPlugin::new(InMemoryClipboard::shared()));
         let ctx = handle.plugin_context();
         (handle, plugin, ctx)
     }
@@ -721,8 +721,8 @@ mod tests {
             changes: watch::Sender::new(None),
             released: Default::default(),
         });
-        let (handle, _commands) =
-            crate::core::testing::handle_with_plugins(crate::plugins::builtin(backend.clone()));
+        let (handle, _plugin, _commands) =
+            handle_with_plugin(ClipboardPlugin::new(backend.clone()));
         let mut rx = connect_paired_peer(&handle, DEVICE_ID);
 
         handle.start_plugins();

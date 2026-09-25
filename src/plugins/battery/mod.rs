@@ -126,7 +126,7 @@ mod tests {
     use super::*;
     use crate::core::{
         Core, EventData,
-        testing::{handle, make_identity},
+        testing::{handle_with_plugin, make_identity},
     };
 
     const PAIRED_ID: &str = "740bd4b9b4184ee497d6caf1da8151be";
@@ -149,7 +149,7 @@ mod tests {
         Core,
         tokio::sync::broadcast::Receiver<crate::core::CoreEvent>,
     ) {
-        let (handle, _commands) = handle();
+        let (handle, _plugin, _commands) = handle_with_plugin(BatteryPlugin::default());
         handle
             .discover_device(&make_identity(PAIRED_ID, Vec::new()), true, 1)
             .unwrap();

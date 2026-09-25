@@ -205,7 +205,7 @@ mod tests {
     use super::*;
     use crate::core::{
         Core, TransferStatus,
-        testing::{handle, make_identity},
+        testing::{handle_with_plugin, make_identity},
     };
 
     const PEER: &str = "740bd4b9b4184ee497d6caf1da8151be";
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn sending_is_refused_before_a_transfer_is_recorded() {
-        let (handle, _commands) = handle();
+        let (handle, _plugin, _commands) = handle_with_plugin(SharePlugin);
         let ctx = handle.plugin_context();
         assert!(matches!(
             send_file(&ctx, PEER, "a.txt".into(), 1),
@@ -244,7 +244,7 @@ mod tests {
 
     #[tokio::test]
     async fn sending_offers_the_file_on_a_payload_port() {
-        let (handle, _commands) = handle();
+        let (handle, _plugin, _commands) = handle_with_plugin(SharePlugin);
         let mut packets = paired_peer(&handle);
         let ctx = handle.plugin_context();
 
@@ -282,7 +282,7 @@ mod tests {
 
     #[test]
     fn requests_that_cannot_be_saved_safely_are_recorded_as_failed() {
-        let (handle, _commands) = handle();
+        let (handle, _plugin, _commands) = handle_with_plugin(SharePlugin);
         let _packets = paired_peer(&handle);
 
         let traversal = build_request_packet(1_u64, "..".into(), None, 10, 1741).unwrap();

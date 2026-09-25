@@ -19,7 +19,7 @@ use super::{
     Pairing, PairingDirection, PairingSnapshot, PairingStatus, PairingTransitionError,
     StatusSnapshot, TransferSnapshot,
     payload::PayloadPeer,
-    plugin::{Plugin, PluginContext, PluginRegistry},
+    plugin::{Capabilities, Plugin, PluginContext, PluginRegistry},
     settings::{Settings, SettingsDefaults, SettingsPatch, SettingsSnapshot},
     transfers::{TransferConfig, Transfers},
 };
@@ -96,7 +96,8 @@ pub struct Core {
 }
 
 impl Core {
-    /// A core running `plugins`, normally [`plugins::builtin`].
+    /// A core running `plugins`: in the daemon, `plugins::builtin()`, chosen
+    /// by [`crate::daemon`].
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         local_device: LocalDeviceSnapshot,
@@ -153,10 +154,10 @@ impl Core {
         PluginContext::new(self.clone())
     }
 
-    /// The running plugin of type `T`, for the code that starts the daemon
-    /// and for tests. Plugins don't reach each other this way.
-    pub fn plugin<T: Plugin>(&self) -> Option<Arc<T>> {
-        self.plugins.get::<T>()
+    /// The packet types this core's plugins receive and send, for the LAN
+    /// transport to advertise.
+    pub fn capabilities(&self) -> Capabilities {
+        self.plugins.capabilities()
     }
 
     pub fn replace_devices(&self, devices: DeviceRegistry) -> Result<(), CoreError> {

@@ -24,7 +24,6 @@ use myconnect::{
         TransferSnapshot, TransferStatus,
     },
     device::DeviceReachability,
-    plugins,
     plugins::{clipboard::InMemoryClipboard, share},
     protocol::DeviceType,
     transport::{
@@ -68,8 +67,8 @@ fn test_config(bind: SocketAddr, target: SocketAddr) -> LanConfig {
         )
 }
 
-fn local(device_id: &str, name: &str) -> LocalDeviceInfo {
-    let capabilities = plugins::capabilities();
+fn local(core: &Core, device_id: &str, name: &str) -> LocalDeviceInfo {
+    let capabilities = core.capabilities();
     LocalDeviceInfo {
         device_id: device_id.into(),
         device_name: name.into(),
@@ -217,7 +216,7 @@ async fn connected_and_paired_with(
 
     let a_service = LanService::start(
         test_config(a_udp, b_udp),
-        local(&a_id, a_name),
+        local(&a_application, &a_id, a_name),
         a_application.clone(),
         a_commands,
         a_identity,
@@ -228,7 +227,7 @@ async fn connected_and_paired_with(
     .unwrap();
     let b_service = LanService::start(
         test_config(b_udp, a_udp),
-        local(&b_id, b_name),
+        local(&b_application, &b_id, b_name),
         b_application.clone(),
         b_commands,
         b_identity,
