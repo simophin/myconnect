@@ -6,8 +6,9 @@ use iced::{Element, Settings, Size, Task, Theme, futures::StreamExt};
 use iced_test::simulator::Simulator;
 
 use crate::{
+    config::LocalIdentity,
     core::{Core, DeviceReachability, DeviceSnapshot, SettingsSnapshot, testing::make_identity},
-    protocol::{DeviceType, Packet},
+    protocol::{DeviceType, Packet, PairingBody},
     ui::store::{Snapshot, Store},
 };
 
@@ -54,6 +55,48 @@ pub fn connect_peer(
         )
         .expect("connected");
     (device, received)
+}
+
+/// A peer named "Peer" that `core` is connected to but doesn't trust. It
+/// has a real certificate, so it can be paired. What the core sends it
+/// arrives on the returned receiver.
+pub fn connect_unpaired_peer(
+    core: &Core,
+    device_id: &str,
+) -> (DeviceSnapshot, tokio::sync::mpsc::Receiver<Packet>) {
+    core.discover_device(&make_identity(device_id, Vec::new()), false, 1)
+        .expect("discovered");
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let identity = LocalIdentity::load_or_create(directory.path()).expect("an identity");
+    let (packets, received) = tokio::sync::mpsc::channel(8);
+    let device = core
+        .register_connection(
+            device_id,
+            identity.certificate_der().to_vec(),
+            8,
+            packets,
+            tokio_util::sync::CancellationToken::new(),
+            1,
+        )
+        .expect("connected");
+    (device, received)
+}
+
+/// The peer `device_id` asks `core` to pair, as a KDE Connect device does.
+pub fn request_pairing(core: &Core, device_id: &str) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("after 1970")
+        .as_secs();
+    let body = PairingBody {
+        pair: true,
+        timestamp: Some(now.try_into().expect("a sane clock")),
+        extra: Default::default(),
+    };
+    core.handle_peer_packet(
+        device_id,
+        Packet::from_body(1, "kdeconnect.pair", &body).expect("a packet"),
+    );
 }
 
 /// A store holding `devices`, on a computer named `local_name`, with no

@@ -9,7 +9,7 @@
 use std::{collections::VecDeque, fmt, sync::Arc};
 
 use iced::{
-    Alignment, Background, Border, Color, Element, Length, Shadow, Task, Theme, Vector,
+    Alignment, Background, Border, Color, Element, Length, Task, Theme,
     widget::{
         self, Id, button, center, column, container, mouse_area, opaque, row, space, text,
         text_input,
@@ -70,6 +70,8 @@ pub struct Dialog<M> {
     pub submit: Submit<M>,
     /// Destructive: the confirm button says so.
     pub danger: bool,
+    /// Sent when [`Submit::Run`] work succeeds and the dialog closes.
+    pub on_success: Option<M>,
     busy: bool,
     error: Option<String>,
 }
@@ -89,6 +91,7 @@ impl<M> Dialog<M> {
             confirm_label: confirm_label.into(),
             submit,
             danger: false,
+            on_success: None,
             busy: false,
             error: None,
         }
@@ -108,6 +111,7 @@ impl<M> Dialog<M> {
             confirm_label: confirm_label.into(),
             submit,
             danger: false,
+            on_success: None,
             busy: false,
             error: None,
         }
@@ -115,6 +119,12 @@ impl<M> Dialog<M> {
 
     pub fn danger(mut self) -> Self {
         self.danger = true;
+        self
+    }
+
+    /// Send `message` once the dialog's work has succeeded.
+    pub fn on_success(mut self, message: M) -> Self {
+        self.on_success = Some(message);
         self
     }
 
@@ -233,20 +243,18 @@ impl<M: Clone + 'static> Dialogs<M> {
         }
     }
 
-    /// The work of dialog `id` finished. Nothing happens if the dialog was
-    /// cancelled meanwhile.
-    pub fn finished(&mut self, id: u64, result: Result<(), String>) {
-        let Some(index) = self.queue.iter().position(|(queued, _)| *queued == id) else {
-            return;
-        };
+    /// The work of dialog `id` finished: on success the dialog closes and
+    /// its [`on_success`](Dialog::on_success) message is returned. Nothing
+    /// happens if the dialog was cancelled meanwhile.
+    pub fn finished(&mut self, id: u64, result: Result<(), String>) -> Option<M> {
+        let index = self.queue.iter().position(|(queued, _)| *queued == id)?;
         match result {
-            Ok(()) => {
-                self.queue.remove(index);
-            }
+            Ok(()) => self.queue.remove(index)?.1.on_success,
             Err(error) => {
                 let dialog = &mut self.queue[index].1;
                 dialog.busy = false;
                 dialog.error = Some(error);
+                None
             }
         }
     }
@@ -272,7 +280,7 @@ impl<M: Clone + 'static> Dialogs<M> {
             Some(dialog) => modal(
                 base,
                 view(dialog).map(on_event),
-                on_event(DialogEvent::Cancel),
+                Some(on_event(DialogEvent::Cancel)),
             ),
             None => base,
         }
@@ -280,26 +288,25 @@ impl<M: Clone + 'static> Dialogs<M> {
 }
 
 /// `content` centred over `base`, which is dimmed and ignores the mouse;
-/// a click outside `content` sends `on_blur`. As in iced's `modal` example.
+/// a click outside `content` sends `on_blur`, if given. As in iced's
+/// `modal` example.
 pub fn modal<'a, T: Clone + 'a>(
     base: Element<'a, T>,
     content: Element<'a, T>,
-    on_blur: T,
+    on_blur: Option<T>,
 ) -> Element<'a, T> {
-    iced::widget::stack![
-        base,
-        opaque(
-            mouse_area(center(opaque(content)).style(|_theme| container::Style {
-                background: Some(Background::Color(Color {
-                    a: 0.5,
-                    ..Color::BLACK
-                })),
-                ..container::Style::default()
-            }))
-            .on_press(on_blur)
-        )
-    ]
-    .into()
+    let backdrop = mouse_area(center(opaque(content)).style(|_theme| container::Style {
+        background: Some(Background::Color(Color {
+            a: 0.5,
+            ..Color::BLACK
+        })),
+        ..container::Style::default()
+    }));
+    let backdrop = match on_blur {
+        Some(on_blur) => backdrop.on_press(on_blur),
+        None => backdrop,
+    };
+    iced::widget::stack![base, opaque(backdrop)].into()
 }
 
 fn view<M>(dialog: &Dialog<M>) -> Element<'_, DialogEvent> {
@@ -334,6 +341,15 @@ fn view<M>(dialog: &Dialog<M>) -> Element<'_, DialogEvent> {
         .align_y(Alignment::Center),
     );
 
+    surface(content)
+}
+
+/// A dialog's card, for content drawn over the page.
+///
+/// It has a border rather than a shadow: iced's software renderer draws
+/// shadows unclipped, so each partial redraw (a blinking cursor, an
+/// activity bar) darkens them further until the card turns black.
+pub fn surface<'a, T: 'a>(content: impl Into<Element<'a, T>>) -> Element<'a, T> {
     container(content)
         .padding(24)
         .width(Length::Fill)
@@ -343,15 +359,10 @@ fn view<M>(dialog: &Dialog<M>) -> Element<'_, DialogEvent> {
             container::Style {
                 background: Some(Background::Color(palette.background.base.color)),
                 text_color: Some(palette.background.base.text),
-                border: Border::default().rounded(16),
-                shadow: Shadow {
-                    color: Color {
-                        a: 0.3,
-                        ..Color::BLACK
-                    },
-                    offset: Vector::new(0.0, 8.0),
-                    blur_radius: 24.0,
-                },
+                border: Border::default()
+                    .rounded(16)
+                    .width(1)
+                    .color(palette.background.strong.color),
                 ..container::Style::default()
             }
         })
@@ -497,7 +508,30 @@ mod tests {
             panic!("the dialog should run its work again");
         };
         assert_eq!(dialogs.current().unwrap().error(), None);
-        dialogs.finished(id, Ok(()));
+        assert_eq!(dialogs.finished(id, Ok(())), None);
+        assert!(dialogs.current().is_none());
+    }
+
+    #[test]
+    fn work_that_succeeds_sends_the_success_message() {
+        let mut dialogs: Dialogs<String> = Dialogs::default();
+        let _: Task<()> = dialogs.open(
+            Dialog::prompt(
+                "Add",
+                Field::default(),
+                "Add",
+                Submit::Run(Arc::new(|_| Task::none())),
+            )
+            .on_success("added".into()),
+        );
+        let Step::Run(id, _) = dialogs.update(DialogEvent::Submit) else {
+            panic!("the dialog should run its work");
+        };
+        assert_eq!(dialogs.finished(id, Err("no".into())), None);
+        let Step::Run(id, _) = dialogs.update(DialogEvent::Submit) else {
+            panic!("the dialog should run its work again");
+        };
+        assert_eq!(dialogs.finished(id, Ok(())).as_deref(), Some("added"));
         assert!(dialogs.current().is_none());
     }
 
@@ -515,7 +549,7 @@ mod tests {
         };
         dialogs.update(DialogEvent::Cancel);
         let _: Task<()> = dialogs.open(closing("Next"));
-        dialogs.finished(id, Err("late".into()));
+        assert_eq!(dialogs.finished(id, Err("late".into())), None);
         let dialog = dialogs.current().unwrap();
         assert_eq!(dialog.title, "Next");
         assert_eq!(dialog.error(), None);

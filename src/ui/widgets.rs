@@ -186,6 +186,61 @@ pub fn link_button<'a, M: Clone + 'a>(label: &'a str, on_press: M) -> Element<'a
         .into()
 }
 
+/// A tonal button: the primary colour, softened.
+pub fn tonal(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+    let (background, text_color) = match status {
+        button::Status::Active => (palette.primary.weak.color, palette.primary.weak.text),
+        button::Status::Hovered => (
+            palette.primary.weak.color.scale_alpha(0.8),
+            palette.primary.weak.text,
+        ),
+        button::Status::Pressed => (palette.primary.base.color, palette.primary.base.text),
+        button::Status::Disabled => (
+            palette.background.weak.color,
+            palette.background.strongest.color,
+        ),
+    };
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color,
+        border: Border::default().rounded(8),
+        ..button::Style::default()
+    }
+}
+
+/// A filled button in the primary colour, for a page's main action.
+pub fn filled(theme: &Theme, status: button::Status) -> button::Style {
+    button::Style {
+        border: Border::default().rounded(8),
+        ..button::primary(theme, status)
+    }
+}
+
+/// An outlined button, for a page's other actions.
+pub fn outlined(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+    let background = match status {
+        button::Status::Hovered => Some(palette.background.weak.color),
+        button::Status::Pressed => Some(palette.background.strong.color),
+        _ => None,
+    };
+    let text_color = if status == button::Status::Disabled {
+        palette.background.strong.color
+    } else {
+        palette.primary.strong.color
+    };
+    button::Style {
+        background: background.map(Background::Color),
+        text_color,
+        border: Border::default()
+            .rounded(8)
+            .width(1)
+            .color(palette.background.strong.color),
+        ..button::Style::default()
+    }
+}
+
 /// A centred error, with Retry when `on_retry` is given.
 pub fn error_view<'a, M: Clone + 'a>(
     message: impl text::IntoFragment<'a>,
@@ -226,29 +281,47 @@ pub fn loading<'a, M: 'a>(label: impl text::IntoFragment<'a>) -> Element<'a, M> 
 }
 
 /// A pairing verification code, large and monospace so it is easy to
-/// compare with the code on the other device.
-pub fn verification_code<'a, M: 'a>(code: &'a str) -> Element<'a, M> {
-    // iced has no letter spacing; a hair space between characters stands in.
-    let spaced: String = code
-        .chars()
-        .map(String::from)
-        .collect::<Vec<_>>()
-        .join("\u{200A}");
-    container(text(spaced).size(30).font(Font {
-        weight: font::Weight::Semibold,
-        ..Font::MONOSPACE
-    }))
-    .padding([12, 24])
-    .style(|theme: &Theme| {
-        let palette = theme.extended_palette();
-        container::Style {
-            background: Some(Background::Color(palette.background.weak.color)),
-            text_color: Some(palette.background.weak.text),
-            border: Border::default().rounded(12),
-            ..container::Style::default()
-        }
-    })
-    .into()
+/// compare with the code on the other device, and selectable. iced has no
+/// letter spacing, and spaces between the characters would be copied with
+/// them, so the monospace font's own spacing has to do.
+pub fn verification_code<'a, M: Clone + 'a>(code: &str) -> Element<'a, M> {
+    const SIZE: f32 = 30.0;
+    // A monospace glyph is about 0.6 em wide; the field needs a fixed width
+    // to shrink to its text.
+    #[allow(clippy::cast_precision_loss)]
+    let width = code.chars().count() as f32 * SIZE * 0.62 + 4.0;
+    let field = text_input("", code)
+        .padding(0)
+        .size(SIZE)
+        .width(width)
+        .align_x(Alignment::Center)
+        .font(Font {
+            weight: font::Weight::Semibold,
+            ..Font::MONOSPACE
+        })
+        .style(|theme: &Theme, _status| {
+            let palette = theme.extended_palette();
+            text_input::Style {
+                background: Background::Color(iced::Color::TRANSPARENT),
+                border: Border::default(),
+                icon: palette.background.weak.text,
+                placeholder: palette.background.strong.color,
+                value: palette.background.weak.text,
+                selection: palette.primary.weak.color,
+            }
+        });
+    container(field)
+        .padding([12, 24])
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(Background::Color(palette.background.weak.color)),
+                text_color: Some(palette.background.weak.text),
+                border: Border::default().rounded(12),
+                ..container::Style::default()
+            }
+        })
+        .into()
 }
 
 /// Text that can be selected and copied, but not edited: a read-only text

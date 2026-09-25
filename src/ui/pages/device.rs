@@ -173,34 +173,11 @@ fn actions<'a, Message: Clone + 'a>(
             .align_y(Alignment::Center);
         button(content)
             .padding([8, 14])
-            .style(action_style)
+            .style(widgets::tonal)
             .on_press_maybe(action.enabled.then_some(action.message))
             .into()
     });
     row(buttons).spacing(8).wrap().vertical_spacing(8).into()
-}
-
-/// A tonal button: the primary colour, softened.
-fn action_style(theme: &Theme, status: button::Status) -> button::Style {
-    let palette = theme.extended_palette();
-    let (background, text_color) = match status {
-        button::Status::Active => (palette.primary.weak.color, palette.primary.weak.text),
-        button::Status::Hovered => (
-            palette.primary.weak.color.scale_alpha(0.8),
-            palette.primary.weak.text,
-        ),
-        button::Status::Pressed => (palette.primary.base.color, palette.primary.base.text),
-        button::Status::Disabled => (
-            palette.background.weak.color,
-            palette.background.strongest.color,
-        ),
-    };
-    button::Style {
-        background: Some(Background::Color(background)),
-        text_color,
-        border: Border::default().rounded(8),
-        ..button::Style::default()
-    }
 }
 
 /// Unpair, drawn as a destructive outlined button; disabled without a

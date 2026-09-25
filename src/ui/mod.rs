@@ -12,6 +12,7 @@
 //! [`Core`]: crate::core::Core
 //! [`Core::subscribe`]: crate::core::Core::subscribe
 
+pub mod activity;
 pub mod demo;
 pub mod error;
 pub mod overlay;
@@ -28,6 +29,7 @@ use std::{
     cell::RefCell,
     fmt,
     future::Future,
+    net::Ipv4Addr,
     pin::Pin,
     rc::Rc,
     sync::{Arc, Mutex, PoisonError},
@@ -42,13 +44,18 @@ use iced::{
     window,
 };
 use iced_fonts::lucide;
+use uuid::Uuid;
 
-use crate::daemon::RunningService;
+use crate::{
+    core::{Core, CoreError, PairingSnapshot},
+    daemon::RunningService,
+};
 use overlay::{
-    dialog::{Dialog, DialogEvent, Dialogs, Field, Step, Submit},
+    dialog::{self as dialogs, Dialog, DialogEvent, Dialogs, Field, Step, Submit},
+    incoming,
     toast::{self, Toasts},
 };
-use pages::{device, devices, startup};
+use pages::{add_device, device, devices, pairing, startup};
 use plugin::{Command, ErasedUiPlugin, Outcome, PluginMessage, ShellRequest, UiContext};
 use route::Route;
 use store::Snapshot;
@@ -173,6 +180,27 @@ enum Message {
     Dialog(DialogEvent),
     /// A dialog's work finished; an error keeps it open.
     DialogFinished(u64, Result<(), String>),
+    /// Announce this computer so devices nearby answer.
+    Scan,
+    /// Show the "searching" bar for a while.
+    ShowSearching,
+    /// The "searching" bar of this scan has shown long enough.
+    SearchEnded(u64),
+    /// Ask for an address to announce this computer to.
+    AddByAddress,
+    /// Start pairing with a device.
+    Pair(String),
+    /// Starting a pairing finished, or why it didn't.
+    PairStarted(Result<PairingSnapshot, String>),
+    /// Cancel an outgoing pairing.
+    CancelPairing(Uuid),
+    PairingCancelled(Uuid, Result<PairingSnapshot, String>),
+    /// Accept or reject an incoming pairing request.
+    AnswerPairing {
+        pairing_id: Uuid,
+        accept: bool,
+    },
+    PairingAnswered(Uuid, Result<PairingSnapshot, String>),
     Key(KeyCommand),
     DemoTick(u64),
     WindowOpened,
@@ -203,6 +231,18 @@ struct App {
     dialogs: Dialogs<Message>,
     /// The device being unpaired, if any: its Unpair button is disabled.
     unpairing: Option<String>,
+    /// Add device's "searching" bar shows.
+    searching: bool,
+    /// Which scan the bar is for, so an older scan's timer doesn't hide it.
+    scan: u64,
+    /// The device a pairing is being started with, if any.
+    starting: Option<String>,
+    /// The outgoing pairing being cancelled, if any.
+    cancelling: Option<Uuid>,
+    /// The incoming request being answered, if any.
+    answering: Option<Uuid>,
+    /// Why answering a request failed, shown in its prompt.
+    answer_error: Option<(Uuid, String)>,
 }
 
 /// Whether the daemon runs yet.
@@ -241,6 +281,12 @@ impl App {
             toasts: Toasts::default(),
             dialogs: Dialogs::default(),
             unpairing: None,
+            searching: false,
+            scan: 0,
+            starting: None,
+            cancelling: None,
+            answering: None,
+            answer_error: None,
         };
         let start = app.start();
         (
@@ -346,16 +392,11 @@ impl App {
                 shell_task(plugin.update(&running.ctx, message))
             }
             Message::Shell(request) => self.handle(request),
-            Message::Navigate(route) => {
-                self.route = route;
-                Task::none()
-            }
-            Message::Back => {
-                if let Some(parent) = self.route.parent() {
-                    self.route = parent;
-                }
-                Task::none()
-            }
+            Message::Navigate(route) => self.go(route),
+            Message::Back => match self.route.parent() {
+                Some(parent) => self.go(parent),
+                None => Task::none(),
+            },
             Message::Unpair { device_id, name } => self.dialogs.open(
                 Dialog::confirm(
                     format!("Unpair {name}?"),
@@ -380,7 +421,7 @@ impl App {
                         }
                         // Leave the device's pages; elsewhere, stay put.
                         if self.route.device() == Some(device_id.as_str()) {
-                            self.route = Route::Devices;
+                            return self.go(Route::Devices);
                         }
                         Task::none()
                     }
@@ -389,8 +430,7 @@ impl App {
             }
             Message::ToastAction(id, route) => {
                 self.toasts.dismiss(id);
-                self.route = route;
-                Task::none()
+                self.go(route)
             }
             Message::DismissToast(id) => {
                 self.toasts.dismiss(id);
@@ -399,13 +439,81 @@ impl App {
             Message::Dialog(event) => self.dialog(event),
             Message::DialogFinished(id, result) => {
                 let closed = result.is_ok();
-                self.dialogs.finished(id, result);
+                let then = self.dialogs.finished(id, result);
                 if closed {
-                    self.dialogs.focus()
+                    Task::batch([
+                        self.dialogs.focus(),
+                        then.map_or_else(Task::none, Task::done),
+                    ])
                 } else {
                     Task::none()
                 }
             }
+            Message::Scan => self.scan(),
+            Message::ShowSearching => self.show_searching(),
+            Message::SearchEnded(scan) => {
+                if scan == self.scan {
+                    self.searching = false;
+                }
+                Task::none()
+            }
+            Message::AddByAddress => self.add_by_address(),
+            Message::Pair(device_id) => self.pair(device_id),
+            Message::PairStarted(result) => {
+                self.starting = None;
+                match result {
+                    Ok(pairing) => {
+                        let Some(running) = self.running() else {
+                            return Task::none();
+                        };
+                        let pairing = running.ctx.store_mut().apply_pairing(pairing);
+                        // Only if the user is still where they asked.
+                        if matches!(self.route, Route::AddDevice | Route::Pairing(_)) {
+                            return self.go(Route::Pairing(pairing.id));
+                        }
+                        Task::none()
+                    }
+                    Err(error) => self.toast(error, None),
+                }
+            }
+            Message::CancelPairing(pairing_id) => self.cancel_pairing(pairing_id),
+            Message::PairingCancelled(pairing_id, result) => {
+                if self.cancelling == Some(pairing_id) {
+                    self.cancelling = None;
+                }
+                match result {
+                    Ok(pairing) => {
+                        if let Some(running) = self.running() {
+                            running.ctx.store_mut().apply_pairing(pairing);
+                        }
+                        if self.route == Route::Pairing(pairing_id) {
+                            return self.go(Route::AddDevice);
+                        }
+                        Task::none()
+                    }
+                    Err(error) => self.toast(error, None),
+                }
+            }
+            Message::AnswerPairing { pairing_id, accept } => {
+                self.answer_pairing(pairing_id, accept)
+            }
+            Message::PairingAnswered(pairing_id, result) => {
+                if self.answering == Some(pairing_id) {
+                    self.answering = None;
+                }
+                match result {
+                    Ok(pairing) => {
+                        if let Some(running) = self.running() {
+                            running.ctx.store_mut().apply_pairing(pairing);
+                        }
+                    }
+                    Err(error) => self.answer_error = Some((pairing_id, error)),
+                }
+                Task::none()
+            }
+            // The pairing prompt can't be dismissed; Escape would only
+            // reach a dialog hidden under it.
+            Message::Key(KeyCommand::Cancel) if self.incoming_prompt_shows() => Task::none(),
             Message::Key(KeyCommand::Cancel) => self.dialog(DialogEvent::Cancel),
             Message::Key(KeyCommand::CloseWindow) => window::close(self.window),
             Message::Key(KeyCommand::Quit) => iced::exit(),
@@ -432,6 +540,144 @@ impl App {
                 _ => Task::none(),
             },
             Message::Window(..) => Task::none(),
+        }
+    }
+
+    /// Show `route`. Opening Add device from elsewhere scans, as opening
+    /// the Flutter page did; coming back to it from a pairing doesn't.
+    fn go(&mut self, route: Route) -> Task<Message> {
+        let entering_add_device = route == Route::AddDevice
+            && !matches!(self.route, Route::AddDevice | Route::Pairing(_));
+        self.route = route;
+        if entering_add_device {
+            self.scan()
+        } else {
+            Task::none()
+        }
+    }
+
+    /// Announce this computer so devices nearby answer, and show that the
+    /// page is searching.
+    fn scan(&mut self) -> Task<Message> {
+        let Some(running) = self.running() else {
+            return Task::none();
+        };
+        let announced = running.ctx.core().announce();
+        let searching = self.show_searching();
+        match announced {
+            Ok(()) => searching,
+            Err(error) => Task::batch([searching, self.toast(error::describe_error(&error), None)]),
+        }
+    }
+
+    fn show_searching(&mut self) -> Task<Message> {
+        self.scan += 1;
+        self.searching = true;
+        self.after(
+            add_device::SEARCH_INDICATOR,
+            Message::SearchEnded(self.scan),
+        )
+    }
+
+    /// Ask for an IP address and announce this computer to it. The dialog
+    /// stays open with the reason until the address is accepted, then the
+    /// page shows it is searching.
+    fn add_by_address(&mut self) -> Task<Message> {
+        let Some(running) = self.running() else {
+            return Task::none();
+        };
+        let core = running.ctx.core().clone();
+        self.dialogs.open(
+            Dialog::prompt(
+                "Add by IP address",
+                Field {
+                    label: Some("IP address".into()),
+                    hint: Some("192.168.1.20".into()),
+                    helper: Some(
+                        "MyConnect or KDE Connect must be running on that device. It appears \
+                         in the list once it answers."
+                            .into(),
+                    ),
+                    ..Field::default()
+                },
+                "Add",
+                Submit::Run(Arc::new(move |address| {
+                    Task::done(announce_to(&core, &address))
+                })),
+            )
+            .on_success(Message::ShowSearching),
+        )
+    }
+
+    /// Start pairing with `device_id` on the daemon's runtime, which times
+    /// the request out.
+    fn pair(&mut self, device_id: String) -> Task<Message> {
+        if self.starting.is_some() {
+            return Task::none();
+        }
+        let Some(running) = self.running() else {
+            return Task::none();
+        };
+        let core = running.ctx.core().clone();
+        self.starting = Some(device_id.clone());
+        self.core_task(
+            move || core.start_outgoing_pairing(&device_id),
+            Message::PairStarted,
+        )
+    }
+
+    fn cancel_pairing(&mut self, pairing_id: Uuid) -> Task<Message> {
+        let Some(running) = self.running() else {
+            return Task::none();
+        };
+        let core = running.ctx.core().clone();
+        self.cancelling = Some(pairing_id);
+        self.core_task(
+            move || core.cancel_pairing(pairing_id),
+            move |result| Message::PairingCancelled(pairing_id, result),
+        )
+    }
+
+    /// Accept (which writes the trust store) or reject an incoming request.
+    fn answer_pairing(&mut self, pairing_id: Uuid, accept: bool) -> Task<Message> {
+        if self.answering.is_some() {
+            return Task::none();
+        }
+        let Some(running) = self.running() else {
+            return Task::none();
+        };
+        let core = running.ctx.core().clone();
+        self.answering = Some(pairing_id);
+        self.answer_error = None;
+        self.core_task(
+            move || {
+                if accept {
+                    core.accept_pairing(pairing_id)
+                } else {
+                    core.cancel_pairing(pairing_id)
+                }
+            },
+            move |result| Message::PairingAnswered(pairing_id, result),
+        )
+    }
+
+    /// Run a core call on the daemon's runtime, with its error in words.
+    fn core_task<T: Send + 'static>(
+        &self,
+        call: impl FnOnce() -> Result<T, CoreError> + Send + 'static,
+        then: impl Fn(Result<T, String>) -> Message + Send + 'static,
+    ) -> Task<Message> {
+        plugin::on_runtime(&self.options.runtime, async move {
+            call().map_err(|error| error::describe_error(&error))
+        })
+        .map(then)
+    }
+
+    /// Whether an incoming pairing request is waiting for the user.
+    fn incoming_prompt_shows(&self) -> bool {
+        match &self.phase {
+            Phase::Running(running) => !running.ctx.store().pending_incoming_pairings().is_empty(),
+            _ => false,
         }
     }
 
@@ -472,10 +718,7 @@ impl App {
             // Desktop notifications arrive with the tray; until then the
             // window is the only place to say anything.
             ShellRequest::Notify { title, body } => self.toast(format!("{title}: {body}"), None),
-            ShellRequest::Navigate(route) => {
-                self.route = route;
-                Task::none()
-            }
+            ShellRequest::Navigate(route) => self.go(route),
             ShellRequest::ShowWindow => window::gain_focus(self.window),
             ShellRequest::Confirm {
                 title,
@@ -539,7 +782,40 @@ impl App {
         } else {
             stack![page, self.toasts.view(Message::ToastAction)].into()
         };
-        self.dialogs.view(page, Message::Dialog)
+        let page = self.dialogs.view(page, Message::Dialog);
+        match self.incoming_prompt() {
+            Some(prompt) => dialogs::modal(page, prompt, None),
+            None => page,
+        }
+    }
+
+    /// The prompt for the oldest incoming pairing request, over everything.
+    fn incoming_prompt(&self) -> Option<Element<'_, Message>> {
+        let Phase::Running(running) = &self.phase else {
+            return None;
+        };
+        let pending = running.ctx.store().pending_incoming_pairings();
+        let first = pending.first()?.id;
+        let error = self
+            .answer_error
+            .as_ref()
+            .filter(|(id, _)| *id == first)
+            .map(|(_, error)| error.as_str());
+        incoming::view(
+            &pending,
+            self.answering.is_some(),
+            error,
+            &incoming::Actions {
+                accept: |pairing_id| Message::AnswerPairing {
+                    pairing_id,
+                    accept: true,
+                },
+                reject: |pairing_id| Message::AnswerPairing {
+                    pairing_id,
+                    accept: false,
+                },
+            },
+        )
     }
 
     /// The page for the current route.
@@ -575,8 +851,32 @@ impl App {
                     },
                 );
             }
-            Route::AddDevice => "Add device",
-            Route::Pairing(_) => "Pairing",
+            Route::AddDevice => {
+                return add_device::view(
+                    running.ctx.store(),
+                    self.searching,
+                    self.starting.as_deref(),
+                    add_device::Actions {
+                        back: Message::Back,
+                        scan: Message::Scan,
+                        add_by_address: Message::AddByAddress,
+                        retry: Message::Reload,
+                        pair: Message::Pair,
+                    },
+                );
+            }
+            Route::Pairing(id) => {
+                return pairing::view(
+                    running.ctx.store(),
+                    *id,
+                    self.starting.is_some() || self.cancelling == Some(*id),
+                    pairing::Actions {
+                        navigate: Message::Navigate,
+                        cancel: Message::CancelPairing,
+                        retry: Message::Pair,
+                    },
+                );
+            }
             Route::Transfers => "Transfers",
             Route::Settings => "Settings",
         };
@@ -648,6 +948,16 @@ fn key_command(event: Event, _status: event::Status, _window: window::Id) -> Opt
     }
 }
 
+/// Announce this computer to `address`, typed by the user.
+fn announce_to(core: &Core, address: &str) -> Result<(), String> {
+    let address: Ipv4Addr = address
+        .trim()
+        .parse()
+        .map_err(|_| error::describe_code("invalid_address"))?;
+    core.announce_to(address)
+        .map_err(|error| error::describe_error(&error))
+}
+
 /// A plugin's command, as the shell's task.
 fn shell_task(command: Command<PluginMessage>) -> Task<Message> {
     command.into_task().map(|outcome| match outcome {
@@ -664,7 +974,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        core::{DeviceSnapshot, testing::handle},
+        core::{DeviceSnapshot, LanCommand, PairingDirection, PairingStatus, testing::handle},
         ui::plugin::{DeviceAction, UiPlugin},
     };
 
@@ -684,14 +994,42 @@ mod tests {
 
     /// An app running `plugins` over a test core.
     fn running(plugins: Vec<Box<dyn ErasedUiPlugin>>) -> App {
+        running_with_commands(plugins).0
+    }
+
+    /// An app running `plugins` over a test core, and what the core asks of
+    /// the network.
+    fn running_with_commands(
+        plugins: Vec<Box<dyn ErasedUiPlugin>>,
+    ) -> (App, tokio::sync::mpsc::Receiver<LanCommand>) {
         let runtime = tokio::runtime::Handle::current();
-        let (core, _commands) = handle();
+        let (core, commands) = handle();
         let mut app = app(runtime.clone());
         app.phase = Phase::Running(Box::new(Running {
             ctx: UiContext::new(core, runtime),
             plugins,
         }));
-        app
+        (app, commands)
+    }
+
+    fn core(app: &App) -> Core {
+        let Phase::Running(running) = &app.phase else {
+            panic!("the app runs");
+        };
+        running.ctx.core().clone()
+    }
+
+    fn store(app: &App) -> &store::Store {
+        let Phase::Running(running) = &app.phase else {
+            panic!("the app runs");
+        };
+        running.ctx.store()
+    }
+
+    /// Run `message` through `app` and return what it leads to, without
+    /// running those.
+    async fn step(app: &mut App, message: Message) -> Vec<Message> {
+        testing::outputs(app.update(message)).await
     }
 
     /// Asks the shell for a toast and to open its page, and to confirm.
@@ -892,6 +1230,216 @@ mod tests {
             "That device is no longer known."
         );
         assert!(app.unpairing.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn opening_add_device_scans_and_searches_for_a_while() {
+        let (mut app, mut commands) = running_with_commands(Vec::new());
+        let ended = step(&mut app, Message::Navigate(Route::AddDevice)).await;
+        assert_eq!(app.route, Route::AddDevice);
+        assert_eq!(commands.try_recv().unwrap(), LanCommand::AnnounceDiscovery);
+        assert!(app.searching);
+        // The timer ran out while the test waited for it.
+        let [Message::SearchEnded(_)] = &ended[..] else {
+            panic!("unexpected outputs: {ended:?}");
+        };
+        let _ = app.update(ended.into_iter().next().unwrap());
+        assert!(!app.searching);
+
+        // A scan's timer doesn't end a later scan's search.
+        let first = step(&mut app, Message::Scan).await;
+        let _ = app.update(Message::Scan);
+        for message in first {
+            let _ = app.update(message);
+        }
+        assert!(app.searching, "the second scan is still searching");
+
+        // Coming back from a pairing doesn't scan again.
+        while commands.try_recv().is_ok() {}
+        app.route = Route::Pairing(Uuid::nil());
+        let _ = app.update(Message::Back);
+        assert_eq!(app.route, Route::AddDevice);
+        assert!(commands.try_recv().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn add_by_ip_says_why_an_address_is_refused_then_announces_to_it() {
+        let (mut app, mut commands) = running_with_commands(Vec::new());
+        app.route = Route::AddDevice;
+        settle(&mut app, Message::AddByAddress).await;
+        assert_eq!(app.dialogs.current().unwrap().title, "Add by IP address");
+
+        for refused in ["300.1.1.1", "255.255.255.255"] {
+            settle(
+                &mut app,
+                Message::Dialog(DialogEvent::Input(refused.into())),
+            )
+            .await;
+            settle(&mut app, Message::Dialog(DialogEvent::Submit)).await;
+            let dialog = app.dialogs.current().expect("the dialog stays open");
+            assert_eq!(
+                dialog.error(),
+                Some("Enter an IPv4 address, like 192.168.1.20."),
+                "{refused}"
+            );
+            assert!(!dialog.is_busy());
+        }
+        assert!(commands.try_recv().is_err());
+
+        settle(
+            &mut app,
+            Message::Dialog(DialogEvent::Input(" 192.168.1.20 ".into())),
+        )
+        .await;
+        let finished = step(&mut app, Message::Dialog(DialogEvent::Submit)).await;
+        let mut then = Vec::new();
+        for message in finished {
+            then.extend(step(&mut app, message).await);
+        }
+        assert!(app.dialogs.current().is_none());
+        assert_eq!(
+            commands.try_recv().unwrap(),
+            LanCommand::AnnounceTo {
+                address: Ipv4Addr::new(192, 168, 1, 20)
+            }
+        );
+        assert!(matches!(then[..], [Message::ShowSearching]));
+        let _ = app.update(Message::ShowSearching);
+        assert!(app.searching, "the page searches for the device");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pairing_opens_the_request_and_cancelling_returns_to_add_device() {
+        let mut app = running(Vec::new());
+        let core = core(&app);
+        let (peer, mut sent) = testing::connect_unpaired_peer(&core, testing::PEER_ID);
+        settle(&mut app, Message::Reload).await;
+        app.route = Route::AddDevice;
+
+        settle(&mut app, Message::Pair(peer.device_id.clone())).await;
+        let Route::Pairing(pairing_id) = app.route else {
+            panic!("the pairing page shows, not {:?}", app.route);
+        };
+        assert!(app.starting.is_none());
+        let pairing = store(&app).pairing(pairing_id).unwrap();
+        assert_eq!(pairing.status, PairingStatus::AwaitingConfirmation);
+        assert!(pairing.verification_code.is_some());
+        assert_eq!(sent.try_recv().unwrap().packet_type, "kdeconnect.pair");
+
+        settle(&mut app, Message::CancelPairing(pairing_id)).await;
+        assert_eq!(app.route, Route::AddDevice);
+        assert!(app.cancelling.is_none());
+        assert_eq!(
+            store(&app).pairing(pairing_id).unwrap().status,
+            PairingStatus::Rejected
+        );
+
+        // Try again starts a new request and shows it.
+        app.route = Route::Pairing(pairing_id);
+        settle(&mut app, Message::Pair(peer.device_id.clone())).await;
+        assert!(matches!(app.route, Route::Pairing(id) if id != pairing_id));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pairing_that_cant_start_says_why_and_stays() {
+        let mut app = running(Vec::new());
+        app.route = Route::AddDevice;
+        settle(&mut app, Message::Pair("gone".into())).await;
+        assert_eq!(app.route, Route::AddDevice);
+        assert_eq!(
+            app.toasts.items()[0].text,
+            "That device is no longer known."
+        );
+        assert!(app.starting.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_incoming_prompt_shows_on_any_page_until_resolved() {
+        let mut app = running(Vec::new());
+        let core = core(&app);
+        let (peer, _sent) = testing::connect_unpaired_peer(&core, testing::PEER_ID);
+        testing::request_pairing(&core, &peer.device_id);
+        settle(&mut app, Message::Reload).await;
+
+        for route in [
+            Route::Devices,
+            Route::Settings,
+            Route::Transfers,
+            Route::AddDevice,
+            Route::Device(peer.device_id.clone()),
+        ] {
+            app.route = route;
+            assert!(app.incoming_prompt().is_some(), "{:?}", app.route);
+        }
+
+        // Resolved elsewhere (the CLI): the prompt goes on its own.
+        let request = store(&app).pending_incoming_pairings()[0].id;
+        core.cancel_pairing(request).unwrap();
+        settle(&mut app, Message::Reload).await;
+        assert!(app.incoming_prompt().is_none());
+
+        // Accepting pairs the device.
+        testing::request_pairing(&core, &peer.device_id);
+        settle(&mut app, Message::Reload).await;
+        let request = store(&app).pending_incoming_pairings()[0].id;
+        settle(
+            &mut app,
+            Message::AnswerPairing {
+                pairing_id: request,
+                accept: true,
+            },
+        )
+        .await;
+        assert!(
+            app.incoming_prompt().is_none(),
+            "without waiting for the event"
+        );
+        assert!(core.device(&peer.device_id).unwrap().paired);
+        assert!(app.answering.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_answer_keeps_the_prompt_open_with_the_reason() {
+        let mut app = running(Vec::new());
+        // A request the core no longer has.
+        let request = PairingSnapshot {
+            id: Uuid::from_u128(1),
+            device_id: testing::PEER_ID.into(),
+            device_name: "Peer".into(),
+            direction: PairingDirection::Incoming,
+            status: PairingStatus::AwaitingConfirmation,
+            verification_code: Some("1234ABCD".into()),
+            created_at: 0,
+            expires_at: 30_000,
+            error_code: None,
+        };
+        let Phase::Running(running) = &mut app.phase else {
+            unreachable!()
+        };
+        running.ctx.store_mut().apply_snapshot(Snapshot {
+            devices: Ok(Vec::new()),
+            pairings: Ok(vec![request.clone()]),
+            transfers: Vec::new(),
+            settings: Err(String::new()),
+        });
+
+        settle(
+            &mut app,
+            Message::AnswerPairing {
+                pairing_id: request.id,
+                accept: true,
+            },
+        )
+        .await;
+        assert!(app.incoming_prompt().is_some());
+        assert_eq!(
+            app.answer_error,
+            Some((request.id, "That pairing request no longer exists.".into()))
+        );
+        assert!(app.answering.is_none());
+        // Escape doesn't dismiss it.
+        settle(&mut app, Message::Key(KeyCommand::Cancel)).await;
+        assert!(app.incoming_prompt().is_some());
     }
 
     #[test]

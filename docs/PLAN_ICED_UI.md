@@ -6,14 +6,16 @@ early steps build the ground the later ones stand on. Steps marked
 *independent* can run in parallel worktrees once their prerequisites have
 landed.
 
-Status (2026-09-25): decided by the owner. Steps 1 to 6 are done: `gui/`
+Status (2026-09-25): decided by the owner. Steps 1 to 7 are done: `gui/`
 is the thin composition root, the spike's device list lives in `src/ui/`,
 features plug in through the `UiPlugin` seam (battery first), the shell
 has routing, toasts, dialogs, startup screens and error wording, the
 store caches devices, pairings, transfers and settings for the pages, the
-devices page is finished, and the device page has ping, ring, send
-clipboard, recent transfers and unpair. Next are steps 7 to 9. Each
-finished step says so under its heading, with what differs from the plan.
+devices page is finished, the device page has ping, ring, send
+clipboard, recent transfers and unpair, and Add device, the pairing page
+and the incoming pairing prompt pair in both directions. Next are steps 8
+and 9. Each finished step says so under its heading, with what differs
+from the plan.
 
 ## Read first
 
@@ -738,6 +740,64 @@ dark.
 
 ### 7. Add device, scanning, pairing, incoming prompt
 
+**Done (2026-09-25).** Where it differs from the text below:
+- `pages::add_device::view(store, searching, starting, Actions)` and
+  `pages::pairing::view(store, id, busy, Actions)`; `Actions` are structs
+  of `fn` message constructors. All the state is the shell's: `searching`
+  (with a scan counter, so an older scan's 4 s timer doesn't hide a newer
+  one's bar), `starting` (the device a start runs for), `cancelling`,
+  `answering` and `answer_error` (keyed by pairing id).
+- Every route change goes through `App::go`, which scans when Add device
+  is entered from elsewhere; coming back from a pairing page doesn't, as
+  the Flutter page stayed mounted under it. "Scan again" is a header icon
+  button, disabled while searching.
+- Start, cancel, accept and reject run on the daemon's runtime
+  (`App::core_task`): a start schedules the core's timeout with
+  `tokio::spawn`, and accepting writes the trust store. Answers go through
+  `Store::apply_pairing`. A started pairing opens its page only if the
+  window is still on Add device or a pairing page. Try again reuses
+  `Message::Pair`; the pairing page's buttons are disabled while a start
+  or its own cancel runs.
+- `ui::activity::activity_bar`, a custom widget (iced's `advanced`
+  feature, now on): a segment sweeping a track, redrawing itself while
+  shown. It stands in for Flutter's indeterminate indicators: the
+  searching bar, the Pair button of the pairing being started, and the
+  pairing page while pending. Step 8 can use it for queued transfers.
+- `widgets::verification_code` is now a read-only text field, so the code
+  selects and copies; the hair spaces that faked letter spacing are gone,
+  since they would be copied too.
+- "Add by IP address" is a shell `Dialog` with `Submit::Run`: the address
+  is parsed in the UI (worded as `invalid_address`), then
+  `Core::announce_to`. The new `Dialog::on_success` message
+  (`ShowSearching`) restarts the searching bar once it closes.
+- The incoming prompt is `overlay::incoming::view`, drawn over the page,
+  toasts and dialogs by `dialog::modal`, whose click-outside message is
+  now optional (none here). Escape does nothing while it shows. Drops are
+  step 11's; the prompt must disable them then (`incoming_prompt_shows`).
+  The desktop notification for a request is step 13's.
+- `widgets::tonal`, `filled` and `outlined` are the shared button styles.
+  `dialog::surface` is the dialog card, also used by the prompt; it has a
+  border, not a shadow (see Traps).
+- Tests: the pages (candidates and blockers, Pair gating, "No devices
+  found" only after the search, Scan again, every pairing status with its
+  buttons, the prompt's queue count, busy and error) and the shell against
+  a real core (`ui::testing::connect_unpaired_peer` has a real
+  certificate, `request_pairing` sends the peer's request): scan on open
+  and not on the way back, add by IP refusing then announcing, pair then
+  cancel then Try again, a start that fails, the prompt on every page
+  until resolved elsewhere or accepted, and a failed answer keeping the
+  prompt with its reason. Snapshots `add-device`, `add-device-empty`,
+  `pairing-waiting`, `pairing-accepted`, `pairing-expired`,
+  `incoming-pairing`.
+- Checked in the real app against a CLI peer (loopback, Xvfb): Add device
+  scans and lists the peer, Pair opens the code, `myconnect pair accept`
+  on the peer shows "Paired with CLI Peer" and Done opens the device; after
+  Unpair, `myconnect pair <app>` from the peer raises the prompt, Accept
+  pairs both sides, and a request rejected through the app's API
+  (`myconnect --api-port … pair reject`) takes the prompt away. Add by IP
+  shows the parse error under the field and, for `127.0.0.1`, closes and
+  searches again.
+
 **Build:**
 - **Add device** (Appendix A §4):
   - scan on open (`core.announce()`), a 4 s "searching" progress bar, and
@@ -1077,6 +1137,15 @@ app.
   otherwise.
 - **macOS loopback.** `--discovery-loopback` can't find peers on macOS
   (no `127.255.255.255`). Use `--demo` there, and do peer tests on Linux.
+- **No shadows under tiny-skia.** iced 0.14's software renderer draws a
+  quad's shadow without the clip mask, so every partial redraw (a
+  blinking text cursor, an activity bar) paints it again over itself and
+  the shadowed widget turns black. Dialogs use a border instead. Check
+  anything with a shadow under `ICED_BACKEND=tiny-skia` in the real app;
+  snapshots render one frame and don't show it.
+- **Driving the app under Xvfb.** There is no window manager, so a click
+  doesn't give the window keyboard focus: call `XSetInputFocus` on it
+  (through `libX11` with ctypes) before sending keys with XTest.
 - **iced version.** Pin `iced = "0.14"` and `iced_fonts = "0.3"` (the
   version that matches 0.14). Upgrading iced is its own change, never
   mixed into a feature step.
@@ -1128,18 +1197,18 @@ are to the Flutter app under `ui/lib/src/`.
 - [ ] Drop anywhere on the page sends to this device
 
 ### §4 Add device (`features/devices/add_device_page.dart`)
-- [ ] Scan on open; 4 s "searching" indicator; Scan again disabled while searching; toast on scan error
-- [ ] Intro text
-- [ ] "No devices found" when empty and not searching
-- [ ] Candidates: unpaired and not unavailable; blocker text ("Pairing in progress" / "Not connected"), otherwise reachability
-- [ ] Pair: disabled when blocked or while another start is in flight; spinner for the one starting; goes to the pairing page; toast on error
-- [ ] "Add by IP address" row + dialog: autofocus, hint "192.168.1.20", helper text, Enter submits, error under the field, Add disabled while sending; restarts the searching indicator on success
+- [x] Scan on open; 4 s "searching" indicator; Scan again disabled while searching; toast on scan error
+- [x] Intro text
+- [x] "No devices found" when empty and not searching
+- [x] Candidates: unpaired and not unavailable; blocker text ("Pairing in progress" / "Not connected"), otherwise reachability
+- [x] Pair: disabled when blocked or while another start is in flight; spinner for the one starting; goes to the pairing page; toast on error
+- [x] "Add by IP address" row + dialog: autofocus, hint "192.168.1.20", helper text, Enter submits, error under the field, Add disabled while sending; restarts the searching indicator on success
 
 ### §5 Pairing (`features/pairing/`)
-- [ ] Pairing page: every status's icon, title and detail (table in the inventory); "This pairing request no longer exists."
-- [ ] Buttons: Cancel (pending), Done (accepted → device), Close / Try again (other terminal states); disabled while busy
-- [ ] Verification code: large, monospace, letter-spaced, selectable, on a rounded surface
-- [ ] Incoming prompt over every screen while requests are pending; modal; "{n} more request(s) waiting"; Accept/Reject; inline error keeps it open; disappears when resolved elsewhere
+- [x] Pairing page: every status's icon, title and detail (table in the inventory); "This pairing request no longer exists."
+- [x] Buttons: Cancel (pending), Done (accepted → device), Close / Try again (other terminal states); disabled while busy
+- [x] Verification code: large, monospace, letter-spaced, selectable, on a rounded surface
+- [x] Incoming prompt over every screen while requests are pending; modal; "{n} more request(s) waiting"; Accept/Reject; inline error keeps it open; disappears when resolved elsewhere
 - [x] Guard: a non-terminal pairing snapshot never replaces a terminal one
 
 ### §6 Send files and drop (`features/send/`)

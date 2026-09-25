@@ -59,10 +59,7 @@ pub fn view<'a, Message: Clone + 'a>(
             .align_y(Alignment::Center),
     )
     .padding([8, 16])
-    .style(|theme: &Theme, status| button::Style {
-        border: Border::default().rounded(8),
-        ..button::primary(theme, status)
-    })
+    .style(widgets::filled)
     .on_press(navigate(Route::AddDevice));
     let header = column![
         title,

@@ -46,7 +46,7 @@ arboard = { version = "3.6", default-features = false, features = ["wayland-data
 russh = { version = "0.63", default-features = false, features = ["ring", "rsa"] }
 russh-sftp = "3"
 # The desktop UI (`gui` feature). Upgrading iced is its own change.
-iced = { version = "0.14", optional = true }
+iced = { version = "0.14", features = ["advanced"], optional = true }
 iced_fonts = { version = "0.3", features = ["lucide"], optional = true }
 
 [dev-dependencies]
