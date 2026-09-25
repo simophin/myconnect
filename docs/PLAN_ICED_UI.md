@@ -16,8 +16,11 @@ clipboard, recent transfers and unpair, and Add device, the pairing page
 and the incoming pairing prompt pair in both directions, and the
 Transfers page shows progress, cancels, and opens received files, and
 Settings renames this computer, picks the download folder and flips its
-switches, the clipboard plugin's included. Next is step 10. Each finished
-step says so under its heading, with what differs from the plan.
+switches, the clipboard plugin's included. Step 10's desktop spike is
+done too: its findings and decisions for drops, the tray, notifications,
+placement and single instance are in ADR 0001's "Desktop integration".
+Next is step 11. Each finished step says so under its heading, with what
+differs from the plan.
 
 ## Read first
 
@@ -964,6 +967,38 @@ dark.
 
 ### 10. Desktop integration spike (do this before 11 and 13)
 
+**Done (2026-09-26).** The table and the decisions are in
+[`adr/0001`](adr/0001-native-ui-in-iced.md), "Desktop integration". In
+short, and where it differs from the text below:
+- Tested on Linux only: X11 under Xvfb and Wayland under a headless labwc
+  (`WLR_BACKENDS=headless WLR_RENDERER=pixman`, its own
+  `XDG_RUNTIME_DIR`), each on a private bus with a fake
+  `StatusNotifierWatcher` and notification server written in dbus-python,
+  and a GTK drag source moved with XTest. macOS and Windows are from the
+  crates' sources; step 13 confirms them on those machines. The spike
+  code was thrown away.
+- **Drops:** no platform gives a position while a drag hovers, so there is
+  no per-card highlight. Drops are routed: device page → that device,
+  browse folder → upload there, anywhere else → the chooser (the DnD
+  fallback below). Folders arrive as drops too; the shell refuses them.
+- **Tray:** `ksni` works as hoped (activate, submenus, enabled flags, live
+  updates). Spawn it with `assume_sni_available(true)` and follow
+  `watcher_online`/`watcher_offline`; with no tray host, the window
+  always shows and closing it quits.
+- **Window:** close and reopen with `window::close`/`window::open` works
+  under `iced::daemon`. On Wayland the position can be neither read nor
+  set; placement restores size and maximized there.
+- **Notifications:** on Linux the shell talks to
+  `org.freedesktop.Notifications` over `zbus` itself (`notify-rust` can't
+  withdraw a notification it is waiting on); `notify-rust` only on macOS
+  and Windows. A click shows the window on Linux (tested) and Windows;
+  macOS is best effort.
+- **Single instance:** `interprocess`'s `GenericNamespaced`, an abstract
+  socket on Linux (nothing stale after a crash, tested), a `/tmp` file on
+  macOS (`try_overwrite`), a named pipe on Windows.
+- **Monitors:** `display-info` (new in the library table) for
+  fits-on-screen; iced only has the current monitor's size.
+
 **Why:** these are the parts where Rust GUI crates are weakest, and a
 surprise here changes the design of steps 11 and 13. Keep this spike
 throwaway, time-boxed, and written down.
@@ -1027,7 +1062,9 @@ each gap.
     reason}");
   - `drop_target` for a device that `acceptsFiles`.
 - **Shell drop handling:**
-  - hover state (per-card highlight if step 10 made that possible);
+  - hover state: the whole window (step 10: no position while hovering,
+    so no per-card highlight: remove step 5's `drop_target` highlight
+    from `devices::view`);
   - the window border and the "Drop on a device, or anywhere to choose one"
     pill;
   - only regular files are accepted ("Only files can be sent, not
@@ -1086,7 +1123,8 @@ Use the decisions from step 10.
 
 **Build:**
 - **Close:** if `closeToTray` (or settings are unavailable), close the
-  window and keep running; otherwise quit.
+  window and keep running; otherwise quit. With no tray host (step 10:
+  `ksni`'s `watcher_offline`), always quit.
 - **Quit:** save the placement, shut down the service, exit. Guard against
   running twice. OS-requested quits (macOS menu bar, logout) take the same
   path.
@@ -1243,6 +1281,12 @@ app.
 - **Driving the app under Xvfb.** There is no window manager, so a click
   doesn't give the window keyboard focus: call `XSetInputFocus` on it
   (through `libX11` with ctypes) before sending keys with XTest.
+- **Helpers on the owner's Wayland.** Unsetting `WAYLAND_DISPLAY` isn't
+  enough to keep a GTK or Wayland client off the owner's desktop: they
+  fall back to `$XDG_RUNTIME_DIR/wayland-0`. For helpers under Xvfb set
+  `GDK_BACKEND=x11` (and `XDG_SESSION_TYPE=x11` for `display-info`); for
+  a headless compositor give it its own short `XDG_RUNTIME_DIR` (socket
+  paths are limited to 108 bytes, so not under the scratchpad).
 - **iced version.** Pin `iced = "0.14"` and `iced_fonts = "0.3"` (the
   version that matches 0.14). Upgrading iced is its own change, never
   mixed into a feature step.

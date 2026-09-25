@@ -85,11 +85,80 @@ first needs one adds it to the `gui` feature.
 | Running tasks in tests | `iced_runtime` 0.14 (dev) | Already in iced's tree; its `task::into_stream` lets a unit test see what a `Task` produces, which `iced` doesn't re-export. |
 | Arguments | `clap` | Already the CLI's parser; `env` reads each flag's environment variable. |
 | File and folder dialogs | `rfd` (step 9) | The standard native dialog crate: the XDG portal on Linux (zenity if there is none), AppKit, Win32. Its async dialogs need no runtime of their own. |
-| Notifications | `notify-rust` (step 13) | freedesktop notifications over D-Bus, macOS and Windows toasts. |
+| Notifications | Linux: `zbus` (already in the tree); macOS and Windows: `notify-rust` (step 13) | On Linux the app talks to `org.freedesktop.Notifications` itself, so it can withdraw a notification and hear its click without a thread per notification (see Desktop integration). `notify-rust` gives macOS and Windows toasts. |
 | Opening files and folders | `opener` (step 8) | Opens with the default app and reveals in the file manager on each platform. |
 | Single instance | `interprocess` (step 13) | Cross-platform local sockets, named from the data dir, so isolated instances never collide. |
-| Tray (Linux) | `ksni` (step 13) | A StatusNotifierItem over D-Bus in pure Rust, with no libappindicator or GTK. |
+| Tray (Linux) | `ksni` (step 13) | A StatusNotifierItem over D-Bus in pure Rust, with no libappindicator or GTK. Spawned with `assume_sni_available(true)`, so a tray host that starts, stops or restarts later is followed. |
+| Monitor list | `display-info` (step 13) | iced exposes only the size of the window's current monitor; the `window.json` fits-on-screen check needs every monitor's bounds. |
 | Tray (macOS, Windows) | `tray-icon` (step 13) | The Tauri team's tray crate, with `muda` menus. |
+
+## Desktop integration (plan step 10)
+
+A throwaway spike (an iced `daemon` with `ksni`, `notify-rust`,
+`interprocess` and `display-info`) was run on Linux, 2026-09-26: X11 under
+Xvfb, Wayland under a headless labwc (wlroots), each on a private D-Bus
+with a fake `StatusNotifierWatcher` and notification server (dbus-python),
+and a GTK drag source driven with XTest. macOS and Windows weren't
+available; their columns come from reading winit 0.30.13, `notify-rust`
+4.18, `tray-icon` and `interprocess` 2.4 sources, and are for step 13 to
+confirm on those machines.
+
+| | Linux X11 | Linux Wayland | macOS | Windows |
+| --- | --- | --- | --- | --- |
+| File hover and drop | Tested: `FileHovered` per file once, on entering; `FileDropped` per file; `FilesHoveredLeft` on leaving. Folders arrive too. | No drag and drop: winit has no `wl_data_device`, so a drag over the window is never accepted and nothing reaches the app. | Source: the same three events (`draggingEntered`, `performDragOperation`, `draggingExited`). | Source: the same (`IDropTarget`). |
+| Cursor position during a drag | Tested: none. The drag source holds the pointer grab, so no `CursorMoved` arrives while hovering. With a GTK source, the ungrab gave one `CursorMoved` at the drop point just *before* `FileDropped`; that order is the source's doing. | n/a | Source: none; winit ignores `draggingUpdated`. | Source: none; winit drops `DragOver`'s point. |
+| Tray | Tested (`ksni`): left click reaches `activate`, the menu has submenus and disabled items, and `handle.update` rewrites labels while running. Without a watcher `spawn` fails (`ServiceUnknown`) unless `assume_sni_available(true)`; with it, `watcher_offline`/`watcher_online` report the host going and coming, and the item re-registers on its own. | Same as X11 (D-Bus only). | Source (`tray-icon` + `muda`): must be created on the main thread after the event loop starts, so from the first `update` (iced runs `update` on that thread); its menu and icon events come from global channels, forwarded into a `Subscription`. | Same as macOS. |
+| Close and reopen the window | Tested: `window::close` keeps an `iced::daemon` alive; `window::open` with `Position::Specific` and the saved size puts it back where it was. `window::position`, `size` and `is_maximized` answer before closing. | Tested: works, but `window::position` is always `None` and `Position::Specific` is ignored: the compositor places windows. | Source: as X11. | Source: as X11. |
+| Notifications | Tested: `notify-rust` shows it; a click on the body is the `default` action and reaches the app. Withdrawing needs the handle that `wait_for_action` consumed; by id it takes a replace-then-close that briefly shows an empty notification. | Same as X11 (D-Bus only). | Source: `NSUserNotificationCenter` (deprecated) reports the click only through a blocking wait per notification and can't withdraw; `UNUserNotificationCenter` (`preview-macos-un`) can, but needs the signed bundle. | Source: a body click is `Default` while the app runs; it needs an AUMID (the installer's, step 15); no withdraw. |
+| Single instance | Tested (`interprocess`, `GenericNamespaced`): an abstract socket, so no file: after `kill -9` the next launch listens at once; a second launch sends `show` and exits. | Same as X11. | Source: a socket file under `/tmp`, left behind by a crash; `try_overwrite(true)` replaces it after `connect` is refused. | Source: a named pipe; nothing stale. |
+| Monitors | Tested: `window::monitor_size` is the current monitor's size only. `display-info` lists screens with origins, but picks X11 or Wayland from `WAYLAND_DISPLAY`, *then* `XDG_SESSION_TYPE`; its `is_primary` was false for the only screen. | Tested: `monitor_size` is `None` until the surface enters an output; `display-info` lists outputs. Positions don't matter here. | Source: `display-info` (AppKit). | Source: `display-info` (Win32). |
+
+Decisions for steps 11 and 13:
+
+- **Drops are routed, not hit-tested.** No platform reports where a drag is
+  while it hovers, so there is no per-card highlight. The hover shows the
+  window border and the pill. A drop goes to the route: on a device page,
+  to that device (if a plugin's `drop_target` takes it); on a browse
+  folder, into that folder; anywhere else, the "Send N files" chooser.
+  The X11 position at the drop is not used: it depends on the source's
+  event order and exists nowhere else, so the same drop would behave
+  differently by platform.
+- **Folders are filtered by the shell**, since winit hands them over like
+  files ("Only files can be sent, not folders.").
+- **Wayland: no drag and drop**, as the owner decided. Nothing to guard:
+  the app never sees the drag.
+- **The window closes to the tray, it isn't hidden.** `window::close` on
+  close-to-tray, `window::open` with the saved placement to show it
+  again; no GPU surface while in the tray.
+- **Placement:** keep `{visible, maximized, bounds}`. Restore the position
+  only where it can be set (X11, macOS, Windows) and only if it fits one
+  of `display-info`'s monitors, otherwise centre; on Wayland restore the
+  size and maximized state and let the compositor place it. Read the
+  position before closing (`window::position` answers `None` on Wayland,
+  so keep the old one).
+- **Tray availability** follows `watcher_online`/`watcher_offline`
+  (`ksni`, `assume_sni_available(true)`); macOS and Windows always have
+  one. Without a tray the window is always shown at start, and closing
+  it quits whatever `closeToTray` says, since nothing could show it again
+  but a second launch.
+- **Notifications on Linux talk D-Bus themselves** (`zbus`, on the
+  daemon's runtime): `Notify` with a `default` action, `CloseNotification`
+  to withdraw the pairing request, and the `ActionInvoked` and
+  `NotificationClosed` signals from one subscription. `notify-rust` is a
+  macOS and Windows dependency only. **Clicking a notification shows the
+  window on Linux and Windows;** on macOS it is best effort (the
+  `NSUserNotificationCenter` wait, one thread per notification), and
+  withdrawing is Linux-only until the macOS app is a signed bundle.
+- **Single instance:** `GenericNamespaced`, named
+  `myconnect-<uid>-<hash of the canonical data dir>` (short enough for
+  macOS's 104-byte socket paths; the uid keeps users apart in Linux's
+  shared abstract namespace). Connect first: a reply means another
+  instance runs, so send `show` and exit; a refusal means listen with
+  `try_overwrite(true)`.
+- **Monitors:** `display-info` for the fits-on-screen check. Tests and
+  Xvfb runs must set `XDG_SESSION_TYPE=x11` next to unsetting
+  `WAYLAND_DISPLAY`, or it looks for a Wayland compositor. Don't use its
+  `is_primary`.
 
 ## Consequences
 
