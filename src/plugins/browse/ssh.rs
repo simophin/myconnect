@@ -4,27 +4,27 @@
 //! The peer's SSH host key is its KDE Connect key pair: the key in the TLS
 //! certificate pinned at pairing. The server is therefore authenticated
 //! against that certificate. KDE Connect's own clients skip this check;
-//! MyConnect doesn't. This device authenticates with its own TLS key, which
-//! KDE Connect for Android accepts from the paired device. The one-off
-//! password from the offer is only a fallback.
+//! MyConnect doesn't. This device authenticates with its own TLS key,
+//! through the core ([`PayloadPeer::authenticate_ssh`]), so the key never
+//! reaches this plugin. KDE Connect for Android accepts it from the paired
+//! device. The one-off password from the offer is only a fallback.
 
 use std::{sync::Arc, time::Duration};
 
 use russh::{
     client::{self, AuthResult, Handle},
-    keys::{
-        PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate, pkcs8::decode_pkcs8,
-        ssh_key::public::KeyData,
-    },
+    keys::{PublicKeyOrCertificate, ssh_key::public::KeyData},
 };
 use russh_sftp::client::SftpSession;
 use thiserror::Error;
 use tokio::net::TcpStream;
 use x509_parser::{parse_x509_certificate, public_key::PublicKey};
 
+use crate::application::{PayloadPeer, SshAuthError};
+
 /// Where and as whom to connect, from a peer's `kdeconnect.sftp` offer.
 pub struct SftpEndpoint {
-    pub addr: std::net::SocketAddr,
+    pub port: u16,
     pub user: String,
     pub password: String,
 }
@@ -57,30 +57,31 @@ impl SftpConnection {
     }
 }
 
-/// Connect to a peer's SFTP server and open an SFTP session.
-///
-/// `local_key_der` is this device's PKCS#8 private key (its TLS key), and
-/// `peer_certificate_der` the certificate pinned for the peer. The whole
-/// exchange, from TCP connect to the SFTP handshake, must finish within
-/// `deadline`.
+/// Connect to the SFTP server on `peer`'s host and open an SFTP session.
+/// The whole exchange, from TCP connect to the SFTP handshake, must finish
+/// within `deadline`.
 pub async fn connect(
+    peer: &PayloadPeer,
     endpoint: &SftpEndpoint,
-    local_key_der: &[u8],
-    peer_certificate_der: &[u8],
     deadline: Duration,
 ) -> Result<SftpConnection, SftpError> {
-    let key = Arc::new(decode_pkcs8(local_key_der, None).map_err(|_| SftpError::InvalidLocalKey)?);
-    let expected = certificate_key_data(peer_certificate_der)?;
-    tokio::time::timeout(deadline, open(endpoint, key, expected))
+    let expected = certificate_key_data(peer.certificate_der())?;
+    tokio::time::timeout(deadline, open(peer, endpoint, expected))
         .await
         .map_err(|_| SftpError::TimedOut)?
 }
 
 async fn open(
+    peer: &PayloadPeer,
     endpoint: &SftpEndpoint,
-    key: Arc<PrivateKey>,
     expected: KeyData,
 ) -> Result<SftpConnection, SftpError> {
+    let ip = peer.ip().ok_or_else(|| {
+        SftpError::Connect(std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            "the device's address is unknown",
+        ))
+    })?;
     let config = Arc::new(client::Config {
         // Nothing else keeps an idle session alive, and the peer drops
         // silently when it leaves the network.
@@ -89,23 +90,12 @@ async fn open(
         nodelay: true,
         ..Default::default()
     });
-    let stream = TcpStream::connect(endpoint.addr)
+    let stream = TcpStream::connect((ip, endpoint.port))
         .await
         .map_err(SftpError::Connect)?;
     let mut ssh = client::connect_stream(config, stream, PinnedHostKey { expected }).await?;
 
-    let hash_alg = if key.algorithm().is_rsa() {
-        ssh.best_supported_rsa_hash().await?.flatten()
-    } else {
-        None
-    };
-    let by_key = ssh
-        .authenticate_publickey(
-            endpoint.user.clone(),
-            PrivateKeyWithHashAlg::new(key, hash_alg),
-        )
-        .await?;
-    if matches!(by_key, AuthResult::Success) {
+    if peer.authenticate_ssh(&mut ssh, &endpoint.user).await? {
         tracing::debug!("signed in to the file server with our key");
     } else {
         tracing::debug!("file server refused our key; trying the password");
@@ -192,9 +182,19 @@ pub enum SftpError {
     Sftp(#[source] russh_sftp::client::error::Error),
 }
 
+impl From<SshAuthError> for SftpError {
+    fn from(error: SshAuthError) -> Self {
+        match error {
+            SshAuthError::InvalidLocalKey => Self::InvalidLocalKey,
+            SshAuthError::Ssh(error) => Self::Ssh(error),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rcgen::{CertificateParams, KeyPair};
+    use russh::keys::pkcs8::decode_pkcs8;
 
     use super::*;
 

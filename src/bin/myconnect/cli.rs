@@ -8,8 +8,8 @@ use clap::{Parser, Subcommand};
 use myconnect::{
     api::DEFAULT_API_PORT,
     application::{
-        ApplicationEvent, DirectoryListing, EventData, FileEntry, FileKind, PairingSnapshot,
-        RunRequest, SettingsPatch, SettingsSnapshot, TransferSnapshot,
+        ApplicationEvent, EventData, PairingSnapshot, RunRequest, SettingsPatch, SettingsSnapshot,
+        TransferSnapshot,
     },
     client::{
         API_TOKEN_ENV, ApiClient, ClipboardWatchUpdate, DeviceWatchUpdate, TransferWatchUpdate,
@@ -18,6 +18,7 @@ use myconnect::{
     device::DeviceSnapshot,
     plugins::{
         battery::BatteryStatus,
+        browse::{DirectoryListing, FileEntry, FileKind},
         clipboard::{ClipboardSettings, ClipboardSnapshot},
         ping::ReceivedPing,
     },

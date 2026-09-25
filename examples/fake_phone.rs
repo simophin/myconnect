@@ -5,8 +5,9 @@
 //! cargo run --example fake_phone -- <DATA_DIR> <STORAGE_DIR> <DESKTOP_ID>
 //! ```
 //!
-//! It listens for discovery announcements on UDP 1716 (shared with other
-//! local instances), dials only the desktop with `DESKTOP_ID`, accepts its
+//! It listens for loopback discovery announcements on UDP
+//! 127.255.255.255:1716 (shared with other local instances, and off the
+//! LAN), dials only the desktop with `DESKTOP_ID`, accepts its
 //! pairing request, and serves `STORAGE_DIR` as the phone's storage: its
 //! `internal` folder as "Internal storage" and its `sdcard` folder as
 //! "SD card". Start the desktop with loopback discovery so its
@@ -15,12 +16,10 @@
 #[path = "../tests/support/fake_phone.rs"]
 mod fake_phone;
 
-use std::{
-    net::{Ipv4Addr, SocketAddr},
-    path::PathBuf,
-};
+use std::{net::SocketAddr, path::PathBuf};
 
 use fake_phone::{BrowseReply, FakePhone, FakePhoneConfig};
+use myconnect::transport::lan::{DISCOVERY_PORT, LOOPBACK_BROADCAST};
 
 #[tokio::main]
 async fn main() {
@@ -43,7 +42,7 @@ async fn main() {
         ]),
         wrong_host_key: false,
         desktop_id: Some(desktop_id.clone()),
-        discovery_bind: SocketAddr::from((Ipv4Addr::UNSPECIFIED, 1716)),
+        discovery_bind: SocketAddr::from((LOOPBACK_BROADCAST, DISCOVERY_PORT)),
     })
     .await;
     println!("Fake phone {} waiting for {desktop_id}", phone.device_id);

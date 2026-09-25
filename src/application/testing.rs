@@ -1,5 +1,6 @@
 //! A real core for unit tests, of the core and of plugins: every built-in
-//! plugin, an in-memory trust store and clipboard, no LAN transport.
+//! plugin (or the ones a test gives), an in-memory trust store and
+//! clipboard, no LAN transport.
 //! Register a connection with an `mpsc` channel to see the packets a device
 //! is sent.
 
@@ -7,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
-use super::{ApplicationHandle, Command, LocalDeviceSnapshot, TransferConfig};
+use super::{ApplicationHandle, Command, LocalDeviceSnapshot, Plugin, TransferConfig};
 use crate::{
     config::{LocalIdentity, TrustError, TrustStore, TrustedDevice},
     protocol::{DeviceType, IdentityBody},
@@ -58,6 +59,23 @@ pub(crate) fn handle() -> (ApplicationHandle, mpsc::Receiver<Command>) {
 pub(crate) fn handle_with_trust(
     trust_store: MemoryTrustStore,
 ) -> (ApplicationHandle, mpsc::Receiver<Command>) {
+    build(
+        trust_store,
+        crate::plugins::builtin(crate::plugins::clipboard::InMemoryClipboard::shared()),
+    )
+}
+
+/// A core with no devices, running `plugins`.
+pub(crate) fn handle_with_plugins(
+    plugins: Vec<Arc<dyn Plugin>>,
+) -> (ApplicationHandle, mpsc::Receiver<Command>) {
+    build(MemoryTrustStore::default(), plugins)
+}
+
+fn build(
+    trust_store: MemoryTrustStore,
+    plugins: Vec<Arc<dyn Plugin>>,
+) -> (ApplicationHandle, mpsc::Receiver<Command>) {
     let directory = tempfile::tempdir().unwrap();
     let identity = Arc::new(LocalIdentity::load_or_create(directory.path()).unwrap());
     ApplicationHandle::new(
@@ -68,7 +86,7 @@ pub(crate) fn handle_with_trust(
         8,
         b"local-pubkey".to_vec(),
         Arc::new(trust_store),
-        crate::plugins::builtin(crate::plugins::clipboard::InMemoryClipboard::shared()),
+        plugins,
         1,
         1,
         identity,

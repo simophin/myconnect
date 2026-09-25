@@ -18,12 +18,15 @@ use uuid::Uuid;
 use crate::{
     api::DEFAULT_API_PORT,
     application::{
-        ApplicationEvent, DirectoryListing, EventData, FileEntry, PairingSnapshot, PluginEventKind,
-        SettingsPatch, SettingsSnapshot, TransferSnapshot, TransferStatus,
+        ApplicationEvent, EventData, PairingSnapshot, PluginEventKind, SettingsPatch,
+        SettingsSnapshot, TransferSnapshot, TransferStatus,
     },
     config::ApiToken,
     device::DeviceSnapshot,
-    plugins::clipboard::ClipboardSnapshot,
+    plugins::{
+        browse::{DirectoryListing, FileEntry},
+        clipboard::ClipboardSnapshot,
+    },
 };
 
 pub const API_URL_ENV: &str = "MYCONNECT_API_URL";

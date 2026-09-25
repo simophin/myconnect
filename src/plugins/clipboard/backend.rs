@@ -11,6 +11,7 @@
 use std::sync::{Arc, Mutex};
 
 use thiserror::Error;
+use tokio::sync::watch;
 
 mod system;
 
@@ -23,6 +24,17 @@ pub trait ClipboardService: Send + Sync {
 
     /// Overwrite the clipboard's text content.
     fn set(&self, text: &str) -> Result<(), ClipboardError>;
+
+    /// Text copied on this machine by other applications, for a clipboard
+    /// that reports it (see [`SystemClipboard::local_changes`]); `None` by
+    /// default.
+    fn watch_local_changes(&self) -> Option<watch::Receiver<Option<String>>> {
+        None
+    }
+
+    /// Let go of the clipboard at shutdown. May block briefly; nothing by
+    /// default.
+    fn release(&self) {}
 }
 
 /// An in-memory clipboard requiring no desktop session, for tests and

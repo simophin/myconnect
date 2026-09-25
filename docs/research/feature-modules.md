@@ -1,7 +1,8 @@
 # Research: one module per feature
 
 Status: proposal (2026-09-25), with phases 0 (ping, §7), 0b (find my
-phone), 1 (battery), 2 (clipboard) and 3 (share) implemented.
+phone), 1 (battery), 2 (clipboard), 3 (share) and 4 (browse)
+implemented; only the core cleanup (phase 5) is left.
 Once it is accepted, the target shape moves into `ARCHITECTURE.md` §2 and
 this file becomes the history behind it.
 
@@ -27,7 +28,8 @@ Set by the owner:
   The pilot didn't need any change; phase 1 moved `battery` under
   `plugins` (§5.5), phase 2 moved `clipboardSyncEnabled` to
   `plugins.clipboard.syncEnabled` (§5.6), and phase 3 moved sending a file
-  from `POST /transfers` to `POST /devices/{id}/share` (§8).
+  from `POST /transfers` to `POST /devices/{id}/share` (§8). Phase 4
+  needed no change.
 
 ## 2. Where we are
 
@@ -143,7 +145,8 @@ src/
     battery/  mod.rs  packet.rs
     clipboard/ mod.rs packet.rs  http.rs   (+ the clipboard backends, now crate::clipboard)
     share/    mod.rs  packet.rs  http.rs
-    browse/   mod.rs  packet.rs  http.rs  session.rs   (today's sftp.rs + service/browse.rs + transport/sftp.rs)
+    browse/   mod.rs  packet.rs  http.rs  session.rs  ssh.rs  files.rs
+              (was sftp.rs + service/browse.rs + transport/sftp.rs + application/files.rs)
   api.rs                           server shell: listener, auth, limits, SSE, merging routers
 ```
 
@@ -178,6 +181,7 @@ pub trait Plugin: Send + Sync + 'static {
     fn disconnected(&self, ctx: &PluginContext, device_id: &str) {}
     fn unpaired(&self, ctx: &PluginContext, device_id: &str) {}
     fn device_state(&self, device_id: &str) -> Option<Value> { None }  // keyed by id()
+    fn started(self: Arc<Self>, ctx: &PluginContext) {}  // added in phase 4
     fn shutdown(&self) -> BoxFuture<'_, ()> { Box::pin(async {}) }
 }
 ```
@@ -284,7 +288,7 @@ takes one new trait feature at a time.
 | 1 (done) | battery | `device_state` + `device_changed`, `disconnected`/`unpaired` hooks, `DeviceSnapshot` extension (UI change) |
 | 2 (done) | clipboard | settings sections (UI + CLI change), `connected` hook, `broadcast`, plugin-owned global resource (`/clipboard`) |
 | 3 (done) | share | transfers extracted into a core service; `streaming_routes`; payload/TLS access through the context |
-| 4 | browse (sftp) | plugin-owned sessions, `shutdown` hook; `service/browse.rs` and `transport/sftp.rs` move into the plugin |
+| 4 (done) | browse (sftp) | plugin-owned sessions, `shutdown` (and `started`) hooks; `service/browse.rs` and `transport/sftp.rs` move into the plugin; SSH sign-in through the context; the clipboard follower moves into its plugin |
 | 5 | core cleanup | split what is left of `service.rs` into `devices`/`connections`/`pairing`; remove `ApplicationService`, `Query`, `Command`/`QueryResult` (the LAN command channel stays, as a core-internal type); rename `application` → `core`; move `RunningService` to a composition-root module; update ARCHITECTURE §2 and remove the "deliberately not a plugin system" notes |
 
 Phases 1–4 are independent enough to run in parallel worktrees once
@@ -595,3 +599,122 @@ Moving share (phase 3) showed:
     rest of the multipart body to look for further parts. A large upload
     then ends in `408` after the idle timeout rather than at once. The
     old `POST /transfers` did the same.
+
+Moving browse (phase 4) showed:
+
+- **The fixed table is gone.** Browse was its last user, so
+  `plugins::dispatch_incoming`, `IncomingPluginPacket`,
+  `PluginDispatchError` and `legacy_capabilities` went with it, and
+  `handle_peer_packet` drops any packet type no plugin claims. The
+  identity packet didn't change: the plugin claims `kdeconnect.sftp`
+  incoming and `kdeconnect.sftp.request` outgoing, as the table did.
+- **Sessions are the plugin's state.** `BrowsePlugin` owns `Sessions`
+  (`session.rs`): the per-device slots whose async lock serializes
+  opening, the offers being waited for, and the idle watchers' token,
+  behind its own locks. It closes a device's session in `disconnected`
+  and `unpaired`, which the core already calls from the four places that
+  used to call `close_browse_session` (unregistering a connection,
+  forgetting, and the peer unpairing us). Checking the device moved to
+  `ctx.can_send(device, "kdeconnect.sftp.request")` plus
+  `ctx.payload_peer(device)`, so `browse_connection` and `known_device`
+  went; the errors and their order (unknown, not paired, unsupported,
+  not connected) are the same. The operations are methods on the plugin
+  taking the context, like clipboard's: Rust callers write
+  `handle.plugin::<BrowsePlugin>()?.upload(&ctx, ..)`.
+- **`shutdown` is `fn shutdown(&self) -> BoxFuture<'_, ()>`,** run for
+  every plugin concurrently (`join_all`) by `ApplicationHandle::
+  shutdown_plugins`, which `RunningService` calls after
+  `shutdown_transfers`, as `shutdown_browsing` was. The order matters:
+  a transfer holds its session, and a session is only closed politely
+  once nothing holds it. A new `browse_e2e` test opens a session and
+  checks that `shutdown_plugins` closes its SSH connection.
+- **A `started` hook came with it, for clipboard.** Phase 2 left the
+  desktop clipboard's follower, and releasing the clipboard at shutdown,
+  in `RunningService`, reached through `plugin::<ClipboardPlugin>()`.
+  `Plugin::started(self: Arc<Self>, ctx)` is called once by
+  `RunningService` (`ApplicationHandle::start_plugins`) inside the
+  runtime, before the transport starts. It isn't called from
+  `ApplicationHandle::new`, because unit tests build cores outside a
+  runtime, where spawning would panic, and most don't want background
+  work. It takes `Arc<Self>` because the work it starts outlives the
+  call. `ClipboardService` gained two defaulted methods,
+  `watch_local_changes()` and `release()`, so the plugin follows and
+  releases whatever backend it was given without knowing it is the
+  desktop's. `RunningService` lost its clipboard field and the downcast;
+  `ApplicationHandle::plugin` is now used only by tests. The clipboard
+  is now released after transfers end rather than before; nothing
+  depends on that order.
+- **The SSH key goes through the core.**
+  `PayloadPeer::authenticate_ssh(&mut ssh, user)` signs in to an SSH
+  server on the device with this device's key and returns whether the
+  server took it. The plugin connects, checks the host key against
+  `peer.certificate_der()`, dials `peer.ip()`, and falls back to the
+  offer's password itself. Two alternatives were weighed: implementing
+  russh's agent-style `Signer` in the core would have kept the core
+  unaware of SSH sessions but meant producing SSH signature blobs by
+  hand; handing out an opaque key wrapper would still have given the
+  plugin the key to pass to russh. The cost of the chosen one is that the
+  core's API names russh types (`client::Handle`, `client::Handler`); the
+  core already depended on russh.
+- **Errors moved with the feature.** The ten browse variants of
+  `ApplicationError` (`InvalidRemotePath`, `RemoteFile*`,
+  `NotADirectory`, `IsADirectory`, `RemoteHostKeyMismatch`,
+  `RemoteFiles*`) became `BrowseError` in the plugin, with a `Core`
+  variant for core errors, and their `map_error` arms became its
+  `From<BrowseError> for ApiProblem`, with the same status codes and
+  problem codes. `ApiProblem` gained `with_detail` for
+  `files_unavailable`'s detail. `InvalidFileName` and `TransferTooLarge`
+  stay in the core: share uses them too.
+- **Types moved; the wire didn't.** `DirectoryListing`, `FileEntry` and
+  `FileKind` are now `plugins::browse::*` (the client and CLI import
+  them from there), and the upload route is the plugin's
+  `streaming_routes()`, so the server's streaming router holds only
+  plugin routes. Routes, JSON, events and error codes are unchanged; the
+  plugin's id, `browse`, appears nowhere on the wire, since it adds no
+  device state or settings.
+- **Core files only lost browse code or gained shared code.**
+  `service/browse.rs` (805 lines) left the core, `api.rs` lost 238 lines
+  net, `service.rs` 133, `plugins/mod.rs` 71 (the fixed table and its
+  tests), and `application.rs` 25 (the clipboard wiring). The core gained
+  the two hooks and their registry calls, `start_plugins`/
+  `shutdown_plugins`, `PayloadPeer::{ip, certificate_der,
+  authenticate_ssh}`, `ApiProblem::with_detail`, and
+  `testing::handle_with_plugins`.
+- **Also fixed here: `--discovery-loopback` was reachable from the LAN.**
+  It only changed where announcements went: discovery stayed bound to
+  `0.0.0.0:1716`, and the control listener and payload ports to
+  `0.0.0.0`, so during phase 3's checks a real phone on the LAN
+  connected to a daemon started that way. `LanConfig::loopback(port)` now binds
+  discovery to `127.255.255.255` (a socket on `127.0.0.1` doesn't
+  receive loopback broadcasts, so loopback instances couldn't find each
+  other) and the control listener to `127.0.0.1`; `RunningService` also
+  binds payload ports to `127.0.0.1` in that mode. A device added by a
+  loopback address is reached by the loopback broadcast; one off
+  loopback isn't announced to. `ss -lunpt` for a daemon, and for the app,
+  now shows only `127.255.255.255:1716` and `127.0.0.1` listeners (it
+  showed `0.0.0.0:1716` for UDP and TCP before). A test in `tests/lan.rs`
+  checks the binds and that loopback instances still meet, by broadcast
+  and by address. The fake phone example listens on the loopback
+  broadcast too.
+- **Checked live**, isolated (temporary dirs, loopback discovery, free
+  ports, a private Xvfb display and D-Bus session):
+  - CLI daemon against the fake phone: list, preview (`cat`), download,
+    upload, mkdir, move, recursive delete and the error codes
+    (`file_not_found`, `invalid_path`, `not_a_directory`); cancelling a
+    1.5 GB download and a 1 GiB upload mid-flight (no partial file on
+    either side); the phone disconnecting mid-download (transfer ends,
+    partial removed); and `SIGINT` with an open session and a running
+    download (the daemon exits, the SSH connection closes, no partial).
+    Key sign-in through the core worked; a restarted fake phone, which
+    forgets the desktop's key, fell back to the password as intended.
+  - The app against the fake phone: storage roots, a folder, downloading
+    a small file and 1.5 GB (byte-identical), uploading through the file
+    picker, cancelling a 2 GiB upload from the Transfers page (removed
+    from the phone), the phone disconnecting mid-download ("Connect Fake
+    Phone to browse its files", partial removed), and Quit from the tray
+    menu with a session open (the app exited in about 0.2 s and the SSH
+    connection closed).
+  - Clipboard after the move: three CLI daemons, two sharing an Xvfb
+    display with `--system-clipboard`; text set through one reached the
+    display's clipboard, the other followed it as a local copy and synced
+    it to its paired peer, and each daemon stopped within 0.2 s.

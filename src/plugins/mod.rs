@@ -1,26 +1,20 @@
 //! The daemon's features.
 //!
-//! A feature implements [`crate::application::Plugin`] and is listed in
-//! [`builtin`]; so far ping, find my phone, battery, clipboard and share
-//! do. Browsing is still routed by the fixed table below ([`dispatch_incoming`], [`legacy_capabilities`])
-//! while they move over (see `docs/research/feature-modules.md`). The set
-//! is fixed at compile time; nothing is loaded at runtime.
+//! Each feature implements [`crate::application::Plugin`] and is listed in
+//! [`builtin`]: ping, find my phone, battery, clipboard, share and browse.
+//! The set is fixed at compile time; nothing is loaded at runtime. See
+//! `docs/research/feature-modules.md`.
 
 pub mod battery;
+pub mod browse;
 pub mod clipboard;
 pub mod findmyphone;
 pub mod ping;
-pub mod sftp;
 pub mod share;
 
 use std::sync::Arc;
 
-use thiserror::Error;
-
-use crate::{
-    application::{Plugin, PluginRegistry},
-    protocol::{BodyError, Packet},
-};
+use crate::application::{Plugin, PluginRegistry};
 
 /// Every plugin in this build. `clipboard` is the clipboard that clipboard
 /// sync reads and writes: the desktop's, or an in-memory one.
@@ -33,6 +27,7 @@ pub fn builtin(
         Arc::new(battery::BatteryPlugin::default()),
         Arc::new(clipboard::ClipboardPlugin::new(clipboard)),
         Arc::new(share::SharePlugin),
+        Arc::new(browse::BrowsePlugin::default()),
     ]
 }
 
@@ -46,57 +41,12 @@ pub struct PluginCapabilities {
 }
 
 /// The packet types this build can send and receive: those of the
-/// [`builtin`] plugins, then those still in the fixed table.
+/// [`builtin`] plugins.
 pub fn capabilities() -> PluginCapabilities {
     let registry = PluginRegistry::new(builtin(clipboard::InMemoryClipboard::shared()));
-    let legacy = legacy_capabilities();
     PluginCapabilities {
-        incoming: registry
-            .incoming()
-            .map(str::to_owned)
-            .chain(legacy.incoming)
-            .collect(),
-        outgoing: registry
-            .outgoing()
-            .map(str::to_owned)
-            .chain(legacy.outgoing)
-            .collect(),
-    }
-}
-
-/// The packet types of the features not yet moved to a plugin. Browsing is
-/// one-way: this build asks peers to serve files, but serves none.
-fn legacy_capabilities() -> PluginCapabilities {
-    PluginCapabilities {
-        incoming: vec![sftp::PACKET_TYPE.to_owned()],
-        outgoing: vec![sftp::REQUEST_PACKET_TYPE.to_owned()],
-    }
-}
-
-/// A packet successfully routed to a registered plugin handler.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum IncomingPluginPacket {
-    Sftp(sftp::SftpBody),
-}
-
-#[derive(Debug, Error)]
-pub enum PluginDispatchError {
-    #[error("packet type {0:?} has no registered plugin handler")]
-    Unrecognized(String),
-    #[error("packet body could not be decoded")]
-    InvalidBody(#[from] BodyError),
-}
-
-/// Route a packet of a feature still in the fixed table by packet type.
-///
-/// Callers are responsible for enforcing that only paired devices reach
-/// this function (see `ApplicationHandle::handle_peer_packet`); capability
-/// filtering for outgoing packets is a separate, caller-side concern based
-/// on the peer's advertised `incomingCapabilities`.
-pub fn dispatch_incoming(packet: &Packet) -> Result<IncomingPluginPacket, PluginDispatchError> {
-    match packet.packet_type.as_str() {
-        sftp::PACKET_TYPE => Ok(IncomingPluginPacket::Sftp(packet.body_as()?)),
-        other => Err(PluginDispatchError::Unrecognized(other.to_owned())),
+        incoming: registry.incoming().map(str::to_owned).collect(),
+        outgoing: registry.outgoing().map(str::to_owned).collect(),
     }
 }
 
@@ -126,7 +76,7 @@ mod tests {
             strings(
                 &[
                     &bidirectional[..],
-                    &[sftp::PACKET_TYPE, battery::PACKET_TYPE]
+                    &[browse::PACKET_TYPE, battery::PACKET_TYPE]
                 ]
                 .concat()
             )
@@ -136,34 +86,13 @@ mod tests {
             strings(
                 &[
                     &bidirectional[..],
-                    &[sftp::REQUEST_PACKET_TYPE, findmyphone::REQUEST_PACKET_TYPE]
+                    &[
+                        browse::REQUEST_PACKET_TYPE,
+                        findmyphone::REQUEST_PACKET_TYPE
+                    ]
                 ]
                 .concat()
             )
         );
-    }
-
-    #[test]
-    fn sftp_replies_dispatch_to_the_sftp_handler() {
-        let packet = Packet::from_body(
-            1_u64,
-            sftp::PACKET_TYPE,
-            &serde_json::json!({"serverRunning": false}),
-        )
-        .unwrap();
-        assert!(matches!(
-            dispatch_incoming(&packet),
-            Ok(IncomingPluginPacket::Sftp(body)) if body.server_running == Some(false)
-        ));
-    }
-
-    #[test]
-    fn unknown_packet_type_is_rejected() {
-        let packet =
-            Packet::from_body(1_u64, "kdeconnect.mock.echo", &serde_json::json!({})).unwrap();
-        assert!(matches!(
-            dispatch_incoming(&packet),
-            Err(PluginDispatchError::Unrecognized(t)) if t == "kdeconnect.mock.echo"
-        ));
     }
 }

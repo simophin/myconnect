@@ -6,7 +6,6 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -18,7 +17,7 @@ use crate::{
     },
     plugins::{
         self,
-        clipboard::{ClipboardPlugin, ClipboardService, InMemoryClipboard, SystemClipboard},
+        clipboard::{ClipboardService, InMemoryClipboard, SystemClipboard},
     },
     protocol::{DeviceType, is_forbidden_name_character, is_valid_device_name},
     transport::{
@@ -28,7 +27,6 @@ use crate::{
 };
 
 mod events;
-mod files;
 mod payload;
 mod plugin;
 mod service;
@@ -41,13 +39,12 @@ mod transfers;
 use settings::Settings;
 
 pub use events::{ApplicationEvent, EventBus, EventBusError, EventData};
-pub use files::{DirectoryListing, FileEntry, FileKind};
-pub use payload::{AcceptedPayload, DialedPayload, PayloadListener, PayloadPeer};
+pub use payload::{AcceptedPayload, DialedPayload, PayloadListener, PayloadPeer, SshAuthError};
 pub use plugin::{
     Plugin, PluginContext, PluginEvent, PluginEventKind, PluginRegistry, PluginSettings,
     SettingsSection,
 };
-pub use service::{ApplicationError, ApplicationHandle, ApplicationService, RemoteFileContent};
+pub use service::{ApplicationError, ApplicationHandle, ApplicationService};
 pub use settings::{SettingsDefaults, SettingsPatch, SettingsSnapshot};
 pub use state::{
     Command, LocalDeviceSnapshot, OperationErrorCode, Pairing, PairingDirection, PairingSnapshot,
@@ -118,7 +115,6 @@ pub struct RunningService {
     application: ApplicationHandle,
     lan: LanService,
     server: ApiServer,
-    system_clipboard: Option<(Arc<SystemClipboard>, JoinHandle<()>)>,
 }
 
 impl RunningService {
@@ -161,18 +157,14 @@ impl RunningService {
         }
         let device_name = initial.device_name.clone();
         let system_clipboard = if request.system_clipboard {
-            match SystemClipboard::start() {
-                Ok(clipboard) => Some(Arc::new(clipboard)),
-                Err(error) => {
-                    warn!(%error, "using an in-memory clipboard instead");
-                    None
-                }
-            }
+            SystemClipboard::start()
+                .inspect_err(|error| warn!(%error, "using an in-memory clipboard instead"))
+                .ok()
         } else {
             None
         };
-        let clipboard: Arc<dyn ClipboardService + Send + Sync> = match &system_clipboard {
-            Some(clipboard) => clipboard.clone(),
+        let clipboard: Arc<dyn ClipboardService + Send + Sync> = match system_clipboard {
+            Some(clipboard) => Arc::new(clipboard),
             None => InMemoryClipboard::shared(),
         };
         let (application, commands) = ApplicationHandle::new(
@@ -190,18 +182,8 @@ impl RunningService {
             transfer_config,
         )?;
         application.install_settings(settings);
+        application.start_plugins();
         let shutdown = CancellationToken::new();
-        let system_clipboard = system_clipboard.map(|clipboard| {
-            let follower = application
-                .plugin::<ClipboardPlugin>()
-                .expect("the clipboard plugin is built in")
-                .follow_local_changes(
-                    application.plugin_context(),
-                    clipboard.local_changes(),
-                    shutdown.child_token(),
-                );
-            (clipboard, follower)
-        });
         let capabilities = plugins::capabilities();
         let lan_config = if request.discovery_loopback {
             LanConfig::loopback(DISCOVERY_PORT)
@@ -239,7 +221,6 @@ impl RunningService {
             application,
             lan,
             server,
-            system_clipboard,
         })
     }
 
@@ -249,25 +230,19 @@ impl RunningService {
         self.server.local_addr()
     }
 
-    /// Stop the control API and LAN transport, then give in-flight transfers
-    /// a bounded window to clean up their partial files.
+    /// Stop the control API and LAN transport, give in-flight transfers a
+    /// bounded window to clean up their partial files, then stop the
+    /// plugins.
     pub async fn shutdown(self) -> Result<()> {
         let Self {
             application,
             lan,
             server,
-            system_clipboard,
         } = self;
         let server_result = server.shutdown().await;
         let lan_result = lan.shutdown().await;
-        if let Some((clipboard, follower)) = system_clipboard {
-            follower.abort();
-            // Joining the clipboard thread may wait briefly for a clipboard
-            // manager to take over the text we own (X11).
-            let _ = tokio::task::spawn_blocking(move || clipboard.stop()).await;
-        }
         application.shutdown_transfers(Duration::from_secs(5)).await;
-        application.shutdown_browsing().await;
+        application.shutdown_plugins().await;
         server_result?;
         lan_result?;
         Ok(())

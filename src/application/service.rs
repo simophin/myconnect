@@ -5,8 +5,6 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use bytes::Bytes;
-use futures_util::future::BoxFuture;
 use thiserror::Error;
 use tokio::{
     sync::{broadcast, mpsc, watch},
@@ -20,7 +18,6 @@ use super::{
     ApplicationEvent, Command, EventBus, EventBusError, LocalDeviceSnapshot, OperationErrorCode,
     Pairing, PairingDirection, PairingSnapshot, PairingStatus, PairingTransitionError, Query,
     QueryResult, StatusSnapshot, TransferSnapshot,
-    files::{DirectoryListing, FileEntry},
     payload::PayloadPeer,
     plugin::{Plugin, PluginContext, PluginRegistry},
     settings::{Settings, SettingsDefaults, SettingsPatch, SettingsSnapshot},
@@ -32,14 +29,9 @@ use crate::{
         LocalIdentity, SettingsError, TrustError, TrustStore, TrustedDevice, TrustedIdentity,
     },
     device::{DeviceReachability, DeviceSnapshot},
-    plugins,
     protocol::{DeviceType, IdentityBody, Packet, PairingBody, verification_code},
     transport::tls::subject_public_key_info,
 };
-
-mod browse;
-
-pub use browse::RemoteFileContent;
 
 /// How long a pairing session may remain non-terminal before it expires.
 pub const PAIRING_TIMEOUT: Duration = Duration::from_secs(30);
@@ -64,44 +56,6 @@ pub trait ApplicationService: Send + Sync {
     fn plugin_streaming_routes(&self) -> axum::Router;
     fn update_settings(&self, patch: SettingsPatch) -> Result<SettingsSnapshot, ApplicationError>;
     fn cancel_transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, ApplicationError>;
-    fn list_files(
-        &self,
-        device_id: String,
-        path: Option<String>,
-    ) -> BoxFuture<'static, Result<DirectoryListing, ApplicationError>>;
-    fn open_remote_file(
-        &self,
-        device_id: String,
-        path: String,
-    ) -> BoxFuture<'static, Result<RemoteFileContent, ApplicationError>>;
-    fn begin_file_download(
-        &self,
-        device_id: String,
-        path: String,
-    ) -> BoxFuture<'static, Result<TransferSnapshot, ApplicationError>>;
-    fn begin_file_upload(
-        &self,
-        device_id: String,
-        directory: String,
-        file_name: String,
-        declared_size: u64,
-    ) -> BoxFuture<'static, Result<(TransferSnapshot, mpsc::Sender<Bytes>), ApplicationError>>;
-    fn create_remote_directory(
-        &self,
-        device_id: String,
-        path: String,
-    ) -> BoxFuture<'static, Result<FileEntry, ApplicationError>>;
-    fn move_remote_file(
-        &self,
-        device_id: String,
-        from: String,
-        to: String,
-    ) -> BoxFuture<'static, Result<FileEntry, ApplicationError>>;
-    fn delete_remote_file(
-        &self,
-        device_id: String,
-        path: String,
-    ) -> BoxFuture<'static, Result<(), ApplicationError>>;
 }
 
 /// A live, TLS-authenticated control-channel connection to a peer, as
@@ -155,7 +109,6 @@ pub struct ApplicationHandle {
     commands: mpsc::Sender<Command>,
     events: EventBus,
     transfers: Transfers,
-    browsing: Arc<browse::Browsing>,
     plugins: Arc<PluginRegistry>,
 }
 
@@ -206,7 +159,6 @@ impl ApplicationHandle {
                 commands,
                 events,
                 transfers,
-                browsing: Arc::default(),
                 plugins: Arc::new(plugins),
             },
             receiver,
@@ -471,7 +423,6 @@ impl ApplicationHandle {
             (had_connection, failed_pairing)
         };
         self.transfers.cancel_device(device_id);
-        self.close_browse_session(device_id);
         if had_connection {
             self.plugins.disconnected(&self.plugin_context(), device_id);
             let _ = self.mark_device_disconnected(device_id);
@@ -481,6 +432,18 @@ impl ApplicationHandle {
                 .events
                 .publish(super::EventData::PairingUpdated(snapshot));
         }
+    }
+
+    /// Start what plugins run of their own. Called once by the code that
+    /// starts the daemon, inside the async runtime.
+    pub fn start_plugins(&self) {
+        self.plugins.started(&self.plugin_context());
+    }
+
+    /// Stop every plugin's own work and close what plugins hold open.
+    /// Called during daemon shutdown, after [`Self::shutdown_transfers`].
+    pub async fn shutdown_plugins(&self) {
+        self.plugins.shutdown().await;
     }
 
     /// Cancel every in-progress transfer task and wait up to `deadline` for
@@ -531,7 +494,6 @@ impl ApplicationHandle {
             self.plugins.disconnected(&ctx, device_id);
         }
         self.plugins.unpaired(&ctx, device_id);
-        self.close_browse_session(device_id);
         if let Some(snapshot) = failed_pairing {
             let _ = self
                 .events
@@ -751,9 +713,9 @@ impl ApplicationHandle {
     ///
     /// `kdeconnect.pair` packets are always handled, independent of pairing
     /// state, since pairing itself establishes trust. Every other packet
-    /// type is routed to the plugin that handles it, or else to the fixed
-    /// table in [`crate::plugins`], only if the sending device is currently
-    /// paired; unpaired connections cannot trigger any other behavior.
+    /// type is routed to the plugin that handles it, only if the sending
+    /// device is currently paired; unpaired connections cannot trigger any
+    /// other behavior. A type no plugin handles is dropped.
     pub fn handle_peer_packet(&self, device_id: &str, packet: Packet) {
         tracing::debug!(device_id, packet_type = %packet.packet_type, "packet received");
         if packet.packet_type == "kdeconnect.pair" {
@@ -777,10 +739,6 @@ impl ApplicationHandle {
 
         if let Some(plugin) = self.plugins.for_packet(&packet.packet_type) {
             plugin.handle_packet(&self.plugin_context(), &device, &packet);
-            return;
-        }
-        if let Ok(plugins::IncomingPluginPacket::Sftp(body)) = plugins::dispatch_incoming(&packet) {
-            self.handle_sftp_reply(device_id, body);
         }
     }
 
@@ -952,7 +910,6 @@ impl ApplicationHandle {
             let _ = state.devices.set_paired(device_id, false);
         }
         self.plugins.unpaired(&self.plugin_context(), device_id);
-        self.close_browse_session(device_id);
         self.publish_device_update(device_id);
     }
 
@@ -1384,76 +1341,6 @@ impl ApplicationService for ApplicationHandle {
     fn cancel_transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, ApplicationError> {
         ApplicationHandle::cancel_transfer(self, transfer_id)
     }
-
-    fn list_files(
-        &self,
-        device_id: String,
-        path: Option<String>,
-    ) -> BoxFuture<'static, Result<DirectoryListing, ApplicationError>> {
-        let handle = self.clone();
-        Box::pin(async move { handle.list_files(&device_id, path).await })
-    }
-
-    fn open_remote_file(
-        &self,
-        device_id: String,
-        path: String,
-    ) -> BoxFuture<'static, Result<RemoteFileContent, ApplicationError>> {
-        let handle = self.clone();
-        Box::pin(async move { handle.open_remote_file(&device_id, &path).await })
-    }
-
-    fn begin_file_download(
-        &self,
-        device_id: String,
-        path: String,
-    ) -> BoxFuture<'static, Result<TransferSnapshot, ApplicationError>> {
-        let handle = self.clone();
-        Box::pin(async move { handle.begin_file_download(&device_id, &path).await })
-    }
-
-    fn begin_file_upload(
-        &self,
-        device_id: String,
-        directory: String,
-        file_name: String,
-        declared_size: u64,
-    ) -> BoxFuture<'static, Result<(TransferSnapshot, mpsc::Sender<Bytes>), ApplicationError>> {
-        let handle = self.clone();
-        Box::pin(async move {
-            handle
-                .begin_file_upload(&device_id, &directory, &file_name, declared_size)
-                .await
-        })
-    }
-
-    fn create_remote_directory(
-        &self,
-        device_id: String,
-        path: String,
-    ) -> BoxFuture<'static, Result<FileEntry, ApplicationError>> {
-        let handle = self.clone();
-        Box::pin(async move { handle.create_remote_directory(&device_id, &path).await })
-    }
-
-    fn move_remote_file(
-        &self,
-        device_id: String,
-        from: String,
-        to: String,
-    ) -> BoxFuture<'static, Result<FileEntry, ApplicationError>> {
-        let handle = self.clone();
-        Box::pin(async move { handle.move_remote_file(&device_id, &from, &to).await })
-    }
-
-    fn delete_remote_file(
-        &self,
-        device_id: String,
-        path: String,
-    ) -> BoxFuture<'static, Result<(), ApplicationError>> {
-        let handle = self.clone();
-        Box::pin(async move { handle.delete_remote_file(&device_id, &path).await })
-    }
 }
 
 /// The paired peers in `trust_store`, as unreachable until they are seen.
@@ -1575,26 +1462,6 @@ pub enum ApplicationError {
     InvalidSettings,
     #[error("transfer is not in a state that allows this operation")]
     InvalidTransferState,
-    #[error("remote path must be absolute, without `.` or `..` segments")]
-    InvalidRemotePath,
-    #[error("the device isn't sharing its files")]
-    RemoteFilesUnavailable { reason: Option<String> },
-    #[error("no such file or directory on the device")]
-    RemoteFileNotFound,
-    #[error("a file or directory of that name already exists on the device")]
-    RemoteFileExists,
-    #[error("the device denied access to that file or directory")]
-    RemotePermissionDenied,
-    #[error("not a directory")]
-    NotADirectory,
-    #[error("is a directory")]
-    IsADirectory,
-    #[error("the device's file server doesn't hold the device's paired key")]
-    RemoteHostKeyMismatch,
-    #[error("browsing the device's files failed")]
-    RemoteFilesFailed,
-    #[error("the device took too long to answer")]
-    RemoteFilesTimedOut,
     #[error("internal application error")]
     Internal,
 }

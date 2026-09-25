@@ -20,14 +20,18 @@ use futures_util::StreamExt;
 use myconnect::{
     api::{ApiServer, ApiServerConfig},
     application::{
-        ApplicationHandle, ApplicationService, FileKind, LocalDeviceSnapshot, Query, QueryResult,
+        ApplicationHandle, ApplicationService, LocalDeviceSnapshot, Query, QueryResult,
         TransferConfig, TransferDirection, TransferSnapshot, TransferStatus,
     },
     client::{ApiClient, ClientError},
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     device::DeviceReachability,
     plugins::clipboard::InMemoryClipboard,
-    plugins::{self, battery::BatteryStatus},
+    plugins::{
+        self,
+        battery::BatteryStatus,
+        browse::{BrowsePlugin, FileKind},
+    },
     protocol::DeviceType,
     transport::{
         lan::{LanConfig, LanService, LocalDeviceInfo, TCP_PORT_RANGE},
@@ -604,11 +608,44 @@ async fn a_stopped_server_or_a_lost_device_ends_the_session() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutting_down_closes_open_sessions() {
+    let harness = harness(android_roots(), false).await;
+    let log = harness.phone.log.clone();
+    harness
+        .client
+        .list_files(&harness.phone_id, None)
+        .await
+        .unwrap();
+    assert_eq!(log.open_connections.load(Ordering::SeqCst), 1);
+
+    harness
+        .desktop
+        .shutdown_transfers(Duration::from_secs(1))
+        .await;
+    harness.desktop.shutdown_plugins().await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while log.open_connections.load(Ordering::SeqCst) != 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the session's connection closes");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cancelled_upload_leaves_nothing_behind() {
     let harness = harness(android_roots(), false).await;
     let (transfer, sender) = harness
         .desktop
-        .begin_file_upload(&harness.phone_id, INTERNAL, "partial.bin", 1_000_000)
+        .plugin::<BrowsePlugin>()
+        .unwrap()
+        .upload(
+            &harness.desktop.plugin_context(),
+            &harness.phone_id,
+            INTERNAL,
+            "partial.bin",
+            1_000_000,
+        )
         .await
         .unwrap();
     sender
