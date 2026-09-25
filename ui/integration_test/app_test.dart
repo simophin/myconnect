@@ -232,6 +232,33 @@ void main() {
     );
   });
 
+  testWidgets('sends the clipboard to a peer that missed it', (tester) async {
+    await launchApp(tester);
+    await pairWithPeer(tester);
+
+    // The app gets the peer's text, then the peer copies something else
+    // while its sync is off, so the two stay apart until asked. The peer's
+    // packets reach the app in order over one connection, long before the
+    // tap below.
+    await peer.put('/clipboard', {'text': 'from the app'});
+    await peer.patch('/settings', {'clipboardSyncEnabled': false});
+    await peer.put('/clipboard', {'text': 'only on the peer'});
+    await peer.patch('/settings', {'clipboardSyncEnabled': true});
+
+    await tester.tap(find.text(peerName));
+    final send = find.ancestor(
+      of: find.text('Send clipboard'),
+      matching: find.bySubtype<ButtonStyleButton>(),
+    );
+    await pumpUntilEnabled(tester, send);
+    await tester.tap(send);
+    await pumpUntil(tester, find.text('Sent the clipboard to $peerName.'));
+    await peer.waitFor(
+      'the peer to receive the clipboard',
+      () async => await peer.clipboardText() == 'from the app',
+    );
+  });
+
   testWidgets('sends a file to the peer and receives one back', (tester) async {
     await launchApp(tester);
     final appId = await pairWithPeer(tester);

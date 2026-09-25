@@ -75,6 +75,20 @@ class _DeviceDetailsState extends ConsumerState<_DeviceDetails> {
     }
   }
 
+  Future<void> _sendClipboard() async {
+    // The device can drop, and unmount this page, before the call returns.
+    final messenger = ScaffoldMessenger.of(context);
+    final device = widget.device;
+    try {
+      await (await ref.read(apiProvider.future)).sendClipboard(device.deviceId);
+      messenger.showSnackBar(
+        SnackBar(content: Text('Sent the clipboard to ${device.deviceName}.')),
+      );
+    } on Object catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(describeError(error))));
+    }
+  }
+
   Future<void> _unpair() async {
     final device = widget.device;
     final confirmed = await showDialog<bool>(
@@ -156,6 +170,12 @@ class _DeviceDetailsState extends ConsumerState<_DeviceDetails> {
               icon: const Icon(Icons.notifications_active_outlined),
               label: const Text('Ping'),
             ),
+            if (device.supportsClipboard)
+              FilledButton.tonalIcon(
+                onPressed: device.acceptsClipboard ? _sendClipboard : null,
+                icon: const Icon(Icons.content_paste_go),
+                label: const Text('Send clipboard'),
+              ),
           ],
         ),
         if (transfers.isNotEmpty) ...[

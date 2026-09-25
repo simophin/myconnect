@@ -26,9 +26,7 @@ void main() {
     expect(find.text('This computer: Desk'), findsOneWidget);
   });
 
-  testWidgets('a device shows its battery once it reports one', (
-    tester,
-  ) async {
+  testWidgets('a device shows its battery once it reports one', (tester) async {
     final daemon = TestDaemon()..devices = [device(name: 'Pixel')];
     await pumpApp(tester, daemon);
     expect(find.text('Connected'), findsOneWidget);
@@ -183,6 +181,42 @@ void main() {
 
     verify(() => daemon.api.ping(device().deviceId)).called(1);
     expect(find.text('Pinged Pixel.'), findsOneWidget);
+  });
+
+  testWidgets('the clipboard can be sent to a device that takes it', (
+    tester,
+  ) async {
+    final send = find.widgetWithText(FilledButton, 'Send clipboard');
+    final daemon = TestDaemon()..devices = [device(name: 'Pixel')];
+    when(() => daemon.api.sendClipboard(any())).thenAnswer((_) async {});
+    await pumpApp(tester, daemon);
+    await tester.tap(find.text('Pixel'));
+    await tester.pumpAndSettle();
+    expect(send, findsNothing);
+
+    daemon.events.add(
+      DeviceChanged(
+        device(
+          name: 'Pixel',
+          incomingCapabilities: [clipboardCapability],
+          reachability: DeviceReachability.unavailable,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.widget<FilledButton>(send).onPressed, isNull);
+
+    daemon.events.add(
+      DeviceChanged(
+        device(name: 'Pixel', incomingCapabilities: [clipboardCapability]),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(send);
+    await tester.pumpAndSettle();
+
+    verify(() => daemon.api.sendClipboard(device().deviceId)).called(1);
+    expect(find.text('Sent the clipboard to Pixel.'), findsOneWidget);
   });
 
   testWidgets('the transfers page shows progress and cancels', (tester) async {

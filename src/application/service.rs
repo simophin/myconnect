@@ -100,6 +100,7 @@ pub trait ApplicationService: Send + Sync {
     fn forget_device(&self, device_id: &str) -> Result<(), ApplicationError>;
     fn announce_to(&self, address: Ipv4Addr) -> Result<(), ApplicationError>;
     fn send_ping(&self, device_id: &str, message: Option<String>) -> Result<(), ApplicationError>;
+    fn send_clipboard(&self, device_id: &str) -> Result<(), ApplicationError>;
     fn set_clipboard(&self, text: String) -> Result<ClipboardSnapshot, ApplicationError>;
     fn update_settings(&self, patch: SettingsPatch) -> Result<SettingsSnapshot, ApplicationError>;
     fn begin_outgoing_transfer(
@@ -872,35 +873,72 @@ impl ApplicationHandle {
         device_id: &str,
         message: Option<String>,
     ) -> Result<(), ApplicationError> {
-        let connection = {
-            let state = self.read_state()?;
-            let device = state
-                .devices
-                .get(device_id)
-                .ok_or(ApplicationError::UnknownDevice)?;
-            if !device.paired {
-                return Err(ApplicationError::NotPaired);
-            }
-            if !device
-                .incoming_capabilities
-                .iter()
-                .any(|capability| capability == plugins::ping::PACKET_TYPE)
-            {
-                return Err(ApplicationError::UnsupportedByPeer);
-            }
-            state
-                .connections
-                .get(device_id)
-                .cloned()
-                .ok_or(ApplicationError::DeviceNotConnected)?
-        };
-
+        let connection = self.capable_connection(device_id, plugins::ping::PACKET_TYPE)?;
         let packet = plugins::ping::build_packet(unix_millis(), message)
             .map_err(|_| ApplicationError::Internal)?;
         connection
             .packets
             .try_send(packet)
             .map_err(|_| ApplicationError::DeviceNotConnected)
+    }
+
+    /// Send this machine's clipboard text to one paired, connected device
+    /// as a plain `kdeconnect.clipboard` packet, on the user's request. It
+    /// complements automatic sync for when a device missed an update, e.g.
+    /// text that was already on the clipboard when the daemon started, so
+    /// it reads the clipboard itself rather than the synced snapshot, and
+    /// works while `clipboardSyncEnabled` is off. Refused, with a typed
+    /// error, unless the device is paired, connected, and has advertised
+    /// `kdeconnect.clipboard`, or when there is no text to send.
+    pub fn send_clipboard(&self, device_id: &str) -> Result<(), ApplicationError> {
+        let connection = self.capable_connection(device_id, plugins::clipboard::PACKET_TYPE)?;
+        let text = match self.clipboard_service.get() {
+            Ok(Some(text)) if !text.is_empty() => text,
+            _ => self.read_state()?.clipboard.text.clone(),
+        };
+        if text.is_empty() {
+            return Err(ApplicationError::ClipboardEmpty);
+        }
+        if text.len() > MAX_CLIPBOARD_TEXT_BYTES {
+            return Err(ApplicationError::ClipboardTextTooLarge {
+                limit: MAX_CLIPBOARD_TEXT_BYTES,
+            });
+        }
+        let packet = plugins::clipboard::build_packet(unix_millis(), text)
+            .map_err(|_| ApplicationError::Internal)?;
+        connection
+            .packets
+            .try_send(packet)
+            .map_err(|_| ApplicationError::DeviceNotConnected)
+    }
+
+    /// The live connection to `device_id`, provided the device is paired
+    /// and has advertised `capability` in its `incomingCapabilities`.
+    fn capable_connection(
+        &self,
+        device_id: &str,
+        capability: &str,
+    ) -> Result<Connection, ApplicationError> {
+        let state = self.read_state()?;
+        let device = state
+            .devices
+            .get(device_id)
+            .ok_or(ApplicationError::UnknownDevice)?;
+        if !device.paired {
+            return Err(ApplicationError::NotPaired);
+        }
+        if !device
+            .incoming_capabilities
+            .iter()
+            .any(|advertised| advertised == capability)
+        {
+            return Err(ApplicationError::UnsupportedByPeer);
+        }
+        state
+            .connections
+            .get(device_id)
+            .cloned()
+            .ok_or(ApplicationError::DeviceNotConnected)
     }
 
     /// Set the local clipboard text and synchronize it to every paired,
@@ -2164,6 +2202,10 @@ impl ApplicationService for ApplicationHandle {
         ApplicationHandle::send_ping(self, device_id, message)
     }
 
+    fn send_clipboard(&self, device_id: &str) -> Result<(), ApplicationError> {
+        ApplicationHandle::send_clipboard(self, device_id)
+    }
+
     fn set_clipboard(&self, text: String) -> Result<ClipboardSnapshot, ApplicationError> {
         ApplicationHandle::set_clipboard(self, text)
     }
@@ -2361,6 +2403,8 @@ pub enum ApplicationError {
     Trust(#[source] TrustError),
     #[error("clipboard text exceeds the {limit}-byte limit")]
     ClipboardTextTooLarge { limit: usize },
+    #[error("the clipboard has no text to send")]
+    ClipboardEmpty,
     #[error("file name must not be empty")]
     InvalidFileName,
     #[error("declared transfer size exceeds the {limit}-byte limit")]
@@ -2977,6 +3021,59 @@ mod tests {
             QueryResult::Clipboard(current) => assert_eq!(current.text, "newer"),
             other => panic!("unexpected query result: {other:?}"),
         }
+    }
+
+    #[test]
+    fn clipboard_is_sent_on_request_to_one_capable_device() {
+        let (handle, _commands) = handle();
+        let device_id = "740bd4b9b4184ee497d6caf1da8151be";
+        let other_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let mut rx = connect_paired_clipboard_peer(&handle, device_id);
+        let mut other_rx = connect_paired_clipboard_peer(&handle, other_id);
+
+        assert!(matches!(
+            handle.send_clipboard(device_id),
+            Err(ApplicationError::ClipboardEmpty)
+        ));
+
+        // Text that was on the clipboard before the daemon started never
+        // reaches the snapshot, but an explicit send still finds it.
+        handle.clipboard_service.set("already there").unwrap();
+        handle.send_clipboard(device_id).unwrap();
+        let sent = rx.try_recv().unwrap();
+        assert_eq!(sent.packet_type, plugins::clipboard::PACKET_TYPE);
+        let body: plugins::clipboard::ClipboardBody = sent.body_as().unwrap();
+        assert_eq!(body.content, "already there");
+        assert!(other_rx.try_recv().is_err());
+
+        // Unlike automatic sync, it resends unchanged text, and works while
+        // sync is off.
+        handle.set_clipboard_sync_enabled(false);
+        handle.send_clipboard(device_id).unwrap();
+        rx.try_recv().unwrap();
+    }
+
+    #[test]
+    fn clipboard_is_not_sent_to_devices_without_the_capability() {
+        let (handle, _commands) = handle();
+        let device_id = "740bd4b9b4184ee497d6caf1da8151be";
+        handle
+            .discover_device(&make_identity(device_id, Vec::new()), true, 1)
+            .unwrap();
+        let (tx, _rx) = mpsc::channel(4);
+        handle
+            .register_connection(device_id, vec![1, 2, 3], 8, tx, CancellationToken::new(), 1)
+            .unwrap();
+        handle.set_clipboard("hello".into()).unwrap();
+
+        assert!(matches!(
+            handle.send_clipboard(device_id),
+            Err(ApplicationError::UnsupportedByPeer)
+        ));
+        assert!(matches!(
+            handle.send_clipboard("cccccccccccccccccccccccccccccccc"),
+            Err(ApplicationError::UnknownDevice)
+        ));
     }
 
     #[test]

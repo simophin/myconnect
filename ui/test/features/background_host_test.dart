@@ -271,6 +271,45 @@ void main() {
     expect(find.text('Files on Pixel'), findsOneWidget);
   });
 
+  testWidgets('the tray sends the clipboard only to devices that take it', (
+    tester,
+  ) async {
+    final daemon = TestDaemon()
+      ..devices = [
+        device(name: 'Pixel', incomingCapabilities: [clipboardCapability]),
+        device(
+          id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          name: 'Laptop',
+          incomingCapabilities: [pingCapability],
+        ),
+      ];
+    when(() => daemon.api.sendClipboard(any())).thenAnswer((_) async {});
+    await pumpApp(tester, daemon);
+    final shell = daemon.shell;
+    shell.onCloseRequested!();
+    await tester.pumpAndSettle();
+
+    expect(
+      () => shell.trayItem(['Laptop', 'Send clipboard']),
+      throwsStateError,
+    );
+    shell.selectTrayItem(['Pixel', 'Send clipboard']);
+    await tester.pumpAndSettle();
+    verify(() => daemon.api.sendClipboard('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'))
+        .called(1);
+    expect(shell.visible, isFalse);
+    expect(daemon.notifications.shown, isEmpty);
+
+    when(
+      () => daemon.api.sendClipboard(any()),
+    ).thenThrow(const ApiException(code: 'clipboard_empty', statusCode: 409));
+    shell.selectTrayItem(['Pixel', 'Send clipboard']);
+    await tester.pumpAndSettle();
+    expect(daemon.notifications.shown.values, [
+      'There is no text on the clipboard to send.',
+    ]);
+  });
+
   testWidgets('pinging from the tray reports only a failure', (tester) async {
     final daemon = TestDaemon()
       ..devices = [

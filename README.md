@@ -45,7 +45,7 @@ The CLI interface is command based, allowing users to interact with MyConnect th
 - `myconnect ping <device-id> [message]` - Ping a paired device, optionally
   with a message. Receiving pings is not supported yet.
 - `myconnect send <device-id> <file> [--watch]` - Stream a file to a device.
-- `myconnect clipboard get|set <text>|watch` - Control text synchronization.
+- `myconnect clipboard get|set <text>|watch|send <device-id>` - Control text synchronization, or send the clipboard to one device now.
 
 Add `--json` for machine-readable output. `--api-host`/`--api-port` (global
 flags, default `127.0.0.1:24816`) set the address the control API listens on
