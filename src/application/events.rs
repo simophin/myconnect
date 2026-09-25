@@ -7,10 +7,12 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::broadcast;
 
-use super::{ClipboardSnapshot, PairingSnapshot, ReceivedPing, SettingsSnapshot, TransferSnapshot};
+use super::{ClipboardSnapshot, PairingSnapshot, PluginEvent, SettingsSnapshot, TransferSnapshot};
 use crate::device::DeviceSnapshot;
 
-/// Data carried by an application event.
+/// Data carried by an application event: one of the core's own, or a
+/// plugin's. Both serialize as `{"type": ..., "data": ...}`; any type the
+/// core doesn't know deserializes as [`EventData::Plugin`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum EventData {
@@ -42,12 +44,13 @@ pub enum EventData {
     ClipboardChanged(ClipboardSnapshot),
     #[serde(rename = "settings.changed")]
     SettingsChanged(SettingsSnapshot),
-    #[serde(rename = "ping.received")]
-    PingReceived(ReceivedPing),
+    /// Must stay last: variants are tried in order when deserializing.
+    #[serde(untagged)]
+    Plugin(PluginEvent),
 }
 
 impl EventData {
-    pub fn event_type(&self) -> &'static str {
+    pub fn event_type(&self) -> &str {
         match self {
             Self::DeviceDiscovered(_) => "device.discovered",
             Self::DeviceConnected(_) => "device.connected",
@@ -62,7 +65,7 @@ impl EventData {
             Self::TransferFailed(_) => "transfer.failed",
             Self::ClipboardChanged(_) => "clipboard.changed",
             Self::SettingsChanged(_) => "settings.changed",
-            Self::PingReceived(_) => "ping.received",
+            Self::Plugin(event) => event.event_type(),
         }
     }
 }
@@ -203,6 +206,41 @@ mod tests {
         assert_eq!(value["type"], "clipboard.changed");
         assert_eq!(value["data"]["text"], "hello");
         assert!(value.get("event").is_none());
+    }
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct Waved {
+        hand: String,
+    }
+
+    impl super::super::PluginEventKind for Waved {
+        const TYPE: &'static str = "wave.received";
+    }
+
+    #[test]
+    fn plugin_events_have_the_same_shape_as_core_events_and_round_trip() {
+        let bus = EventBus::new(1).unwrap();
+        let waved = Waved {
+            hand: "left".into(),
+        };
+        let event = bus
+            .publish(EventData::Plugin(PluginEvent::new(&waved).unwrap()))
+            .unwrap();
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["type"], "wave.received");
+        assert_eq!(value["data"]["hand"], "left");
+        assert_eq!(event.event.event_type(), "wave.received");
+
+        let parsed: ApplicationEvent = serde_json::from_value(value).unwrap();
+        let EventData::Plugin(plugin) = parsed.event else {
+            panic!("expected a plugin event");
+        };
+        assert_eq!(plugin.decode::<Waved>(), Some(waved));
+
+        // Core events still parse as their own variants.
+        let core = serde_json::to_value(bus.publish(clipboard("hi")).unwrap()).unwrap();
+        let parsed: ApplicationEvent = serde_json::from_value(core).unwrap();
+        assert!(matches!(parsed.event, EventData::ClipboardChanged(_)));
     }
 
     #[test]

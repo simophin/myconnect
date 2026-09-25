@@ -16,6 +16,7 @@ use myconnect::{
     },
     config::ApiToken,
     device::DeviceSnapshot,
+    plugins::ping::ReceivedPing,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -649,9 +650,14 @@ fn print_event(event: &ApplicationEvent, json_output: bool) {
                 print_pairing(pairing, false)
             }
             EventData::SettingsChanged(settings) => print_settings(settings, false),
-            EventData::PingReceived(ping) => match &ping.message {
-                Some(message) => println!("Ping from {}: {message}", ping.device_name),
-                None => println!("Ping from {}", ping.device_name),
+            EventData::Plugin(event) => match event.decode::<ReceivedPing>() {
+                Some(ReceivedPing {
+                    device_name,
+                    message: Some(message),
+                    ..
+                }) => println!("Ping from {device_name}: {message}"),
+                Some(ReceivedPing { device_name, .. }) => println!("Ping from {device_name}"),
+                None => println!("{}", event.event_type()),
             },
         }
     }

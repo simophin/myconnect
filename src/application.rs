@@ -27,21 +27,25 @@ use crate::{
 
 mod events;
 mod files;
+mod plugin;
 mod service;
 mod settings;
 mod state;
+#[cfg(test)]
+pub(crate) mod testing;
 mod transfer;
 
 use settings::Settings;
 
 pub use events::{ApplicationEvent, EventBus, EventBusError, EventData};
 pub use files::{DirectoryListing, FileEntry, FileKind};
+pub use plugin::{Plugin, PluginContext, PluginEvent, PluginEventKind, PluginRegistry};
 pub use service::{ApplicationError, ApplicationHandle, ApplicationService, RemoteFileContent};
 pub use settings::{SettingsDefaults, SettingsPatch, SettingsSnapshot};
 pub use state::{
     ClipboardSnapshot, Command, LocalDeviceSnapshot, MAX_CLIPBOARD_TEXT_BYTES, OperationErrorCode,
     Pairing, PairingDirection, PairingSnapshot, PairingStatus, PairingTransitionError, Query,
-    QueryResult, ReceivedPing, StatusSnapshot, Transfer, TransferDirection, TransferProgressError,
+    QueryResult, StatusSnapshot, Transfer, TransferDirection, TransferProgressError,
     TransferSnapshot, TransferStatus, TransferTransitionError,
 };
 pub use transfer::{DEFAULT_MAX_TRANSFER_BYTES, FileNameError, TransferConfig};
