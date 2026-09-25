@@ -23,7 +23,11 @@ Step 11 is done: the device page sends files through a picker, and files
 dropped on the window go to the page's device or to a chooser. Step 12
 is done: *Browse files* opens a file browser that lists, previews,
 downloads, uploads (picked or dropped on the open folder), renames,
-creates folders and deletes. Next is step 13. Each finished step says so under its heading, with what differs
+creates folders and deletes. Step 13 is done on Linux: the tray and its
+menu, close-to-tray, quit, notifications, the saved window placement and
+a single instance; macOS and Windows get their tray and notifications in
+step 13b, on those machines. Next is step 14 (or 13b, given a Mac or a
+Windows machine). Each finished step says so under its heading, with what differs
 from the plan.
 
 ## Read first
@@ -1261,6 +1265,112 @@ they run with `UiContext::spawn`.
 
 ### 13. Background: tray, close-to-tray, notifications, window placement, single instance
 
+**Done on Linux (2026-09-26).** macOS and Windows are step 13b. Where it
+differs from the text below:
+- **Linux only.** No macOS or Windows machine was available, and the UI
+  can't even be cross-checked for macOS here (`ring` needs Apple's C
+  toolchain). Rather than land uncompiled code, those platforms get no
+  tray (`tray::NoTray`: the window always shows and closing it quits)
+  and no notifications (`notify::NoNotifier` logs them) until step 13b.
+  Single instance, placement and monitors are the same code everywhere.
+- **Desktop glue** in `src/ui/desktop/`, each behind a trait with a fake
+  in the shell's tests: `tray` (`Tray`, `TrayItem`, `TrayCommand`; `ksni`
+  on Linux), `notify` (`Notifier`; `org.freedesktop.Notifications` over
+  `zbus` on Linux), `window` (`Windows`: open, close, raise and read the
+  window, and list the monitors, since iced's window tasks only run in a
+  real event loop), `placement` (`window.json`) and `instance` (single
+  instance). They report through one channel of `DesktopEvent`s (tray
+  click and choice, tray host up or down, notification click, second
+  launch, quit signal), read by one subscription. `src/ui/background.rs`
+  builds the tray menu and keeps the notifications.
+- `ksni` and `zbus` run on `async-io`, not tokio: iced's theme detection
+  already has `zbus` on `async-io`, and turning on `zbus/tokio` would
+  need a tokio runtime on iced's threads. The tray and notifications are
+  set up in `ui::run` before iced starts, so the tray works even if the
+  daemon doesn't (Flutter's `BackgroundHost` sat above everything for the
+  same reason). The icon is `assets/tray_icon.png` (copied from
+  `ui/assets/`, with the macOS template image for step 13b).
+- **Reports.** New `ShellRequest::Report { text, failure }`
+  (`ShellRequest::done`/`failed`): the window shows `text` as a toast;
+  from the tray, only a failure is shown, as a notification titled
+  `failure` ("Couldn’t ping Pixel"). Ping, ring, send clipboard and
+  send files report this way. The shell tags each plugin message with
+  where it came from (`Message::Plugin` / `Message::TrayPlugin`), and the
+  tag follows the plugin's own messages, a picker's answer included, so
+  *Send files…* from the tray reports a failure after the picker too. A
+  tray action that navigates (*Browse files*) or asks something shows
+  the window; its toasts are dropped.
+- *Send files* re-checks the device in `share::ui` itself, from the core,
+  whether picked from the tray or the window ("Couldn’t send to {name}:
+  The device is not connected right now."). As the plan says, and unlike
+  Flutter, a send from the tray reports only a failure, not "Sending
+  photo.jpg.".
+- The tray lists *Ring* and *Browse files* only for a device that says
+  it can (as Flutter did): `DeviceAction::visible_in_tray` follows the
+  capability in `findmyphone::ui` and `browse::ui`; the detail page
+  still lists them disabled. Tray labels are the actions' own ("Send
+  files", no ellipsis). Underscores are doubled for D-Bus menus. The
+  device label takes the first plugin's status ("Pixel · 82%"). The menu
+  is rebuilt after every message, but only sent to the tray when what it
+  shows changes, so transfer progress doesn't redraw it.
+- **Close and quit.** The window opens with `exit_on_close_request:
+  false`. Close (button or Ctrl+W) reads the window's placement, then
+  closes it to the tray if a tray host shows the icon and `closeToTray`
+  is on (or settings are unknown); otherwise it quits. Quit (tray, Ctrl+Q,
+  SIGTERM/SIGINT/SIGHUP) reads the placement, saves it, and ends iced;
+  `ui::run` then shuts the daemon down. It runs once; if the window can't
+  be read within a second it quits anyway. A tray host going away while
+  the window is closed shows it. macOS's menu-bar Quit is step 13b.
+- **Notifications.** The pairing request, the file received (an incoming
+  transfer completing that the store had seen before, on any snapshot or
+  event) and the ping (through `Notify`) are notifications while the
+  window is closed or unfocused; `Notify` over a focused window is a
+  toast. Resolving a request withdraws its notification. A click shows
+  the window (Linux: the `default` action).
+- **Placement** (`window.json`, the Flutter app's file and format, in
+  `$XDG_STATE_HOME/myconnect`, Application Support or `%LOCALAPPDATA%`,
+  or the data dir when `--data-dir` is given): saved 500 ms after the last
+  move or resize, and on close and quit, written through a temporary
+  file. Bounds come only from a normal window; a position the platform
+  can't tell (Wayland) keeps the old one. The window reopens there if
+  it fits a monitor from `display-info`, otherwise centred at that size.
+  It starts closed if it was quit from the tray, unless there is no
+  tray. The file is written in `update`: a few bytes, at most every half
+  second.
+- **Single instance:** `interprocess`, named from the uid and the hash of
+  the *absolute* data dir (not canonical: a first launch may run before
+  the directory exists, and the second must get the same name). A second
+  launch sends `show` and exits before starting anything.
+- Tests (in `ui::tests`, against fake tray, notifier and windows): Flutter's
+  `background_host_test.dart` scenarios (close to the tray and back,
+  close quits with close-to-tray off, tray Quit, pairing notification
+  shown/clicked/withdrawn, none over a focused window, file received,
+  ping as toast or notification, the menu's devices, "No paired devices"
+  and "No devices connected", Show details and Settings, ping from the
+  tray reporting only a failure), plus: no tray host (closing quits, the
+  window always shows), the host going away, quitting saves and the next
+  launch starts closed, the placement saved once the window stays put, a
+  navigating tray action shows the window, sending files from the tray
+  re-checks the device, the tray with a failed daemon, and the menu sent
+  only on change. `window_placement_test.dart` in `desktop::placement`;
+  the single instance in `desktop::instance`.
+- Real check on Linux (Xvfb, a private bus with a fake
+  `StatusNotifierWatcher` and notification server in dbus-python, a CLI
+  peer), all passing: the window shows at start and the item registers;
+  the close button (a `WM_DELETE_WINDOW` sent with Xlib) closes it to the
+  tray with `"visible":false` saved, and the item's `Activate` brings it
+  back; a second launch with the same (relative) `--data-dir` exits and
+  shows the window; a peer's pairing request while closed notifies ("E2E
+  Peer wants to pair with this computer."), the notification's `default`
+  action shows the window, and rejecting or accepting withdraws it; the
+  menu (`/MenuBar`, `com.canonical.dbusmenu.GetLayout -- 0 -1 '[]'`)
+  lists the paired peer with Ping, Send clipboard, Send files and Show
+  details; Ping from it leaves the window closed and notifies nothing;
+  the window moved with Xlib is saved, the menu's Quit exits with
+  `"visible":true`, and the next launch opens at the same spot; with
+  close-to-tray off (set from the CLI), the close button quits. The first
+  run found the single-instance name bug above.
+
 Use the decisions from step 10.
 
 **Build:**
@@ -1308,6 +1418,22 @@ Use the decisions from step 10.
   close-to-tray, Quit through the tray's D-Bus menu (HANDOFF explains how
   without a tray host), a second launch shows the window, and placement
   survives a restart.
+
+### 13b. Tray and notifications on macOS and Windows
+
+On a Mac and a Windows machine (step 13 had neither):
+- `tray-icon` + `muda` (ADR 0001): created in the first `update` on the
+  main thread, its menu and icon events forwarded into the
+  `DesktopEvent` channel; a `Tray` over it, fed the same `TrayItem`s.
+  macOS uses `assets/tray_icon_template.png` as a template image.
+- `notify-rust` for `Notifier` (clicks as step 10 found: Windows yes,
+  macOS best effort; no withdrawal).
+- macOS's menu-bar Quit and logout take the quit path.
+- Confirm single instance (the `/tmp` socket file on macOS, a named pipe
+  on Windows) and placement with several monitors.
+
+**Done when:** the step 13 real check passes on both, and Appendix A §10's
+tray icon item is ticked.
 
 ### 14. End-to-end tests
 
@@ -1459,8 +1585,8 @@ are to the Flutter app under `ui/lib/src/`.
 
 ### §0 Startup and configuration
 - [x] Starting screen while the daemon starts; error screen with Retry that retries the start (`core/daemon/daemon_gate.dart`)
-- [ ] Tray and close-to-tray work even when the daemon failed to start
-- [ ] Flags/env: data dir, download dir, device name, discovery loopback, system clipboard (default on), API port/token; `window.json` goes to the data dir when one is given
+- [x] Tray and close-to-tray work even when the daemon failed to start (Linux; step 13b for macOS and Windows)
+- [x] Flags/env: data dir, download dir, device name, discovery loopback, system clipboard (default on), API port/token; `window.json` goes to the data dir when one is given
 - [ ] Version in Settings
 - [ ] Light and dark themes follow the system
 
@@ -1545,20 +1671,20 @@ Dropping applies on X11, macOS and Windows, not on Wayland (see Owner decisions)
 - [x] Loading; error + Retry; toast on save error
 
 ### §10 Background (`features/background/background_host.dart`, `core/desktop/`)
-- [ ] Close hides when `closeToTray` (or settings unavailable), else quits
-- [ ] Quit: stop the daemon, save placement, exit; guarded; also for OS-requested exits
-- [ ] Tray: left click shows the window; right click menu
-- [ ] Menu: Open MyConnect · per connected paired device "{name}" / "{name} · N%" with Send files…, Ping, Ring (listed if capable), Send clipboard (listed if supported), Browse files (listed if capable), Show details · "No paired devices" / "No devices connected" · Settings · Quit
-- [ ] Tray Send files…: picker without showing the window; re-check device after pick; report via Notify
-- [ ] Tray Ping / Ring / Send clipboard: no window; failures only
-- [ ] Notify = toast when focused, desktop notification otherwise
-- [ ] Notification: pairing request (unfocused only; withdrawn when resolved)
-- [ ] Notification: file received (incoming, completed after startup, unfocused)
-- [ ] Notification: ping received (from the ping plugin)
-- [ ] Clicking a notification shows the window (where the platform allows; see step 10)
-- [ ] Window placement: saved/restored per ADR 0009, fits-on-screen, maximized, start hidden
-- [ ] Single instance: second launch shows the running window
-- [ ] Tray icon assets (template image on macOS)
+- [x] Close hides when `closeToTray` (or settings unavailable), else quits (Linux; step 13b for macOS and Windows)
+- [x] Quit: stop the daemon, save placement, exit; guarded; also for OS-requested exits (Linux; step 13b for macOS and Windows)
+- [x] Tray: left click shows the window; right click menu (Linux; step 13b for macOS and Windows)
+- [x] Menu: Open MyConnect · per connected paired device "{name}" / "{name} · N%" with Send files…, Ping, Ring (listed if capable), Send clipboard (listed if supported), Browse files (listed if capable), Show details · "No paired devices" / "No devices connected" · Settings · Quit (Linux; step 13b for macOS and Windows)
+- [x] Tray Send files…: picker without showing the window; re-check device after pick; report via Notify (Linux; step 13b for macOS and Windows)
+- [x] Tray Ping / Ring / Send clipboard: no window; failures only (Linux; step 13b for macOS and Windows)
+- [x] Notify = toast when focused, desktop notification otherwise (Linux; step 13b for macOS and Windows)
+- [x] Notification: pairing request (unfocused only; withdrawn when resolved) (Linux; step 13b for macOS and Windows)
+- [x] Notification: file received (incoming, completed after startup, unfocused) (Linux; step 13b for macOS and Windows)
+- [x] Notification: ping received (from the ping plugin) (Linux; step 13b for macOS and Windows)
+- [x] Clicking a notification shows the window (where the platform allows; see step 10) (Linux; step 13b for macOS and Windows)
+- [x] Window placement: saved/restored per ADR 0009, fits-on-screen, maximized, start hidden
+- [x] Single instance: second launch shows the running window
+- [ ] Tray icon assets (template image on macOS): Linux done in step 13; the macOS template image in step 13b
 
 ### §12 Platform
 - [ ] Linux: installed as `myConnect`, with the CLI in the same package; `.desktop` file, icons, window class matching the desktop file

@@ -605,7 +605,8 @@ impl UiPlugin for BrowseUi {
             label: "Browse files".into(),
             icon: lucide::folder_open,
             enabled: shares_files(device),
-            visible_in_tray: true,
+            // The tray lists it only for a device that can share files.
+            visible_in_tray: advertises_browse(device),
             message: Message::Browse {
                 device_id: device.device_id.clone(),
             },
@@ -1369,10 +1370,15 @@ fn invalid_name_reason(name: &str) -> Option<&'static str> {
 fn shares_files(device: &DeviceSnapshot) -> bool {
     device.paired
         && device.reachability == DeviceReachability::Connected
-        && device
-            .incoming_capabilities
-            .iter()
-            .any(|capability| capability == REQUEST_PACKET_TYPE)
+        && advertises_browse(device)
+}
+
+/// Whether the device says it can share its files at all.
+fn advertises_browse(device: &DeviceSnapshot) -> bool {
+    device
+        .incoming_capabilities
+        .iter()
+        .any(|capability| capability == REQUEST_PACKET_TYPE)
 }
 
 /// A sentence for the user about why an upload didn't start.
@@ -2238,10 +2244,10 @@ pub(crate) mod tests {
         let action = browse(&pixel());
         assert_eq!(action.label, "Browse files");
         assert!(action.enabled);
-        assert!(
-            !browse(&testing::device("Pixel")).enabled,
-            "listed, but disabled"
-        );
+        assert!(action.visible_in_tray);
+        let incapable = browse(&testing::device("Pixel"));
+        assert!(!incapable.enabled, "listed, but disabled");
+        assert!(!incapable.visible_in_tray, "and not in the tray");
 
         let mut away = pixel();
         away.reachability = DeviceReachability::Discovered;

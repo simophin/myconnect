@@ -75,6 +75,7 @@ fn main() -> Result<()> {
         Some(secret) => ApiToken::from_secret(secret)?,
         None => ApiToken::generate(),
     };
+    let data_dir = args.data_dir.clone();
     let request = RunRequest {
         api_token: Some(api_token),
         data_dir: args.data_dir,
@@ -112,6 +113,7 @@ fn main() -> Result<()> {
             runtime: runtime.handle().clone(),
             demo: args.demo,
             version: env!("MYCONNECT_APP_VERSION").into(),
+            data_dir,
         },
         start,
     );

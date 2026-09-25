@@ -13,6 +13,7 @@
 //! [`Core::subscribe`]: crate::core::Core::subscribe
 
 pub mod activity;
+pub mod background;
 pub mod demo;
 pub mod desktop;
 pub mod error;
@@ -40,7 +41,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use iced::{
-    Element, Event, Size, Subscription, Task, event,
+    Element, Event, Subscription, Task, event,
     keyboard::{self, key},
     widget::stack,
     window,
@@ -49,12 +50,19 @@ use iced_fonts::lucide;
 use uuid::Uuid;
 
 use crate::{
+    config,
     core::{Core, CoreError, PairingSnapshot, SettingsPatch, SettingsSnapshot},
     daemon::RunningService,
 };
 use desktop::{
+    DesktopEvent,
     dialogs::{self as picking, Pick},
+    instance::{self, Instance},
+    notify::{self as notifying, Notifier},
     open::{self as opening, Open},
+    placement::{Placement, PlacementStore, Seen},
+    tray::{self as trays, Tray, TrayCommand, TrayItem},
+    window::{self as windowing, Windows},
 };
 use overlay::{
     dialog::{self as dialogs, Dialog, DialogEvent, Dialogs, Field, Step, Submit},
@@ -79,6 +87,9 @@ pub struct UiOptions {
     pub demo: bool,
     /// The app's version, for Settings.
     pub version: String,
+    /// The data directory given (`--data-dir`), if any: `window.json` goes
+    /// there, and it names the single-instance socket.
+    pub data_dir: Option<PathBuf>,
 }
 
 /// A started daemon, and the UI halves of the plugins it runs.
@@ -91,19 +102,41 @@ pub struct Started {
 /// Starting the daemon, which may fail.
 pub type StartFuture = Pin<Box<dyn Future<Output = Result<Started>> + Send>>;
 
-/// Show the UI until the window closes, starting the daemon with `start`
-/// (again on Retry, if it fails), and shut the daemon down after.
+/// Show the UI until the user quits, starting the daemon with `start`
+/// (again on Retry, if it fails), and shut the daemon down after. With the
+/// window closed, the app keeps running in the tray. If another launch
+/// already runs with the same data directory, show its window instead.
 pub fn run(options: UiOptions, start: impl Fn() -> StartFuture + 'static) -> Result<()> {
     let runtime = options.runtime.clone();
+    let (events, received) = tokio::sync::mpsc::unbounded_channel();
+    let data_dir = options.data_dir.clone().or_else(config::default_config_dir);
+    if let Some(data_dir) = &data_dir
+        && let Instance::Running = instance::claim(data_dir, events.clone())
+    {
+        tracing::info!("MyConnect is already running; showing its window");
+        return Ok(());
+    }
+    // Before the daemon starts, so the tray works even if it doesn't.
+    let (tray, tray_available) = trays::spawn(&runtime, events.clone());
+    let desktop = Desktop {
+        tray,
+        tray_available,
+        notifier: notifying::start(&runtime, events.clone()),
+        windows: Arc::new(windowing::System),
+        placements: Some(PlacementStore::for_data_dir(options.data_dir.as_deref())),
+        events: Some(desktop::Receiver::new(received)),
+    };
+    desktop::watch_quit_signals(&runtime, events);
+
     let service: ServiceSlot = Arc::default();
     let boot = {
         let service = service.clone();
         let start: Rc<dyn Fn() -> StartFuture> = Rc::new(start);
         // iced asks for the state through a `Fn`; it boots once.
-        let options = RefCell::new(Some(options));
+        let booting = RefCell::new(Some((options, desktop)));
         move || {
-            let options = options.take().expect("the UI boots once");
-            App::boot(options, start.clone(), service.clone())
+            let (options, desktop) = booting.take().expect("the UI boots once");
+            App::boot(options, start.clone(), service.clone(), desktop)
         }
     };
     let result = iced::daemon(boot, App::update, App::view)
@@ -126,6 +159,33 @@ pub fn run(options: UiOptions, start: impl Fn() -> StartFuture + 'static) -> Res
 /// The running daemon, shared with [`run`], which shuts it down after the
 /// UI exits.
 type ServiceSlot = Arc<Mutex<Option<RunningService>>>;
+
+/// The desktop around the window: the tray, notifications, the window
+/// itself and where it was. Fakes in tests.
+struct Desktop {
+    tray: Arc<dyn Tray>,
+    /// A tray host shows the icon now. Without one, a closed window could
+    /// come back only by launching the app again, so closing quits.
+    tray_available: bool,
+    notifier: Arc<dyn Notifier>,
+    windows: Arc<dyn Windows>,
+    /// Where the placement is kept; `None` keeps it in memory only.
+    placements: Option<PlacementStore>,
+    /// The desktop's events, for the subscription.
+    events: Option<desktop::Receiver>,
+}
+
+/// Where a plugin's message came from, which decides how its outcome is
+/// shown: in the window, or, from the tray, without showing the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    Window,
+    Tray,
+}
+
+/// How long the window must stay put before its placement is saved: moves
+/// and resizes arrive continuously while dragging.
+const PLACEMENT_SAVE_DELAY: Duration = Duration::from_millis(500);
 
 /// A value that isn't `Clone` passed through a message, which must be: the
 /// first to [`take`](Handoff::take) it gets it.
@@ -165,8 +225,23 @@ enum Message {
     Reload,
     /// A message for the plugin it names.
     Plugin(PluginMessage),
-    /// A plugin's request to the shell.
-    Shell(ShellRequest<PluginMessage>),
+    /// A message for the plugin it names, from its action in the tray.
+    TrayPlugin(PluginMessage),
+    /// A plugin's request to the shell, and where the plugin's message
+    /// came from.
+    Shell(ShellRequest<PluginMessage>, Origin),
+    /// Something the desktop reported: the tray, a notification, a second
+    /// launch.
+    Desktop(DesktopEvent),
+    /// Close the window to the tray, now that it was seen where it is.
+    Hide(Seen),
+    /// Quit, saving the window as last seen, if it showed.
+    Exit(Option<Seen>),
+    /// The window has stayed put since this move or resize: read its
+    /// placement.
+    SavePlacement(u64),
+    /// The window's placement, read to save it.
+    PlacementSeen(Seen),
     /// Go to a page.
     Navigate(Route),
     /// Go to the page this one was opened from.
@@ -257,9 +332,19 @@ struct App {
     options: UiOptions,
     start: Rc<dyn Fn() -> StartFuture>,
     service: ServiceSlot,
-    /// The main window.
-    window: window::Id,
+    desktop: Desktop,
+    /// The main window, while it is open; `None` in the tray.
+    window: Option<window::Id>,
     window_focused: bool,
+    /// Where the window is, or was when it closed.
+    placement: Placement,
+    /// Which move or resize the pending placement save is for.
+    placement_moves: u64,
+    /// Quitting has started.
+    quitting: bool,
+    /// The tray menu as last sent.
+    tray_menu: Vec<TrayItem>,
+    notifications: background::Notifications,
     phase: Phase,
     route: Route,
     toasts: Toasts,
@@ -308,17 +393,25 @@ impl App {
         options: UiOptions,
         start: Rc<dyn Fn() -> StartFuture>,
         service: ServiceSlot,
+        desktop: Desktop,
     ) -> (Self, Task<Message>) {
-        let (window, open) = window::open(window::Settings {
-            size: Size::new(440.0, 620.0),
-            ..window::Settings::default()
-        });
+        let placement = desktop
+            .placements
+            .as_ref()
+            .and_then(PlacementStore::load)
+            .unwrap_or_default();
         let mut app = Self {
             options,
             start,
             service,
-            window,
-            window_focused: true,
+            desktop,
+            window: None,
+            window_focused: false,
+            placement,
+            placement_moves: 0,
+            quitting: false,
+            tray_menu: Vec::new(),
+            notifications: background::Notifications::default(),
             phase: Phase::Starting,
             route: Route::Devices,
             toasts: Toasts::default(),
@@ -335,11 +428,16 @@ impl App {
             drag: Drag::default(),
             choosing: None,
         };
+        // Hidden if it was quit from the tray, unless there is no tray to
+        // bring it back.
+        let open = if app.placement.visible || !app.desktop.tray_available {
+            app.open_window()
+        } else {
+            Task::none()
+        };
         let start = app.start();
-        (
-            app,
-            Task::batch([open.map(|_| Message::WindowOpened), start]),
-        )
+        app.update_tray();
+        (app, Task::batch([open, start]))
     }
 
     /// Start the daemon, off the UI thread so the window paints meanwhile.
@@ -360,7 +458,7 @@ impl App {
         let ids: Vec<_> = started.plugins.iter().map(|plugin| plugin.id()).collect();
         tracing::debug!(plugins = ?ids, "UI plugins");
         let mut ctx = UiContext::new(core, self.options.runtime.clone());
-        ctx.set_window_focused(self.window_focused);
+        ctx.set_window_focused(self.focused());
         self.phase = Phase::Running(Box::new(Running {
             ctx,
             plugins: started.plugins,
@@ -382,6 +480,26 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let refreshes = matches!(message, Message::Sync(_) | Message::Reload);
+        let before = match &self.phase {
+            Phase::Running(running) if refreshes => {
+                Some(background::transfer_statuses(running.ctx.store()))
+            }
+            _ => None,
+        };
+        let task = self.react(message);
+        if let Some(before) = before
+            && let Phase::Running(running) = &self.phase
+        {
+            let received = background::received_files(&before, running.ctx.store());
+            self.notify_received(received);
+        }
+        self.update_tray();
+        self.notify_pairings();
+        task
+    }
+
+    fn react(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Started(Ok(started)) => match started.take() {
                 Some(started) => self.started(started),
@@ -408,12 +526,9 @@ impl App {
                     // The store first, so plugins see the event applied.
                     sync::Update::Event(event) => {
                         running.ctx.store_mut().apply_event(&event.event);
-                        Task::batch(
-                            running
-                                .plugins
-                                .iter_mut()
-                                .map(|plugin| shell_task(plugin.on_event(&running.ctx, &event))),
-                        )
+                        Task::batch(running.plugins.iter_mut().map(|plugin| {
+                            shell_task(plugin.on_event(&running.ctx, &event), Origin::Window)
+                        }))
                     }
                 }
             }
@@ -424,21 +539,28 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Plugin(message) => {
-                let Some(running) = self.running() else {
-                    return Task::none();
-                };
-                let Some(plugin) = running
-                    .plugins
-                    .iter_mut()
-                    .find(|plugin| plugin.id() == message.plugin())
-                else {
-                    tracing::warn!(?message, "message for an unknown plugin");
-                    return Task::none();
-                };
-                shell_task(plugin.update(&running.ctx, message))
+            Message::Plugin(message) => self.plugin_update(message, Origin::Window),
+            Message::TrayPlugin(message) => self.plugin_update(message, Origin::Tray),
+            Message::Shell(request, origin) => self.handle(request, origin),
+            Message::Desktop(event) => self.desktop_event(event),
+            Message::Hide(seen) => self.hide(seen),
+            Message::Exit(seen) => self.exit(seen),
+            Message::SavePlacement(moves) => match self.window {
+                Some(id) if moves == self.placement_moves => {
+                    self.desktop.windows.read(id).map(Message::PlacementSeen)
+                }
+                _ => Task::none(),
+            },
+            Message::PlacementSeen(seen) => {
+                if self.window.is_some() && !self.quitting {
+                    let placement = self.placement.seen(seen, true);
+                    if placement != self.placement {
+                        self.placement = placement;
+                        self.save_placement();
+                    }
+                }
+                Task::none()
             }
-            Message::Shell(request) => self.handle(request),
             Message::Navigate(route) => self.go(route),
             Message::Back => match self.route.parent() {
                 Some(parent) => self.go(parent),
@@ -600,8 +722,8 @@ impl App {
                 Task::none()
             }
             Message::Key(KeyCommand::Cancel) => self.dialog(DialogEvent::Cancel),
-            Message::Key(KeyCommand::CloseWindow) => window::close(self.window),
-            Message::Key(KeyCommand::Quit) => iced::exit(),
+            Message::Key(KeyCommand::CloseWindow) => self.close_requested(),
+            Message::Key(KeyCommand::Quit) => self.quit(),
             Message::DemoTick(tick) => {
                 let Some(running) = self.running() else {
                     return Task::none();
@@ -610,18 +732,23 @@ impl App {
                 self.after(demo::TICK, Message::DemoTick(tick + 1))
             }
             Message::WindowOpened => Task::none(),
-            Message::Window(id, event) if id == self.window => match event {
+            Message::Window(id, event) if Some(id) == self.window => match event {
                 window::Event::Focused | window::Event::Unfocused => {
-                    self.window_focused = event == window::Event::Focused;
-                    let focused = self.window_focused;
-                    if let Some(running) = self.running() {
-                        running.ctx.set_window_focused(focused);
-                    }
+                    self.set_focused(event == window::Event::Focused);
                     Task::none()
                 }
-                // Closing the window quits, until the tray can keep the app
-                // running without one.
-                window::Event::Closed => iced::exit(),
+                window::Event::CloseRequested => self.close_requested(),
+                window::Event::Closed => {
+                    self.window_closed();
+                    Task::none()
+                }
+                window::Event::Moved(_) | window::Event::Resized(_) => {
+                    self.placement_moves += 1;
+                    self.after(
+                        PLACEMENT_SAVE_DELAY,
+                        Message::SavePlacement(self.placement_moves),
+                    )
+                }
                 // The pairing prompt is modal: a drop would open the
                 // chooser under it.
                 window::Event::FileHovered(_) if !self.incoming_prompt_shows() => {
@@ -659,12 +786,9 @@ impl App {
             && !matches!(self.route, Route::AddDevice | Route::Pairing(_));
         self.route = route;
         let told = match &mut self.phase {
-            Phase::Running(running) => Task::batch(
-                running
-                    .plugins
-                    .iter_mut()
-                    .map(|plugin| shell_task(plugin.on_route(&running.ctx, &self.route))),
-            ),
+            Phase::Running(running) => Task::batch(running.plugins.iter_mut().map(|plugin| {
+                shell_task(plugin.on_route(&running.ctx, &self.route), Origin::Window)
+            })),
             _ => Task::none(),
         };
         if entering_add_device {
@@ -997,26 +1121,61 @@ impl App {
         }
     }
 
-    /// Do what a plugin asked of the shell.
-    fn handle(&mut self, request: ShellRequest<PluginMessage>) -> Task<Message> {
+    /// Hand `message` to the plugin it names. What it asks of the shell is
+    /// shown as `origin` suits.
+    fn plugin_update(&mut self, message: PluginMessage, origin: Origin) -> Task<Message> {
+        let Some(running) = self.running() else {
+            return Task::none();
+        };
+        let Some(plugin) = running
+            .plugins
+            .iter_mut()
+            .find(|plugin| plugin.id() == message.plugin())
+        else {
+            tracing::warn!(?message, "message for an unknown plugin");
+            return Task::none();
+        };
+        shell_task(plugin.update(&running.ctx, message), origin)
+    }
+
+    /// Do what a plugin asked of the shell. From the tray, the window stays
+    /// as it is unless the request needs it (a page, a dialog), and only
+    /// failures are reported.
+    fn handle(&mut self, request: ShellRequest<PluginMessage>, origin: Origin) -> Task<Message> {
+        let from_tray = origin == Origin::Tray;
         match request {
+            ShellRequest::Toast { .. } if from_tray => Task::none(),
             ShellRequest::Toast { text, action } => self.toast(text, action),
-            // Desktop notifications arrive with the tray; until then the
-            // window is the only place to say anything.
-            ShellRequest::Notify { title, body } => self.toast(format!("{title}: {body}"), None),
+            ShellRequest::Report { text, failure } if from_tray => match failure {
+                Some(title) => self.notify(&title, &text),
+                None => Task::none(),
+            },
+            ShellRequest::Report { text, .. } => self.toast(text, None),
+            ShellRequest::Notify { title, body } => self.notify(&title, &body),
+            ShellRequest::Navigate(route) if from_tray => {
+                Task::batch([self.go(route), self.show_window()])
+            }
             ShellRequest::Navigate(route) => self.go(route),
-            ShellRequest::ShowWindow => window::gain_focus(self.window),
+            ShellRequest::ShowWindow => self.show_window(),
             ShellRequest::Confirm {
                 title,
                 body,
                 confirm_label,
                 then,
-            } => self.dialogs.open(Dialog::confirm(
-                title,
-                body,
-                confirm_label,
-                Submit::Close(Arc::new(move |_| Message::Plugin(then.clone()))),
-            )),
+            } => {
+                let show = if from_tray {
+                    self.show_window()
+                } else {
+                    Task::none()
+                };
+                let open = self.dialogs.open(Dialog::confirm(
+                    title,
+                    body,
+                    confirm_label,
+                    Submit::Close(Arc::new(move |_| Message::Plugin(then.clone()))),
+                ));
+                Task::batch([show, open])
+            }
             ShellRequest::Prompt {
                 title,
                 label,
@@ -1025,29 +1184,239 @@ impl App {
                 confirm_label,
                 validate,
                 then,
-            } => self.dialogs.open(Dialog::prompt(
-                title,
-                Field {
-                    value: initial,
-                    label: Some(label),
-                    validate: Some(validate),
-                    selection,
-                    ..Field::default()
-                },
-                confirm_label,
-                Submit::Close(Arc::new(move |text| Message::Plugin(then(text)))),
-            )),
+            } => {
+                let show = if from_tray {
+                    self.show_window()
+                } else {
+                    Task::none()
+                };
+                let open = self.dialogs.open(Dialog::prompt(
+                    title,
+                    Field {
+                        value: initial,
+                        label: Some(label),
+                        validate: Some(validate),
+                        selection,
+                        ..Field::default()
+                    },
+                    confirm_label,
+                    Submit::Close(Arc::new(move |text| Message::Plugin(then(text)))),
+                ));
+                Task::batch([show, open])
+            }
             // rfd can't relabel the confirm button, so it is the platform's
-            // own word ("Open").
+            // own word ("Open"). From the tray, the files go back as the
+            // tray's, so a failure to send them is reported the tray's way.
             ShellRequest::PickFiles { title, then, .. } => {
                 Task::future(self.picker.pick_files(&title)).and_then(move |paths| {
                     if paths.is_empty() {
-                        Task::none()
-                    } else {
-                        Task::done(Message::Plugin(then(paths)))
+                        return Task::none();
                     }
+                    let message = then(paths);
+                    Task::done(match origin {
+                        Origin::Window => Message::Plugin(message),
+                        Origin::Tray => Message::TrayPlugin(message),
+                    })
                 })
             }
+        }
+    }
+
+    /// Tell the user something: in a toast over a focused window,
+    /// otherwise in a desktop notification.
+    fn notify(&mut self, title: &str, body: &str) -> Task<Message> {
+        if self.focused() {
+            return self.toast(format!("{title}: {body}"), None);
+        }
+        self.notifications
+            .show(&*self.desktop.notifier, title, body);
+        Task::none()
+    }
+
+    /// Notify about files received while the window isn't in front.
+    fn notify_received(&mut self, received: Vec<(String, String)>) {
+        if self.focused() {
+            return;
+        }
+        for (file, device) in received {
+            self.notifications.show(
+                &*self.desktop.notifier,
+                "File received",
+                &format!("{file} from {device}"),
+            );
+        }
+    }
+
+    /// Follow the pending pairing requests with notifications.
+    fn notify_pairings(&mut self) {
+        let focused = self.focused();
+        let Phase::Running(running) = &self.phase else {
+            return;
+        };
+        let pending = running.ctx.store().pending_incoming_pairings();
+        self.notifications
+            .pairings(&*self.desktop.notifier, &pending, focused);
+    }
+
+    /// Send the tray the menu for now, if it looks different.
+    fn update_tray(&mut self) {
+        let running = match &self.phase {
+            Phase::Running(running) => Some((running.ctx.store(), &running.plugins[..])),
+            _ => None,
+        };
+        let menu = background::tray_menu(running);
+        if trays::layout(&menu) != trays::layout(&self.tray_menu) {
+            self.desktop.tray.set_menu(menu.clone());
+        }
+        self.tray_menu = menu;
+    }
+
+    fn desktop_event(&mut self, event: DesktopEvent) -> Task<Message> {
+        match event {
+            DesktopEvent::TrayClicked
+            | DesktopEvent::NotificationClicked
+            | DesktopEvent::ShowRequested => self.show_window(),
+            DesktopEvent::TrayChose(command) => self.tray_command(command),
+            DesktopEvent::TrayAvailable(available) => {
+                self.desktop.tray_available = available;
+                // Nothing else could bring a closed window back.
+                if !available && self.window.is_none() {
+                    return self.show_window();
+                }
+                Task::none()
+            }
+            DesktopEvent::QuitRequested => self.quit(),
+        }
+    }
+
+    fn tray_command(&mut self, command: TrayCommand) -> Task<Message> {
+        match command {
+            TrayCommand::Open => self.show_window(),
+            TrayCommand::Settings => Task::batch([self.go(Route::Settings), self.show_window()]),
+            TrayCommand::ShowDevice(device_id) => {
+                Task::batch([self.go(Route::Device(device_id)), self.show_window()])
+            }
+            TrayCommand::Quit => self.quit(),
+            TrayCommand::Action(message) => self.plugin_update(message, Origin::Tray),
+        }
+    }
+
+    /// Whether the window is open and in front of the user.
+    fn focused(&self) -> bool {
+        self.window.is_some() && self.window_focused
+    }
+
+    fn set_focused(&mut self, focused: bool) {
+        self.window_focused = focused;
+        let focused = self.focused();
+        if let Some(running) = self.running() {
+            running.ctx.set_window_focused(focused);
+        }
+    }
+
+    /// Show, raise and focus the window, opening it where it was if it is
+    /// closed.
+    fn show_window(&mut self) -> Task<Message> {
+        match self.window {
+            Some(id) => self.desktop.windows.raise(id).discard(),
+            None => self.open_window(),
+        }
+    }
+
+    fn open_window(&mut self) -> Task<Message> {
+        let settings = windowing::settings(&self.placement, &self.desktop.windows.screens());
+        let (id, opened) = self.desktop.windows.open(settings);
+        self.window = Some(id);
+        // It opens in front; `Unfocused` says if not.
+        self.set_focused(true);
+        if !self.placement.visible {
+            self.placement.visible = true;
+            self.save_placement();
+        }
+        opened.map(|()| Message::WindowOpened)
+    }
+
+    /// The window's close button: close to the tray, or quit if the user
+    /// doesn't want the app to keep running or there is no tray. Without
+    /// settings (the daemon didn't start), close to the tray, so it stays
+    /// the way out.
+    fn close_requested(&mut self) -> Task<Message> {
+        let Some(id) = self.window else {
+            return Task::none();
+        };
+        let close_to_tray = match &self.phase {
+            Phase::Running(running) => running
+                .ctx
+                .store()
+                .settings()
+                .loaded()
+                .is_none_or(|settings| settings.close_to_tray),
+            _ => true,
+        };
+        if close_to_tray && self.desktop.tray_available {
+            // Where it is, to open it there again.
+            self.desktop.windows.read(id).map(Message::Hide)
+        } else {
+            self.quit()
+        }
+    }
+
+    /// Close the window to the tray, keeping where it was.
+    fn hide(&mut self, seen: Seen) -> Task<Message> {
+        let Some(id) = self.window else {
+            return Task::none();
+        };
+        if self.quitting {
+            return Task::none();
+        }
+        self.placement = self.placement.seen(seen, false);
+        self.save_placement();
+        self.window_closed();
+        self.desktop.windows.close(id).discard()
+    }
+
+    fn window_closed(&mut self) {
+        self.window = None;
+        self.set_focused(false);
+        self.drag.leave();
+    }
+
+    /// Quit: save where the window is, then end the UI; [`run`] shuts the
+    /// daemon down after. Only once, whoever asks.
+    fn quit(&mut self) -> Task<Message> {
+        if self.quitting {
+            return Task::none();
+        }
+        self.quitting = true;
+        match self.window {
+            Some(id) => Task::batch([
+                self.desktop
+                    .windows
+                    .read(id)
+                    .map(|seen| Message::Exit(Some(seen))),
+                // In case the window can't be read any more.
+                self.after(Duration::from_secs(1), Message::Exit(None)),
+            ]),
+            None => Task::done(Message::Exit(None)),
+        }
+    }
+
+    fn exit(&mut self, seen: Option<Seen>) -> Task<Message> {
+        match seen {
+            Some(seen) if self.window.is_some() => {
+                self.placement = self.placement.seen(seen, true);
+            }
+            _ => self.placement.visible = self.window.is_some(),
+        }
+        self.save_placement();
+        iced::exit()
+    }
+
+    /// Keep the placement for the next launch. It is a few bytes, written
+    /// in place of blocking on a task at exit.
+    fn save_placement(&self) {
+        if let Some(placements) = &self.desktop.placements {
+            placements.save(self.placement);
         }
     }
 
@@ -1281,6 +1650,9 @@ impl App {
             window::events().map(|(id, event)| Message::Window(id, event)),
             event::listen_with(key_command).map(Message::Key),
         ];
+        if let Some(events) = &self.desktop.events {
+            subscriptions.push(desktop::events(events).map(Message::Desktop));
+        }
         if let Phase::Running(running) = &self.phase {
             subscriptions.push(sync::watch(running.ctx.core()).map(Message::Sync));
             subscriptions.extend(
@@ -1325,12 +1697,16 @@ fn announce_to(core: &Core, address: &str) -> Result<(), String> {
         .map_err(|error| error::describe_error(&error))
 }
 
-/// A plugin's command, as the shell's task.
-fn shell_task(command: Command<PluginMessage>) -> Task<Message> {
-    command.into_task().map(|outcome| match outcome {
-        Outcome::Plugin(message) => Message::Plugin(message),
-        Outcome::Shell(request) => Message::Shell(request),
-    })
+/// A plugin's command, as the shell's task. Its messages go back to the
+/// plugin as coming from `origin` too.
+fn shell_task(command: Command<PluginMessage>, origin: Origin) -> Task<Message> {
+    command
+        .into_task()
+        .map(move |outcome| match (outcome, origin) {
+            (Outcome::Plugin(message), Origin::Window) => Message::Plugin(message),
+            (Outcome::Plugin(message), Origin::Tray) => Message::TrayPlugin(message),
+            (Outcome::Shell(request), origin) => Message::Shell(request, origin),
+        })
 }
 
 #[cfg(test)]
@@ -1350,17 +1726,145 @@ mod tests {
         ui::plugin::{DeviceAction, UiPlugin},
     };
 
+    /// The tray's menus, as the shell sent them.
+    #[derive(Default)]
+    struct FakeTray {
+        menu: Mutex<Vec<TrayItem>>,
+        updates: AtomicUsize,
+    }
+
+    impl Tray for FakeTray {
+        fn set_menu(&self, menu: Vec<TrayItem>) {
+            *self.menu.lock().unwrap() = menu;
+            self.updates.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// The notifications showing, by id: their title and body.
+    #[derive(Default)]
+    struct FakeNotifier {
+        shown: Mutex<std::collections::BTreeMap<u32, (String, String)>>,
+    }
+
+    impl Notifier for FakeNotifier {
+        fn show(&self, id: u32, title: &str, body: &str) {
+            self.shown
+                .lock()
+                .unwrap()
+                .insert(id, (title.into(), body.into()));
+        }
+
+        fn withdraw(&self, id: u32) {
+            self.shown.lock().unwrap().remove(&id);
+        }
+    }
+
+    /// Windows that open and close at once, and are seen at one spot.
+    struct FakeWindows {
+        opened: Mutex<Vec<window::Settings>>,
+        raised: AtomicUsize,
+        seen: Seen,
+    }
+
+    impl Default for FakeWindows {
+        fn default() -> Self {
+            Self {
+                opened: Mutex::default(),
+                raised: AtomicUsize::new(0),
+                seen: Seen {
+                    position: Some(iced::Point::new(30.0, 40.0)),
+                    size: iced::Size::new(500.0, 700.0),
+                    maximized: false,
+                    minimized: false,
+                },
+            }
+        }
+    }
+
+    impl Windows for FakeWindows {
+        fn open(&self, settings: window::Settings) -> (window::Id, Task<()>) {
+            self.opened.lock().unwrap().push(settings);
+            (window::Id::unique(), Task::none())
+        }
+
+        fn close(&self, _id: window::Id) -> Task<()> {
+            Task::none()
+        }
+
+        fn raise(&self, _id: window::Id) -> Task<()> {
+            self.raised.fetch_add(1, Ordering::SeqCst);
+            Task::none()
+        }
+
+        fn read(&self, _id: window::Id) -> Task<Seen> {
+            Task::done(self.seen)
+        }
+
+        fn screens(&self) -> Vec<iced::Rectangle> {
+            vec![iced::Rectangle::new(
+                iced::Point::ORIGIN,
+                iced::Size::new(1920.0, 1080.0),
+            )]
+        }
+    }
+
+    /// The desktop an app is given in tests, to look at afterwards.
+    #[derive(Clone, Default)]
+    struct Fakes {
+        tray: Arc<FakeTray>,
+        notifier: Arc<FakeNotifier>,
+        windows: Arc<FakeWindows>,
+        /// Where `window.json` goes, if the test keeps one.
+        placements: Option<PlacementStore>,
+        /// No tray host shows the icon.
+        no_tray: bool,
+    }
+
+    impl Fakes {
+        fn desktop(&self) -> Desktop {
+            Desktop {
+                tray: self.tray.clone(),
+                tray_available: !self.no_tray,
+                notifier: self.notifier.clone(),
+                windows: self.windows.clone(),
+                placements: self.placements.clone(),
+                events: None,
+            }
+        }
+
+        /// The bodies of the notifications showing.
+        fn notified(&self) -> Vec<String> {
+            self.notifier
+                .shown
+                .lock()
+                .unwrap()
+                .values()
+                .map(|(_, body)| body.clone())
+                .collect()
+        }
+
+        fn menu(&self) -> Vec<TrayItem> {
+            self.tray.menu.lock().unwrap().clone()
+        }
+    }
+
     /// An app whose daemon never starts: tests set the phase themselves.
     fn app(runtime: tokio::runtime::Handle) -> App {
+        app_on(runtime, &Fakes::default())
+    }
+
+    fn app_on(runtime: tokio::runtime::Handle, fakes: &Fakes) -> App {
         let start: Rc<dyn Fn() -> StartFuture> = Rc::new(|| Box::pin(std::future::pending()));
         App::boot(
             UiOptions {
                 runtime,
                 demo: false,
                 version: "1.2.3 (test)".into(),
+                data_dir: None,
             },
             start,
             ServiceSlot::default(),
+            fakes.desktop(),
         )
         .0
     }
@@ -1381,8 +1885,13 @@ mod tests {
 
     /// An app running `plugins` over `core`.
     fn running_on(core: Core, plugins: Vec<Box<dyn ErasedUiPlugin>>) -> App {
+        running_on_desktop(core, plugins, &Fakes::default())
+    }
+
+    /// An app running `plugins` over `core`, on `fakes`.
+    fn running_on_desktop(core: Core, plugins: Vec<Box<dyn ErasedUiPlugin>>, fakes: &Fakes) -> App {
         let runtime = tokio::runtime::Handle::current();
-        let mut app = app(runtime.clone());
+        let mut app = app_on(runtime.clone(), fakes);
         app.phase = Phase::Running(Box::new(Running {
             ctx: UiContext::new(core, runtime),
             plugins,
@@ -1833,7 +2342,7 @@ mod tests {
         settle(&mut app, Message::Reload).await;
         settle(&mut app, Message::Navigate(Route::Transfers)).await;
 
-        let mut ui = Simulator::new(app.view(app.window));
+        let mut ui = Simulator::new(app.view(app.window.unwrap()));
         assert!(ui.find("From Peer · 50 bytes of 100 bytes").is_ok());
         ui.click(widget::Id::from("Cancel")).unwrap();
         let clicked: Vec<_> = ui.into_messages().collect();
@@ -1847,7 +2356,7 @@ mod tests {
         let transfer_id = transfer.id();
         transfer.cancelled();
         settle(&mut app, Message::Reload).await;
-        let mut ui = Simulator::new(app.view(app.window));
+        let mut ui = Simulator::new(app.view(app.window.unwrap()));
         assert!(ui.find("From Peer · Cancelled").is_ok());
         assert!(ui.find(widget::Id::from("Cancel")).is_err());
         drop(ui);
@@ -1920,7 +2429,7 @@ mod tests {
         S: iced_test::selector::Selector + Send + fmt::Debug + Clone,
         S::Output: iced_test::selector::Bounded + Clone + Send + Sync + 'static,
     {
-        let mut ui = Simulator::new(app.view(app.window));
+        let mut ui = Simulator::new(app.view(app.window.unwrap()));
         ui.click(target.clone())
             .unwrap_or_else(|error| panic!("{target:?}: {error:?}"));
         let clicked: Vec<_> = ui.into_messages().collect();
@@ -1930,7 +2439,9 @@ mod tests {
     }
 
     fn shows(app: &App, text: &str) -> bool {
-        Simulator::new(app.view(app.window)).find(text).is_ok()
+        Simulator::new(app.view(app.window.unwrap()))
+            .find(text)
+            .is_ok()
     }
 
     fn settings(app: &App) -> &SettingsSnapshot {
@@ -2142,7 +2653,7 @@ mod tests {
         }
 
         async fn window(&mut self, event: window::Event) {
-            let id = self.app.window;
+            let id = self.app.window.unwrap();
             settle(&mut self.app, Message::Window(id, event)).await;
         }
 
@@ -2367,7 +2878,7 @@ mod tests {
         sharing.app.route = Route::Device(peer.clone());
         let (photo, notes) = (sharing.file("photo.jpg"), sharing.file("notes.txt"));
 
-        let id = sharing.app.window;
+        let id = sharing.app.window.unwrap();
         let first = step(
             &mut sharing.app,
             Message::Window(id, window::Event::FileDropped(photo)),
@@ -2447,9 +2958,11 @@ mod tests {
                 runtime: runtime.handle().clone(),
                 demo: false,
                 version: "1.2.3 (test)".into(),
+                data_dir: None,
             },
             start,
             ServiceSlot::default(),
+            Fakes::default().desktop(),
         );
         assert!(matches!(app.phase, Phase::Starting));
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
@@ -2518,5 +3031,635 @@ mod tests {
         let task = app.after(Duration::from_millis(1), Message::DismissToast(7));
         let outputs = iced::futures::executor::block_on(testing::outputs(task));
         assert!(matches!(outputs[..], [Message::DismissToast(7)]));
+    }
+
+    // The tray, closing, quitting and notifications: Flutter's
+    // `background_host_test.dart`.
+
+    /// Shows a made-up battery level on every device, for tray labels.
+    struct Charge;
+
+    impl UiPlugin for Charge {
+        type Message = ();
+
+        fn id(&self) -> &'static str {
+            "charge"
+        }
+
+        fn device_status(&self, _device: &DeviceSnapshot) -> Option<plugin::DeviceStatus> {
+            Some(plugin::DeviceStatus {
+                icon: lucide::battery,
+                label: "82%".into(),
+            })
+        }
+
+        fn update(&mut self, _ctx: &UiContext, _message: ()) -> Command<()> {
+            Command::none()
+        }
+    }
+
+    /// An app on `fakes` running ping and find my phone.
+    fn background(fakes: &Fakes) -> App {
+        let (core, _commands) = handle();
+        running_on_desktop(
+            core,
+            vec![
+                Box::new(crate::plugins::ping::ui::PingUi),
+                Box::new(crate::plugins::findmyphone::ui::FindMyPhoneUi),
+            ],
+            fakes,
+        )
+    }
+
+    /// A paired peer, connected and taking `capabilities`, as the app
+    /// sees it. The connection lasts as long as the receiver.
+    async fn peer(
+        app: &mut App,
+        capabilities: &[&str],
+    ) -> tokio::sync::mpsc::Receiver<crate::protocol::Packet> {
+        let (_, sent) = testing::connect_peer(&core(app), testing::PEER_ID, capabilities);
+        settle(app, Message::Reload).await;
+        sent
+    }
+
+    /// The menu's top level: labels, and "-" for separators.
+    fn tray_labels(fakes: &Fakes) -> Vec<String> {
+        fakes
+            .menu()
+            .iter()
+            .map(|item| match item {
+                TrayItem::Item { label, .. } | TrayItem::Submenu { label, .. } => label.clone(),
+                TrayItem::Separator => "-".into(),
+            })
+            .collect()
+    }
+
+    /// The item at `path` in the tray menu, by labels.
+    fn tray_item(fakes: &Fakes, path: &[&str]) -> Option<TrayItem> {
+        let mut items = fakes.menu();
+        let (last, parents) = path.split_last()?;
+        for label in parents {
+            items = items.into_iter().find_map(|item| match item {
+                TrayItem::Submenu {
+                    label: found,
+                    items,
+                } if found == *label => Some(items),
+                _ => None,
+            })?;
+        }
+        items.into_iter().find(|item| match item {
+            TrayItem::Item { label, .. } | TrayItem::Submenu { label, .. } => label == last,
+            TrayItem::Separator => false,
+        })
+    }
+
+    fn tray_enabled(fakes: &Fakes, path: &[&str]) -> bool {
+        match tray_item(fakes, path) {
+            Some(TrayItem::Item { command, .. }) => command.is_some(),
+            Some(TrayItem::Submenu { .. }) => true,
+            _ => panic!("no tray item {path:?}"),
+        }
+    }
+
+    /// Choose the tray item at `path`.
+    async fn choose(app: &mut App, fakes: &Fakes, path: &[&str]) {
+        let Some(TrayItem::Item {
+            command: Some(command),
+            ..
+        }) = tray_item(fakes, path)
+        else {
+            panic!("no enabled tray item {path:?}");
+        };
+        settle(app, Message::Desktop(DesktopEvent::TrayChose(command))).await;
+    }
+
+    /// Press the window's close button.
+    async fn close(app: &mut App) {
+        let id = app.window.expect("the window is open");
+        settle(app, Message::Window(id, window::Event::CloseRequested)).await;
+    }
+
+    fn placements(dir: &tempfile::TempDir) -> PlacementStore {
+        PlacementStore::new(dir.path().join("window.json"))
+    }
+
+    fn bounds(x: f32, y: f32, width: f32, height: f32) -> Option<iced::Rectangle> {
+        Some(iced::Rectangle {
+            x,
+            y,
+            width,
+            height,
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn closing_the_window_keeps_the_app_in_the_tray_and_the_tray_shows_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let fakes = Fakes {
+            placements: Some(placements(&dir)),
+            ..Fakes::default()
+        };
+        let mut app = background(&fakes);
+        settle(&mut app, Message::Reload).await;
+
+        close(&mut app).await;
+        assert!(app.window.is_none());
+        assert!(!app.quitting, "the daemon keeps running");
+        assert_eq!(
+            placements(&dir).load(),
+            Some(Placement {
+                visible: false,
+                maximized: false,
+                bounds: bounds(30.0, 40.0, 500.0, 700.0),
+            })
+        );
+
+        settle(&mut app, Message::Desktop(DesktopEvent::TrayClicked)).await;
+        assert!(app.window.is_some());
+        let opened = fakes.windows.opened.lock().unwrap();
+        let reopened = opened.last().unwrap();
+        assert!(
+            matches!(
+                reopened.position,
+                window::Position::Specific(iced::Point { x: 30.0, y: 40.0 })
+            ),
+            "where it was"
+        );
+        assert_eq!(reopened.size, iced::Size::new(500.0, 700.0));
+        assert!(placements(&dir).load().unwrap().visible);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn closing_the_window_quits_when_close_to_tray_is_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let fakes = Fakes {
+            placements: Some(placements(&dir)),
+            ..Fakes::default()
+        };
+        let mut app = background(&fakes);
+        core(&app)
+            .update_settings(SettingsPatch {
+                close_to_tray: Some(Some(false)),
+                ..SettingsPatch::default()
+            })
+            .unwrap();
+        settle(&mut app, Message::Reload).await;
+
+        close(&mut app).await;
+        assert!(app.quitting);
+        // The next launch shows it again, where it was.
+        assert_eq!(
+            placements(&dir).load(),
+            Some(Placement {
+                visible: true,
+                maximized: false,
+                bounds: bounds(30.0, 40.0, 500.0, 700.0),
+            })
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn without_a_tray_closing_quits_and_the_window_always_shows() {
+        let dir = tempfile::tempdir().unwrap();
+        placements(&dir).save(Placement {
+            visible: false,
+            ..Placement::default()
+        });
+        let fakes = Fakes {
+            placements: Some(placements(&dir)),
+            no_tray: true,
+            ..Fakes::default()
+        };
+        let mut app = background(&fakes);
+        settle(&mut app, Message::Reload).await;
+        assert!(app.window.is_some(), "shown, though it was hidden");
+
+        close(&mut app).await;
+        assert!(app.quitting);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_tray_host_going_away_brings_the_window_back() {
+        let fakes = Fakes::default();
+        let mut app = background(&fakes);
+        settle(&mut app, Message::Reload).await;
+        close(&mut app).await;
+        assert!(app.window.is_none());
+
+        settle(
+            &mut app,
+            Message::Desktop(DesktopEvent::TrayAvailable(false)),
+        )
+        .await;
+        assert!(app.window.is_some());
+        close(&mut app).await;
+        assert!(app.quitting, "nothing could show it again");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn quitting_from_the_tray_saves_the_window_and_starts_hidden_next_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let fakes = Fakes {
+            placements: Some(placements(&dir)),
+            ..Fakes::default()
+        };
+        let mut app = background(&fakes);
+        settle(&mut app, Message::Reload).await;
+        close(&mut app).await;
+
+        choose(&mut app, &fakes, &["Quit"]).await;
+        assert!(app.quitting);
+        assert!(!placements(&dir).load().unwrap().visible);
+        // Asked again, by a signal: nothing more happens.
+        assert!(
+            step(&mut app, Message::Desktop(DesktopEvent::QuitRequested))
+                .await
+                .is_empty()
+        );
+
+        let next = app_on(tokio::runtime::Handle::current(), &fakes);
+        assert!(next.window.is_none(), "it starts in the tray");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_window_placement_is_saved_once_it_stays_put() {
+        let dir = tempfile::tempdir().unwrap();
+        let fakes = Fakes {
+            placements: Some(placements(&dir)),
+            ..Fakes::default()
+        };
+        let mut app = background(&fakes);
+        let id = app.window.unwrap();
+        let moved = step(
+            &mut app,
+            Message::Window(id, window::Event::Moved(iced::Point::new(1.0, 2.0))),
+        )
+        .await;
+        let resized = step(
+            &mut app,
+            Message::Window(id, window::Event::Resized(iced::Size::new(3.0, 4.0))),
+        )
+        .await;
+        // Only the last change reads the window.
+        let [Message::SavePlacement(first)] = moved[..] else {
+            panic!("unexpected messages: {moved:?}");
+        };
+        assert!(
+            step(&mut app, Message::SavePlacement(first))
+                .await
+                .is_empty()
+        );
+        let [Message::SavePlacement(last)] = resized[..] else {
+            panic!("unexpected messages: {resized:?}");
+        };
+        settle(&mut app, Message::SavePlacement(last)).await;
+        assert_eq!(
+            placements(&dir).load().unwrap().bounds,
+            bounds(30.0, 40.0, 500.0, 700.0)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pairing_request_notifies_while_the_window_is_closed() {
+        let fakes = Fakes::default();
+        let mut app = background(&fakes);
+        settle(&mut app, Message::Reload).await;
+        close(&mut app).await;
+
+        let core = core(&app);
+        let (_, _sent) = testing::connect_unpaired_peer(&core, testing::PEER_ID);
+        testing::request_pairing(&core, testing::PEER_ID);
+        settle(&mut app, Message::Reload).await;
+        assert_eq!(fakes.notified(), ["Peer wants to pair with this computer."]);
+
+        settle(
+            &mut app,
+            Message::Desktop(DesktopEvent::NotificationClicked),
+        )
+        .await;
+        assert!(app.window.is_some());
+        assert!(shows(&app, "Pairing request"));
+
+        // Resolved elsewhere: the notification goes with the prompt.
+        let pairing = store(&app).pending_incoming_pairings()[0].id;
+        core.cancel_pairing(pairing).unwrap();
+        settle(&mut app, Message::Reload).await;
+        assert!(fakes.notified().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pairing_request_does_not_notify_over_a_focused_window() {
+        let fakes = Fakes::default();
+        let mut app = background(&fakes);
+        settle(&mut app, Message::Reload).await;
+        let core = core(&app);
+        let (_, _first) = testing::connect_unpaired_peer(&core, testing::PEER_ID);
+        testing::request_pairing(&core, testing::PEER_ID);
+        settle(&mut app, Message::Reload).await;
+        assert!(shows(&app, "Pairing request"));
+        assert!(fakes.notified().is_empty());
+
+        // Losing focus later doesn't bring up a stale notification.
+        let id = app.window.unwrap();
+        settle(&mut app, Message::Window(id, window::Event::Unfocused)).await;
+        let other = "0123456789abcdef0123456789abcdef";
+        let (_, _second) = testing::connect_unpaired_peer(&core, other);
+        testing::request_pairing(&core, other);
+        settle(&mut app, Message::Reload).await;
+        assert_eq!(fakes.notified().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_received_file_notifies_while_the_window_is_closed() {
+        let fakes = Fakes::default();
+        let mut app = background(&fakes);
+        let core = core(&app);
+        let (peer, _sent) = testing::connect_peer(&core, testing::PEER_ID, &[]);
+        // Transferring, since only a transfer under way can complete.
+        let begin = |direction, name: &str| {
+            let transfer = core.transfers().begin(&peer, direction, name.into(), 1);
+            transfer.transferring();
+            transfer
+        };
+        begin(TransferDirection::Incoming, "earlier.jpg").complete(None);
+        let incoming = begin(TransferDirection::Incoming, "photo.jpg");
+        let outgoing = begin(TransferDirection::Outgoing, "sent.jpg");
+        settle(&mut app, Message::Reload).await;
+        close(&mut app).await;
+
+        incoming.complete(None);
+        outgoing.complete(None);
+        settle(&mut app, Message::Reload).await;
+        assert_eq!(fakes.notified(), ["photo.jpg from Peer"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_ping_notifies_while_closed_and_toasts_otherwise() {
+        let fakes = Fakes::default();
+        let mut app = background(&fakes);
+        let ping = |message: Option<&str>| {
+            Message::Sync(sync::Update::Event(Box::new(crate::core::CoreEvent {
+                sequence: 1,
+                timestamp: 0,
+                event: crate::core::EventData::Plugin(
+                    crate::core::PluginEvent::new(&crate::plugins::ping::ReceivedPing {
+                        device_id: "pixel".into(),
+                        device_name: "Pixel".into(),
+                        message: message.map(Into::into),
+                    })
+                    .unwrap(),
+                ),
+            })))
+        };
+        settle(&mut app, ping(Some("hi"))).await;
+        assert_eq!(app.toasts.items()[0].text, "Pixel: hi");
+        assert!(fakes.notified().is_empty());
+
+        close(&mut app).await;
+        settle(&mut app, ping(None)).await;
+        assert_eq!(fakes.notified(), ["Ping!"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_tray_lists_connected_paired_devices_then_settings_and_quit() {
+        let fakes = Fakes::default();
+        let (core, _commands) = handle();
+        let mut app = running_on_desktop(
+            core.clone(),
+            vec![
+                Box::new(Charge),
+                Box::new(crate::plugins::ping::ui::PingUi),
+                Box::new(crate::plugins::findmyphone::ui::FindMyPhoneUi),
+            ],
+            &fakes,
+        );
+        // Paired, but away; and connected, but not paired.
+        core.discover_device(
+            &crate::core::testing::make_identity("0123456789abcdef0123456789abcdef", vec![]),
+            true,
+            1,
+        )
+        .unwrap();
+        let (_, _unpaired) =
+            testing::connect_unpaired_peer(&core, "fedcba9876543210fedcba9876543210");
+        let _sent = peer(
+            &mut app,
+            &[
+                crate::plugins::ping::PACKET_TYPE,
+                crate::plugins::findmyphone::REQUEST_PACKET_TYPE,
+            ],
+        )
+        .await;
+
+        assert_eq!(
+            tray_labels(&fakes),
+            [
+                "Open MyConnect",
+                "-",
+                "Peer · 82%",
+                "-",
+                "Settings",
+                "-",
+                "Quit"
+            ]
+        );
+        assert!(tray_enabled(&fakes, &["Peer · 82%", "Ping"]));
+        assert!(tray_enabled(&fakes, &["Peer · 82%", "Ring"]));
+        assert!(tray_enabled(&fakes, &["Peer · 82%", "Show details"]));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_tray_lists_ring_only_for_a_device_that_can() {
+        let fakes = Fakes::default();
+        let mut app = background(&fakes);
+        let _sent = peer(&mut app, &[crate::plugins::ping::PACKET_TYPE]).await;
+        assert!(tray_enabled(&fakes, &["Peer", "Ping"]));
+        assert!(tray_item(&fakes, &["Peer", "Ring"]).is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_tray_says_when_nothing_is_paired_or_connected() {
+        let fakes = Fakes::default();
+        let mut app = background(&fakes);
+        assert_eq!(
+            tray_labels(&fakes),
+            ["Open MyConnect", "-", "Settings", "-", "Quit"],
+            "devices unknown yet"
+        );
+        settle(&mut app, Message::Reload).await;
+        assert!(!tray_enabled(&fakes, &["No paired devices"]));
+
+        core(&app)
+            .discover_device(
+                &crate::core::testing::make_identity(testing::PEER_ID, vec![]),
+                true,
+                1,
+            )
+            .unwrap();
+        settle(&mut app, Message::Reload).await;
+        assert!(!tray_enabled(&fakes, &["No devices connected"]));
+        assert!(tray_item(&fakes, &["Peer"]).is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_tray_menu_is_sent_only_when_it_changes() {
+        let fakes = Fakes::default();
+        let mut app = background(&fakes);
+        let _sent = peer(&mut app, &[]).await;
+        let sent = fakes.tray.updates.load(Ordering::SeqCst);
+        settle(&mut app, Message::Reload).await;
+        settle(&mut app, Message::Navigate(Route::Transfers)).await;
+        assert_eq!(fakes.tray.updates.load(Ordering::SeqCst), sent);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_tray_opens_a_device_or_settings_in_the_window() {
+        let fakes = Fakes::default();
+        let mut app = background(&fakes);
+        let _sent = peer(&mut app, &[]).await;
+        close(&mut app).await;
+
+        choose(&mut app, &fakes, &["Peer", "Show details"]).await;
+        assert!(app.window.is_some());
+        assert_eq!(app.route, Route::Device(testing::PEER_ID.into()));
+
+        choose(&mut app, &fakes, &["Settings"]).await;
+        assert_eq!(app.route, Route::Settings);
+        assert_eq!(
+            fakes.windows.raised.load(Ordering::SeqCst),
+            1,
+            "already open: raised"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_tray_action_that_opens_a_page_shows_the_window() {
+        let fakes = Fakes::default();
+        let (core, _commands) = handle();
+        let (opener, _) = opener();
+        let mut app = running_on_desktop(core, vec![opener], &fakes);
+        let _sent = peer(&mut app, &[]).await;
+        close(&mut app).await;
+
+        choose(&mut app, &fakes, &["Peer", "Open"]).await;
+        assert!(app.window.is_some());
+        assert!(matches!(
+            &app.route,
+            Route::Plugin {
+                plugin: "opener",
+                ..
+            }
+        ));
+        assert!(app.toasts.is_empty(), "its toast is for the window");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pinging_from_the_tray_reports_only_a_failure() {
+        let fakes = Fakes::default();
+        let mut app = background(&fakes);
+        let mut sent = peer(&mut app, &[crate::plugins::ping::PACKET_TYPE]).await;
+        close(&mut app).await;
+
+        choose(&mut app, &fakes, &["Peer", "Ping"]).await;
+        assert_eq!(
+            sent.try_recv().unwrap().packet_type,
+            crate::plugins::ping::PACKET_TYPE
+        );
+        assert!(app.window.is_none());
+        assert!(fakes.notified().is_empty());
+
+        // Chosen from a menu that is out of date.
+        let Some(TrayItem::Item {
+            command: Some(ping),
+            ..
+        }) = tray_item(&fakes, &["Peer", "Ping"])
+        else {
+            panic!("a ping item");
+        };
+        core(&app).forget_device(testing::PEER_ID).unwrap();
+        settle(&mut app, Message::Desktop(DesktopEvent::TrayChose(ping))).await;
+        assert!(app.window.is_none());
+        assert_eq!(
+            *fakes
+                .notifier
+                .shown
+                .lock()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap(),
+            (
+                "Couldn’t ping Peer".into(),
+                "That device is no longer known.".into()
+            )
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sending_files_from_the_tray_rechecks_the_device_after_the_picker() {
+        let fakes = Fakes::default();
+        let (core, _plugin, _commands) =
+            crate::core::testing::handle_with_plugin(crate::plugins::share::SharePlugin);
+        let mut app = running_on_desktop(
+            core.clone(),
+            vec![Box::new(crate::plugins::share::ui::ShareUi)],
+            &fakes,
+        );
+        let files = tempfile::tempdir().unwrap();
+        let photo = files.path().join("photo.jpg");
+        std::fs::write(&photo, "jpg").unwrap();
+        let _sent = peer(&mut app, &[crate::plugins::share::PACKET_TYPE]).await;
+        close(&mut app).await;
+
+        app.picker = Arc::new(FakePicker {
+            files: Some(vec![photo.clone()]),
+            ..FakePicker::default()
+        });
+        choose(&mut app, &fakes, &["Peer", "Send files"]).await;
+        assert_eq!(core.transfers().list().len(), 1, "sent");
+        assert!(app.window.is_none(), "the window stays closed");
+        assert!(fakes.notified().is_empty());
+
+        // The device goes while the picker is open.
+        let Some(TrayItem::Item {
+            command: Some(send),
+            ..
+        }) = tray_item(&fakes, &["Peer", "Send files"])
+        else {
+            panic!("a send item");
+        };
+        core.forget_device(testing::PEER_ID).unwrap();
+        settle(&mut app, Message::Desktop(DesktopEvent::TrayChose(send))).await;
+        assert_eq!(
+            *fakes
+                .notifier
+                .shown
+                .lock()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap(),
+            (
+                "Couldn’t send to Peer".into(),
+                "The device is not connected right now.".into()
+            )
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_tray_works_when_the_daemon_failed_to_start() {
+        let fakes = Fakes::default();
+        let mut app = app_on(tokio::runtime::Handle::current(), &fakes);
+        let _ = app.update(Message::Started(Err("no".into())));
+        assert_eq!(
+            tray_labels(&fakes),
+            ["Open MyConnect", "-", "Settings", "-", "Quit"]
+        );
+        // No settings to ask: closing keeps the tray as the way out.
+        close(&mut app).await;
+        assert!(app.window.is_none());
+        assert!(!app.quitting);
+        choose(&mut app, &fakes, &["Open MyConnect"]).await;
+        assert!(app.window.is_some());
     }
 }

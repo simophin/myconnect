@@ -9,7 +9,7 @@ use super::{PACKET_TYPE, SendPathError, send_path};
 use crate::{
     core::{DeviceReachability, DeviceSnapshot},
     ui::{
-        error::{describe_error, describe_file_failures},
+        error::{describe_code, describe_error, describe_file_failures},
         plugin::{Command, DeviceAction, DropTarget, ShellRequest, UiContext, UiPlugin},
         route::Route,
     },
@@ -22,13 +22,18 @@ pub enum Message {
     /// Pick files to send to the device. Carries its name for the picker's
     /// title.
     Pick { device_id: String, name: String },
-    /// Send these files to the device, one at a time.
+    /// Send these files to the device, one at a time. Carries its name for
+    /// the report.
     Send {
         device_id: String,
+        name: String,
         paths: Vec<PathBuf>,
     },
     /// The files are sent, or the sentence about those that failed.
-    Sent(Option<String>),
+    Sent {
+        name: String,
+        failures: Option<String>,
+    },
 }
 
 impl UiPlugin for ShareUi {
@@ -59,10 +64,12 @@ impl UiPlugin for ShareUi {
             return None;
         }
         let device_id = device.device_id.clone();
+        let name = device.device_name.clone();
         Some(DropTarget {
-            label: format!("Drop to send to {}", device.device_name),
+            label: format!("Drop to send to {name}"),
             on_drop: Arc::new(move |paths| Message::Send {
                 device_id: device_id.clone(),
+                name: name.clone(),
                 paths,
             }),
         })
@@ -75,11 +82,26 @@ impl UiPlugin for ShareUi {
                 confirm_label: "Send".into(),
                 then: Arc::new(move |paths| Message::Send {
                     device_id: device_id.clone(),
+                    name: name.clone(),
                     paths,
                 }),
             }),
-            Message::Send { device_id, paths } => {
+            Message::Send {
+                device_id,
+                name,
+                paths,
+            } => {
                 let plugin_ctx = ctx.plugin_context();
+                // It may have gone while the user picked.
+                let connected = plugin_ctx
+                    .device(&device_id)
+                    .is_some_and(|device| device.reachability == DeviceReachability::Connected);
+                if !connected {
+                    return Command::shell(ShellRequest::failed(
+                        format!("Couldn’t send to {name}"),
+                        describe_code("device_not_connected"),
+                    ));
+                }
                 ctx.spawn(
                     async move {
                         let mut failures = Vec::new();
@@ -90,11 +112,17 @@ impl UiPlugin for ShareUi {
                         }
                         describe_file_failures("send", &failures)
                     },
-                    Message::Sent,
+                    move |failures| Message::Sent { name, failures },
                 )
             }
-            Message::Sent(Some(text)) => Command::shell(ShellRequest::toast(text)),
-            Message::Sent(None) => Command::none(),
+            Message::Sent {
+                name,
+                failures: Some(text),
+            } => Command::shell(ShellRequest::failed(
+                format!("Couldn’t send to {name}"),
+                text,
+            )),
+            Message::Sent { failures: None, .. } => Command::none(),
         }
     }
 }
@@ -139,10 +167,18 @@ mod tests {
         assert!(send_action(&device).enabled);
         let target = ShareUi.drop_target(&device, &Route::Devices).unwrap();
         assert_eq!(target.label, "Drop to send to Pixel");
-        let Message::Send { device_id, paths } = (target.on_drop)(vec!["/tmp/a.txt".into()]) else {
+        let Message::Send {
+            device_id,
+            name,
+            paths,
+        } = (target.on_drop)(vec!["/tmp/a.txt".into()])
+        else {
             panic!("a drop sends");
         };
-        assert_eq!(device_id, device.device_id);
+        assert_eq!(
+            (device_id, name),
+            (device.device_id.clone(), "Pixel".into())
+        );
         assert_eq!(paths, [PathBuf::from("/tmp/a.txt")]);
 
         device.reachability = DeviceReachability::Discovered;
@@ -175,10 +211,18 @@ mod tests {
         };
         assert_eq!(title, "Send files to Pixel");
         assert_eq!(confirm_label, "Send");
-        let Message::Send { device_id, paths } = then(vec!["/tmp/a.txt".into()]) else {
+        let Message::Send {
+            device_id,
+            name,
+            paths,
+        } = then(vec!["/tmp/a.txt".into()])
+        else {
             panic!("the picked files are sent");
         };
-        assert_eq!(device_id, device.device_id);
+        assert_eq!(
+            (device_id, name),
+            (device.device_id.clone(), "Pixel".into())
+        );
         assert_eq!(paths, [PathBuf::from("/tmp/a.txt")]);
     }
 
@@ -192,6 +236,7 @@ mod tests {
         std::fs::write(&photo, "jpg").unwrap();
         let send = |paths: Vec<PathBuf>| Message::Send {
             device_id: device.device_id.clone(),
+            name: device.device_name.clone(),
             paths,
         };
 
@@ -202,7 +247,13 @@ mod tests {
                 .into_task(),
         )
         .await;
-        let [Outcome::Plugin(Message::Sent(Some(text)))] = &sent[..] else {
+        let [
+            Outcome::Plugin(Message::Sent {
+                failures: Some(text),
+                ..
+            }),
+        ] = &sent[..]
+        else {
             panic!("unexpected outcomes: {sent:?}");
         };
         assert_eq!(
@@ -216,20 +267,56 @@ mod tests {
                 .into_task(),
         )
         .await;
-        let [Outcome::Plugin(Message::Sent(Some(text)))] = &sent[..] else {
+        let [
+            Outcome::Plugin(Message::Sent {
+                failures: Some(text),
+                ..
+            }),
+        ] = &sent[..]
+        else {
             panic!("unexpected outcomes: {sent:?}");
         };
         assert_eq!(text, "Couldn’t send gone.txt: The file couldn’t be read.");
 
-        let toast = testing::outputs(
+        let report = testing::outputs(
             ShareUi
-                .update(&ctx, Message::Sent(Some(text.clone())))
+                .update(
+                    &ctx,
+                    Message::Sent {
+                        name: "Peer".into(),
+                        failures: Some(text.clone()),
+                    },
+                )
                 .into_task(),
         )
         .await;
         assert!(matches!(
-            &toast[..],
-            [Outcome::Shell(ShellRequest::Toast { text: said, action: None })] if said == text
+            &report[..],
+            [Outcome::Shell(ShellRequest::Report { text: said, failure: Some(title) })]
+                if said == text && title == "Couldn’t send to Peer"
         ));
+    }
+
+    #[tokio::test]
+    async fn a_device_gone_while_picking_says_so() {
+        let (core, _commands) = handle();
+        let ctx = UiContext::new(core, tokio::runtime::Handle::current());
+        let send = Message::Send {
+            device_id: testing::PEER_ID.into(),
+            name: "Pixel".into(),
+            paths: vec!["/tmp/a.txt".into()],
+        };
+        let outcomes = testing::outputs(ShareUi.update(&ctx, send).into_task()).await;
+        let [
+            Outcome::Shell(ShellRequest::Report {
+                text,
+                failure: Some(title),
+            }),
+        ] = &outcomes[..]
+        else {
+            panic!("unexpected outcomes: {outcomes:?}");
+        };
+        assert_eq!(title, "Couldn’t send to Pixel");
+        assert_eq!(text, "The device is not connected right now.");
     }
 }

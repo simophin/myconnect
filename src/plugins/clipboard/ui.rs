@@ -31,8 +31,12 @@ pub enum Message {
     /// Send this computer's clipboard to the device. Carries its name for
     /// the toast, since the device may be gone by the time it is sent.
     Send { device_id: String, name: String },
-    /// How sending went: the toast to show.
-    Sent(String),
+    /// How sending went: what to say, or why it failed, and to which
+    /// device.
+    Sent {
+        name: String,
+        result: Result<String, String>,
+    },
     /// Turn syncing on or off.
     SetSync(bool),
     /// Why changing the setting failed, if it did. Its event updates the
@@ -82,15 +86,21 @@ impl UiPlugin for ClipboardUi {
                             .await
                     },
                     move |result| {
-                        Message::Sent(match result {
-                            Ok(Ok(())) => format!("Sent the clipboard to {name}."),
-                            Ok(Err(error)) => describe_error(&error),
-                            Err(_) => describe_code("internal"),
-                        })
+                        let result = match result {
+                            Ok(Ok(())) => Ok(format!("Sent the clipboard to {name}.")),
+                            Ok(Err(error)) => Err(describe_error(&error)),
+                            Err(_) => Err(describe_code("internal")),
+                        };
+                        Message::Sent { name, result }
                     },
                 )
             }
-            Message::Sent(text) => Command::shell(ShellRequest::toast(text)),
+            Message::Sent { name, result } => Command::shell(match result {
+                Ok(text) => ShellRequest::done(text),
+                Err(error) => {
+                    ShellRequest::failed(format!("Couldn’t send the clipboard to {name}"), error)
+                }
+            }),
             Message::SetSync(enabled) => {
                 let core = ctx.core().clone();
                 // Writes the settings file.
@@ -171,18 +181,23 @@ mod tests {
         assert!(!actions(&device)[0].enabled);
     }
 
-    /// Choose the action on `device` and return the toast it ends with.
-    async fn send(ui: &mut ClipboardUi, ctx: &UiContext, device: &DeviceSnapshot) -> String {
+    /// Choose the action on `device` and return what it reports: its text,
+    /// and the failure's title.
+    async fn send(
+        ui: &mut ClipboardUi,
+        ctx: &UiContext,
+        device: &DeviceSnapshot,
+    ) -> (String, Option<String>) {
         let message = ui.device_actions(device).remove(0).message;
         let mut outcomes = testing::outputs(ui.update(ctx, message).into_task()).await;
         let Some(Outcome::Plugin(sent)) = outcomes.pop() else {
             panic!("unexpected outcomes: {outcomes:?}");
         };
         let outcomes = testing::outputs(ui.update(ctx, sent).into_task()).await;
-        let [Outcome::Shell(ShellRequest::Toast { text, .. })] = &outcomes[..] else {
+        let [Outcome::Shell(ShellRequest::Report { text, failure })] = &outcomes[..] else {
             panic!("unexpected outcomes: {outcomes:?}");
         };
-        text.clone()
+        (text.clone(), failure.clone())
     }
 
     #[tokio::test]
@@ -193,13 +208,16 @@ mod tests {
 
         assert_eq!(
             send(&mut ui("hello"), &ctx, &device).await,
-            "Sent the clipboard to Peer."
+            ("Sent the clipboard to Peer.".into(), None)
         );
         assert_eq!(sent.try_recv().unwrap().packet_type, PACKET_TYPE);
 
         assert_eq!(
             send(&mut ui(""), &ctx, &device).await,
-            "There is no text on the clipboard to send."
+            (
+                "There is no text on the clipboard to send.".into(),
+                Some("Couldn’t send the clipboard to Peer".into())
+            )
         );
     }
 

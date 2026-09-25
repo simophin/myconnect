@@ -87,12 +87,12 @@ first needs one adds it to the `gui` feature.
 | Running tasks in tests | `iced_runtime` 0.14 (dev) | Already in iced's tree; its `task::into_stream` lets a unit test see what a `Task` produces, which `iced` doesn't re-export. |
 | Arguments | `clap` | Already the CLI's parser; `env` reads each flag's environment variable. |
 | File and folder dialogs | `rfd` (step 9) | The standard native dialog crate: the XDG portal on Linux (zenity if there is none), AppKit, Win32. Its async dialogs need no runtime of their own. |
-| Notifications | Linux: `zbus` (already in the tree); macOS and Windows: `notify-rust` (step 13) | On Linux the app talks to `org.freedesktop.Notifications` itself, so it can withdraw a notification and hear its click without a thread per notification (see Desktop integration). `notify-rust` gives macOS and Windows toasts. |
+| Notifications | Linux: `zbus` 5 (step 13); macOS and Windows: `notify-rust` (step 13b) | On Linux the app talks to `org.freedesktop.Notifications` itself, so it can withdraw a notification and hear its click without a thread per notification (see Desktop integration). On `async-io`, as iced's theme detection already has it: its `tokio` feature would need a tokio runtime on iced's threads. `notify-rust` gives macOS and Windows toasts. |
 | Opening files and folders | `opener` (step 8) | Opens with the default app and reveals in the file manager on each platform. |
-| Single instance | `interprocess` (step 13) | Cross-platform local sockets, named from the data dir, so isolated instances never collide. |
-| Tray (Linux) | `ksni` (step 13) | A StatusNotifierItem over D-Bus in pure Rust, with no libappindicator or GTK. Spawned with `assume_sni_available(true)`, so a tray host that starts, stops or restarts later is followed. |
+| Single instance | `interprocess` (step 13), and `libc` on Unix for the uid | Cross-platform local sockets, named from the data dir, so isolated instances never collide. |
+| Tray (Linux) | `ksni` 0.3 (step 13) | A StatusNotifierItem over D-Bus in pure Rust, with no libappindicator or GTK. Spawned with `assume_sni_available(true)`, so a tray host that starts, stops or restarts later is followed. Its `async-io` feature, not the default `tokio`, for the same reason as `zbus`. |
 | Monitor list | `display-info` (step 13) | iced exposes only the size of the window's current monitor; the `window.json` fits-on-screen check needs every monitor's bounds. |
-| Tray (macOS, Windows) | `tray-icon` (step 13) | The Tauri team's tray crate, with `muda` menus. |
+| Tray (macOS, Windows) | `tray-icon` (step 13b) | The Tauri team's tray crate, with `muda` menus. |
 
 ## Desktop integration (plan step 10)
 
@@ -152,7 +152,7 @@ Decisions for steps 11 and 13:
   `NSUserNotificationCenter` wait, one thread per notification), and
   withdrawing is Linux-only until the macOS app is a signed bundle.
 - **Single instance:** `GenericNamespaced`, named
-  `myconnect-<uid>-<hash of the canonical data dir>` (short enough for
+  `myconnect-<uid>-<hash of the absolute data dir>` (short enough for
   macOS's 104-byte socket paths; the uid keeps users apart in Linux's
   shared abstract namespace). Connect first: a reply means another
   instance runs, so send `show` and exit; a refusal means listen with

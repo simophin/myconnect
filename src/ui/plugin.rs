@@ -330,6 +330,14 @@ pub enum ShellRequest<M> {
         text: String,
         action: Option<(String, Route)>,
     },
+    /// How an action went. The window shows `text` as a toast. An action
+    /// chosen in the tray, with the window likely closed, reports only a
+    /// failure: a notification titled `failure` ("Couldn’t ping Pixel")
+    /// over `text`.
+    Report {
+        text: String,
+        failure: Option<String>,
+    },
     /// A toast while the window is focused, a desktop notification
     /// otherwise.
     Notify {
@@ -376,9 +384,27 @@ impl<M: 'static> ShellRequest<M> {
         }
     }
 
+    /// An action went well: `text` says how.
+    pub fn done(text: impl Into<String>) -> Self {
+        Self::Report {
+            text: text.into(),
+            failure: None,
+        }
+    }
+
+    /// An action failed: `title` says which ("Couldn’t ping Pixel"), `text`
+    /// why.
+    pub fn failed(title: impl Into<String>, text: impl Into<String>) -> Self {
+        Self::Report {
+            text: text.into(),
+            failure: Some(title.into()),
+        }
+    }
+
     pub fn map<N>(self, f: impl Fn(M) -> N + Clone + Send + Sync + 'static) -> ShellRequest<N> {
         match self {
             Self::Toast { text, action } => ShellRequest::Toast { text, action },
+            Self::Report { text, failure } => ShellRequest::Report { text, failure },
             Self::Notify { title, body } => ShellRequest::Notify { title, body },
             Self::Navigate(route) => ShellRequest::Navigate(route),
             Self::ShowWindow => ShellRequest::ShowWindow,
@@ -430,6 +456,11 @@ impl<M: fmt::Debug> fmt::Debug for ShellRequest<M> {
                 .debug_struct("Toast")
                 .field("text", text)
                 .field("action", action)
+                .finish(),
+            Self::Report { text, failure } => f
+                .debug_struct("Report")
+                .field("text", text)
+                .field("failure", failure)
                 .finish(),
             Self::Notify { title, body } => f
                 .debug_struct("Notify")

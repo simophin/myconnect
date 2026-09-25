@@ -61,11 +61,13 @@ impl UiPlugin for PingUi {
         match message {
             Message::Ping { device_id, name } => {
                 // Queues the packet; nothing here waits on the network.
-                let text = match send_ping(&ctx.plugin_context(), &device_id, None) {
-                    Ok(()) => format!("Pinged {name}."),
-                    Err(error) => describe_error(&error),
-                };
-                Command::shell(ShellRequest::toast(text))
+                Command::shell(match send_ping(&ctx.plugin_context(), &device_id, None) {
+                    Ok(()) => ShellRequest::done(format!("Pinged {name}.")),
+                    Err(error) => ShellRequest::failed(
+                        format!("Couldn’t ping {name}"),
+                        describe_error(&error),
+                    ),
+                })
             }
         }
     }
@@ -110,7 +112,13 @@ mod tests {
         let ctx = UiContext::new(core, tokio::runtime::Handle::current());
         let message = ping_action(&device).message;
         let outcomes = testing::outputs(PingUi.update(&ctx, message).into_task()).await;
-        let [Outcome::Shell(ShellRequest::Toast { text, .. })] = &outcomes[..] else {
+        let [
+            Outcome::Shell(ShellRequest::Report {
+                text,
+                failure: None,
+            }),
+        ] = &outcomes[..]
+        else {
             panic!("unexpected outcomes: {outcomes:?}");
         };
         assert_eq!(text, "Pinged Peer.");
@@ -123,9 +131,16 @@ mod tests {
         let ctx = UiContext::new(core, tokio::runtime::Handle::current());
         let message = ping_action(&testing::device("Pixel")).message;
         let outcomes = testing::outputs(PingUi.update(&ctx, message).into_task()).await;
-        let [Outcome::Shell(ShellRequest::Toast { text, .. })] = &outcomes[..] else {
+        let [
+            Outcome::Shell(ShellRequest::Report {
+                text,
+                failure: Some(title),
+            }),
+        ] = &outcomes[..]
+        else {
             panic!("unexpected outcomes: {outcomes:?}");
         };
+        assert_eq!(title, "Couldn’t ping Pixel");
         assert_eq!(text, "That device is no longer known.");
     }
 

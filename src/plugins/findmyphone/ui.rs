@@ -28,13 +28,14 @@ impl UiPlugin for FindMyPhoneUi {
     }
 
     /// Listed for every device, enabled while it is connected and can ring.
+    /// The tray lists it only for a device that says it can ring.
     fn device_actions(&self, device: &DeviceSnapshot) -> Vec<DeviceAction<Message>> {
         vec![DeviceAction {
             id: "ring",
             label: "Ring".into(),
             icon: lucide::volume_two,
             enabled: can_ring(device),
-            visible_in_tray: true,
+            visible_in_tray: advertises_ring(device),
             message: Message::Ring {
                 device_id: device.device_id.clone(),
                 name: device.device_name.clone(),
@@ -46,11 +47,13 @@ impl UiPlugin for FindMyPhoneUi {
         match message {
             Message::Ring { device_id, name } => {
                 // Queues the packet; nothing here waits on the network.
-                let text = match ring_device(&ctx.plugin_context(), &device_id) {
-                    Ok(()) => format!("Asked {name} to ring."),
-                    Err(error) => describe_error(&error),
-                };
-                Command::shell(ShellRequest::toast(text))
+                Command::shell(match ring_device(&ctx.plugin_context(), &device_id) {
+                    Ok(()) => ShellRequest::done(format!("Asked {name} to ring.")),
+                    Err(error) => ShellRequest::failed(
+                        format!("Couldn’t ring {name}"),
+                        describe_error(&error),
+                    ),
+                })
             }
         }
     }
@@ -58,11 +61,14 @@ impl UiPlugin for FindMyPhoneUi {
 
 /// Whether a request to ring sent now would be accepted.
 fn can_ring(device: &DeviceSnapshot) -> bool {
-    device.reachability == DeviceReachability::Connected
-        && device
-            .incoming_capabilities
-            .iter()
-            .any(|capability| capability == REQUEST_PACKET_TYPE)
+    device.reachability == DeviceReachability::Connected && advertises_ring(device)
+}
+
+fn advertises_ring(device: &DeviceSnapshot) -> bool {
+    device
+        .incoming_capabilities
+        .iter()
+        .any(|capability| capability == REQUEST_PACKET_TYPE)
 }
 
 #[cfg(test)]
@@ -84,18 +90,21 @@ mod tests {
         let mut device = testing::device("Pixel");
         device.incoming_capabilities = vec![ping::PACKET_TYPE.into()];
         assert!(!ring_action(&device).enabled, "listed, but disabled");
+        assert!(!ring_action(&device).visible_in_tray);
         device.incoming_capabilities = vec![REQUEST_PACKET_TYPE.into()];
         assert!(ring_action(&device).enabled);
+        assert!(ring_action(&device).visible_in_tray);
         device.reachability = DeviceReachability::Unavailable;
         assert!(!ring_action(&device).enabled);
     }
 
-    async fn toast(ctx: &UiContext, message: Message) -> String {
+    /// What ringing reports: its text, and the failure's title.
+    async fn report(ctx: &UiContext, message: Message) -> (String, Option<String>) {
         let outcomes = testing::outputs(FindMyPhoneUi.update(ctx, message).into_task()).await;
-        let [Outcome::Shell(ShellRequest::Toast { text, .. })] = &outcomes[..] else {
+        let [Outcome::Shell(ShellRequest::Report { text, failure })] = &outcomes[..] else {
             panic!("unexpected outcomes: {outcomes:?}");
         };
-        text.clone()
+        (text.clone(), failure.clone())
     }
 
     #[tokio::test]
@@ -105,8 +114,8 @@ mod tests {
             testing::connect_peer(&core, testing::PEER_ID, &[REQUEST_PACKET_TYPE]);
         let ctx = UiContext::new(core, tokio::runtime::Handle::current());
         assert_eq!(
-            toast(&ctx, ring_action(&device).message).await,
-            "Asked Peer to ring."
+            report(&ctx, ring_action(&device).message).await,
+            ("Asked Peer to ring.".into(), None)
         );
         assert_eq!(sent.try_recv().unwrap().packet_type, REQUEST_PACKET_TYPE);
     }
@@ -117,8 +126,11 @@ mod tests {
         let (device, _sent) = testing::connect_peer(&core, testing::PEER_ID, &[ping::PACKET_TYPE]);
         let ctx = UiContext::new(core, tokio::runtime::Handle::current());
         assert_eq!(
-            toast(&ctx, ring_action(&device).message).await,
-            "The device doesn’t support that."
+            report(&ctx, ring_action(&device).message).await,
+            (
+                "The device doesn’t support that.".into(),
+                Some("Couldn’t ring Peer".into())
+            )
         );
     }
 }
