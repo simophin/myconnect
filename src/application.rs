@@ -1,12 +1,11 @@
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
     sync::Arc,
     time::Duration,
 };
 
 use anyhow::{Context, Result};
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -18,7 +17,7 @@ use crate::{
     },
     plugins::{
         self,
-        clipboard::{ClipboardPlugin, ClipboardService, InMemoryClipboard, SystemClipboard},
+        clipboard::{ClipboardService, InMemoryClipboard, SystemClipboard},
     },
     protocol::{DeviceType, is_forbidden_name_character, is_valid_device_name},
     transport::{
@@ -28,7 +27,6 @@ use crate::{
 };
 
 mod events;
-mod files;
 mod payload;
 mod plugin;
 mod service;
@@ -41,13 +39,12 @@ mod transfers;
 use settings::Settings;
 
 pub use events::{ApplicationEvent, EventBus, EventBusError, EventData};
-pub use files::{DirectoryListing, FileEntry, FileKind};
-pub use payload::{AcceptedPayload, DialedPayload, PayloadListener, PayloadPeer};
+pub use payload::{AcceptedPayload, DialedPayload, PayloadListener, PayloadPeer, SshAuthError};
 pub use plugin::{
     Plugin, PluginContext, PluginEvent, PluginEventKind, PluginRegistry, PluginSettings,
     SettingsSection,
 };
-pub use service::{ApplicationError, ApplicationHandle, ApplicationService, RemoteFileContent};
+pub use service::{ApplicationError, ApplicationHandle, ApplicationService};
 pub use settings::{SettingsDefaults, SettingsPatch, SettingsSnapshot};
 pub use state::{
     Command, LocalDeviceSnapshot, OperationErrorCode, Pairing, PairingDirection, PairingSnapshot,
@@ -80,13 +77,14 @@ pub struct RunRequest {
     /// Port the local control API listens on; `0` picks a free port, which
     /// [`RunningService::api_addr`] then reports.
     pub api_port: u16,
-    /// Restrict LAN discovery broadcasts to loopback instead of the real
-    /// network. A physical switch never reflects a broadcast frame back to
-    /// the port it arrived on, so two instances on the same host normally
-    /// can't discover each other over a real NIC; loopback broadcast does
-    /// not have that limitation. Useful for running multiple local
-    /// instances against each other without a second machine, at the cost
-    /// of not discovering real devices on the LAN.
+    /// Keep discovery and every connection a device makes to this one
+    /// (control and payload ports) on loopback, instead of the real
+    /// network: see [`LanConfig::loopback`]. A physical switch never
+    /// reflects a broadcast frame back to the port it arrived on, so two
+    /// instances on the same host normally can't discover each other over a
+    /// real NIC; loopback broadcast does not have that limitation. Useful
+    /// for running multiple local instances against each other without a
+    /// second machine; devices on the LAN can't see or reach this one.
     pub discovery_loopback: bool,
     /// Sync the desktop clipboard rather than an in-memory one. Falls back to
     /// the in-memory clipboard, with a warning, when the session has no
@@ -117,7 +115,6 @@ pub struct RunningService {
     application: ApplicationHandle,
     lan: LanService,
     server: ApiServer,
-    system_clipboard: Option<(Arc<SystemClipboard>, JoinHandle<()>)>,
 }
 
 impl RunningService {
@@ -153,20 +150,21 @@ impl RunningService {
             ..StoredSettings::default()
         });
         let initial = settings.snapshot();
+        let mut transfer_config = TransferConfig::new(initial.download_dir.clone());
+        if request.discovery_loopback {
+            // Payload ports are the other thing a device dials.
+            transfer_config = transfer_config.with_payload_bind_ip(Ipv4Addr::LOCALHOST);
+        }
         let device_name = initial.device_name.clone();
         let system_clipboard = if request.system_clipboard {
-            match SystemClipboard::start() {
-                Ok(clipboard) => Some(Arc::new(clipboard)),
-                Err(error) => {
-                    warn!(%error, "using an in-memory clipboard instead");
-                    None
-                }
-            }
+            SystemClipboard::start()
+                .inspect_err(|error| warn!(%error, "using an in-memory clipboard instead"))
+                .ok()
         } else {
             None
         };
-        let clipboard: Arc<dyn ClipboardService + Send + Sync> = match &system_clipboard {
-            Some(clipboard) => clipboard.clone(),
+        let clipboard: Arc<dyn ClipboardService + Send + Sync> = match system_clipboard {
+            Some(clipboard) => Arc::new(clipboard),
             None => InMemoryClipboard::shared(),
         };
         let (application, commands) = ApplicationHandle::new(
@@ -181,34 +179,17 @@ impl RunningService {
             32,
             256,
             identity.clone(),
-            TransferConfig::new(initial.download_dir),
+            transfer_config,
         )?;
         application.install_settings(settings);
+        application.start_plugins();
         let shutdown = CancellationToken::new();
-        let system_clipboard = system_clipboard.map(|clipboard| {
-            let follower = application
-                .plugin::<ClipboardPlugin>()
-                .expect("the clipboard plugin is built in")
-                .follow_local_changes(
-                    application.plugin_context(),
-                    clipboard.local_changes(),
-                    shutdown.child_token(),
-                );
-            (clipboard, follower)
-        });
         let capabilities = plugins::capabilities();
-        let mut lan_config = LanConfig::default();
-        if request.discovery_loopback {
-            // The bind stays on the wildcard address: a socket bound to a single
-            // address only accepts packets addressed to that exact address, so
-            // binding to 127.0.0.1 specifically would silently drop incoming
-            // packets addressed to the 127.255.255.255 broadcast below. Only the
-            // announce target needs to change to keep discovery off the real
-            // network.
-            lan_config = lan_config.with_announcement_targets(vec![SocketAddr::V4(
-                SocketAddrV4::new(Ipv4Addr::new(127, 255, 255, 255), DISCOVERY_PORT),
-            )]);
-        }
+        let lan_config = if request.discovery_loopback {
+            LanConfig::loopback(DISCOVERY_PORT)
+        } else {
+            LanConfig::default()
+        };
         let lan = LanService::start(
             lan_config,
             LocalDeviceInfo {
@@ -240,7 +221,6 @@ impl RunningService {
             application,
             lan,
             server,
-            system_clipboard,
         })
     }
 
@@ -250,25 +230,19 @@ impl RunningService {
         self.server.local_addr()
     }
 
-    /// Stop the control API and LAN transport, then give in-flight transfers
-    /// a bounded window to clean up their partial files.
+    /// Stop the control API and LAN transport, give in-flight transfers a
+    /// bounded window to clean up their partial files, then stop the
+    /// plugins.
     pub async fn shutdown(self) -> Result<()> {
         let Self {
             application,
             lan,
             server,
-            system_clipboard,
         } = self;
         let server_result = server.shutdown().await;
         let lan_result = lan.shutdown().await;
-        if let Some((clipboard, follower)) = system_clipboard {
-            follower.abort();
-            // Joining the clipboard thread may wait briefly for a clipboard
-            // manager to take over the text we own (X11).
-            let _ = tokio::task::spawn_blocking(move || clipboard.stop()).await;
-        }
         application.shutdown_transfers(Duration::from_secs(5)).await;
-        application.shutdown_browsing().await;
+        application.shutdown_plugins().await;
         server_result?;
         lan_result?;
         Ok(())

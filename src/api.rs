@@ -11,7 +11,7 @@ use std::{
 use axum::{
     Extension, Json, Router,
     body::Body,
-    extract::{DefaultBodyLimit, Multipart, Path, Query as QueryParams, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::{
         HeaderName, HeaderValue, Request, StatusCode,
         header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, WWW_AUTHENTICATE},
@@ -26,7 +26,6 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{net::TcpListener, task::JoinHandle, time::timeout};
-use tokio_util::io::ReaderStream;
 use tokio_util::sync::CancellationToken;
 use tower::ServiceBuilder;
 use tower_http::{
@@ -44,8 +43,8 @@ pub(crate) use upload::{
 use crate::{
     application::{
         ApplicationError, ApplicationEvent, ApplicationService, Command,
-        DEFAULT_MAX_TRANSFER_BYTES, DirectoryListing, FileEntry, PairingSnapshot, Query,
-        QueryResult, SettingsPatch, SettingsSnapshot, StatusSnapshot, TransferSnapshot,
+        DEFAULT_MAX_TRANSFER_BYTES, PairingSnapshot, Query, QueryResult, SettingsPatch,
+        SettingsSnapshot, StatusSnapshot, TransferSnapshot,
     },
     config::ApiToken,
     device::DeviceSnapshot,
@@ -216,10 +215,9 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
     // takes longer than that; handlers bound each step of the upload by the
     // idle timeout instead. Layers apply to the routes a router has when
     // they are added, so each set keeps its own limits after the merge.
-    let streaming = Router::new()
-        .route("/devices/{device_id}/files/upload", post(post_file_upload))
-        .with_state(state.clone())
-        .merge(state.application.plugin_streaming_routes())
+    let streaming = state
+        .application
+        .plugin_streaming_routes()
         .layer(Extension(UploadIdleTimeout(config.request_timeout)))
         .layer(DefaultBodyLimit::max(config.max_transfer_body_bytes))
         .layer(middleware::from_fn_with_state(
@@ -236,20 +234,6 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
             "/devices/{device_id}",
             get(get_device).delete(delete_device),
         )
-        .route(
-            "/devices/{device_id}/files",
-            get(get_files).delete(delete_file),
-        )
-        .route("/devices/{device_id}/files/content", get(get_file_content))
-        .route(
-            "/devices/{device_id}/files/download",
-            post(post_file_download),
-        )
-        .route(
-            "/devices/{device_id}/files/directories",
-            post(post_directory),
-        )
-        .route("/devices/{device_id}/files/move", post(post_file_move))
         .route("/pairings", get(get_pairings).post(post_pairing))
         .route(
             "/pairings/{pairing_id}",
@@ -540,201 +524,6 @@ async fn delete_transfer(
     Ok(Json(transfer))
 }
 
-#[derive(Deserialize)]
-struct FilePathQuery {
-    path: Option<String>,
-}
-
-impl FilePathQuery {
-    fn required(self) -> Result<String, ApiProblem> {
-        self.path
-            .ok_or_else(|| ApiProblem::bad_request("missing_path"))
-    }
-}
-
-/// List a directory on a paired device, or, without `path`, the storage
-/// roots it shares. The first request opens a browse session with the
-/// device, which can take a few seconds.
-async fn get_files(
-    State(state): State<ApiState>,
-    Path(device_id): Path<String>,
-    QueryParams(query): QueryParams<FilePathQuery>,
-) -> Result<Json<DirectoryListing>, ApiProblem> {
-    let listing = state
-        .application
-        .list_files(device_id, query.path)
-        .await
-        .map_err(map_error)?;
-    Ok(Json(listing))
-}
-
-/// Stream a file's content from a paired device, e.g. for a preview. To keep
-/// a copy, `POST .../files/download` saves it as a transfer instead.
-async fn get_file_content(
-    State(state): State<ApiState>,
-    Path(device_id): Path<String>,
-    QueryParams(query): QueryParams<FilePathQuery>,
-) -> Result<Response, ApiProblem> {
-    let content = state
-        .application
-        .open_remote_file(device_id, query.required()?)
-        .await
-        .map_err(map_error)?;
-    let content_type = content_type_for(&content.name);
-    let size = content.size;
-    let body = Body::from_stream(ReaderStream::new(content));
-    Ok((
-        [
-            (CONTENT_TYPE, HeaderValue::from_static(content_type)),
-            (CONTENT_LENGTH, HeaderValue::from(size)),
-        ],
-        body,
-    )
-        .into_response())
-}
-
-/// A media type for common previewable files, by extension.
-fn content_type_for(name: &str) -> &'static str {
-    let extension = name
-        .rsplit_once('.')
-        .map(|(_, extension)| extension.to_ascii_lowercase());
-    match extension.as_deref() {
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("png") => "image/png",
-        Some("gif") => "image/gif",
-        Some("webp") => "image/webp",
-        Some("bmp") => "image/bmp",
-        Some("heic") => "image/heic",
-        Some("txt" | "log" | "md") => "text/plain; charset=utf-8",
-        Some("pdf") => "application/pdf",
-        Some("mp4") => "video/mp4",
-        Some("mp3") => "audio/mpeg",
-        _ => "application/octet-stream",
-    }
-}
-
-#[derive(Deserialize)]
-struct FilePathRequest {
-    path: String,
-}
-
-/// Save a file from a paired device into the download directory. The copy
-/// runs as an incoming transfer; `202` once it has started.
-async fn post_file_download(
-    State(state): State<ApiState>,
-    Path(device_id): Path<String>,
-    Json(request): Json<FilePathRequest>,
-) -> Result<(StatusCode, Json<TransferSnapshot>), ApiProblem> {
-    let transfer = state
-        .application
-        .begin_file_download(device_id, request.path)
-        .await
-        .map_err(map_error)?;
-    Ok((StatusCode::ACCEPTED, Json(transfer)))
-}
-
-/// Stream a `multipart/form-data` upload (a `path` text field naming the
-/// directory on the device, then one `file` part with a `Content-Length`
-/// header) into a directory on a paired device, as an outgoing transfer.
-/// A name that is taken gets a ` (n)` suffix. Like `POST
-/// /devices/{id}/share`, the response comes once the whole file has been
-/// forwarded, and the request fails only if the upload stalls.
-async fn post_file_upload(
-    State(state): State<ApiState>,
-    Path(device_id): Path<String>,
-    Extension(UploadIdleTimeout(idle)): Extension<UploadIdleTimeout>,
-    mut multipart: Multipart,
-) -> Result<(StatusCode, Json<TransferSnapshot>), ApiProblem> {
-    let mut directory: Option<String> = None;
-    let mut created: Option<TransferSnapshot> = None;
-
-    while let Some(mut field) = next_field(idle, &mut multipart).await? {
-        match field.name() {
-            Some("path") => directory = Some(field_text(idle, field).await?),
-            Some("file") => {
-                let directory = directory
-                    .clone()
-                    .ok_or_else(|| ApiProblem::bad_request("missing_path"))?;
-                let file_name = field.file_name().unwrap_or_default().to_owned();
-                let declared_size = declared_size(&field)?;
-
-                // Opening a browse session can take longer than the idle
-                // timeout allows, but it is bounded by its own timeouts.
-                let (transfer, sender) = state
-                    .application
-                    .begin_file_upload(device_id.clone(), directory, file_name, declared_size)
-                    .await
-                    .map_err(map_error)?;
-                created = Some(transfer);
-                forward_upload(idle, &mut field, sender).await?;
-            }
-            _ => skip_field(idle, field).await?,
-        }
-    }
-
-    let transfer_id = created
-        .ok_or_else(|| ApiProblem::bad_request("missing_file_part"))?
-        .id;
-    let latest = match state
-        .application
-        .query(Query::Transfer { transfer_id })
-        .map_err(map_error)?
-    {
-        QueryResult::Transfer(Some(transfer)) => transfer,
-        _ => return Err(ApiProblem::internal()),
-    };
-    Ok((StatusCode::ACCEPTED, Json(latest)))
-}
-
-#[derive(Deserialize)]
-struct MoveRequest {
-    from: String,
-    to: String,
-}
-
-/// Create a directory on a paired device; `201` with its entry.
-async fn post_directory(
-    State(state): State<ApiState>,
-    Path(device_id): Path<String>,
-    Json(request): Json<FilePathRequest>,
-) -> Result<(StatusCode, Json<FileEntry>), ApiProblem> {
-    let entry = state
-        .application
-        .create_remote_directory(device_id, request.path)
-        .await
-        .map_err(map_error)?;
-    Ok((StatusCode::CREATED, Json(entry)))
-}
-
-/// Move or rename a file or directory on a paired device. Fails with
-/// `file_exists` rather than replacing anything.
-async fn post_file_move(
-    State(state): State<ApiState>,
-    Path(device_id): Path<String>,
-    Json(request): Json<MoveRequest>,
-) -> Result<Json<FileEntry>, ApiProblem> {
-    let entry = state
-        .application
-        .move_remote_file(device_id, request.from, request.to)
-        .await
-        .map_err(map_error)?;
-    Ok(Json(entry))
-}
-
-/// Delete a file, or a directory and everything in it, on a paired device.
-async fn delete_file(
-    State(state): State<ApiState>,
-    Path(device_id): Path<String>,
-    QueryParams(query): QueryParams<FilePathQuery>,
-) -> Result<StatusCode, ApiProblem> {
-    state
-        .application
-        .delete_remote_file(device_id, query.required()?)
-        .await
-        .map_err(map_error)?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
 async fn get_settings(State(state): State<ApiState>) -> Result<Json<SettingsSnapshot>, ApiProblem> {
     match state
         .application
@@ -867,39 +656,6 @@ fn map_error(error: ApplicationError) -> ApiProblem {
         ApplicationError::InvalidTransferState => {
             ApiProblem::new(StatusCode::CONFLICT, "Conflict", "invalid_transfer_state")
         }
-        ApplicationError::InvalidRemotePath => ApiProblem::bad_request("invalid_path"),
-        ApplicationError::RemoteFilesUnavailable { reason } => {
-            let mut problem =
-                ApiProblem::new(StatusCode::CONFLICT, "Conflict", "files_unavailable");
-            problem.body.detail = reason;
-            problem
-        }
-        ApplicationError::RemoteFileNotFound => ApiProblem::not_found("file_not_found"),
-        ApplicationError::RemoteFileExists => {
-            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "file_exists")
-        }
-        ApplicationError::RemotePermissionDenied => {
-            ApiProblem::new(StatusCode::FORBIDDEN, "Forbidden", "file_permission_denied")
-        }
-        ApplicationError::NotADirectory => {
-            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "not_a_directory")
-        }
-        ApplicationError::IsADirectory => {
-            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "is_a_directory")
-        }
-        ApplicationError::RemoteHostKeyMismatch => ApiProblem::new(
-            StatusCode::BAD_GATEWAY,
-            "Bad gateway",
-            "files_host_key_mismatch",
-        ),
-        ApplicationError::RemoteFilesFailed => {
-            ApiProblem::new(StatusCode::BAD_GATEWAY, "Bad gateway", "files_failed")
-        }
-        ApplicationError::RemoteFilesTimedOut => ApiProblem::new(
-            StatusCode::GATEWAY_TIMEOUT,
-            "Gateway timeout",
-            "files_timed_out",
-        ),
         _ => ApiProblem::internal(),
     }
 }
@@ -942,6 +698,12 @@ impl ApiProblem {
                 detail: None,
             },
         }
+    }
+
+    /// Add human-readable detail, e.g. an error message from the device.
+    pub(crate) fn with_detail(mut self, detail: Option<String>) -> Self {
+        self.body.detail = detail;
+        self
     }
 
     fn unauthorized() -> Self {

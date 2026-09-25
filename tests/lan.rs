@@ -14,7 +14,10 @@ use myconnect::{
     plugins::clipboard::InMemoryClipboard,
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
     transport::{
-        lan::{LanConfig, LanService, LocalDeviceInfo, MAX_DISCOVERY_DATAGRAM, TCP_PORT_RANGE},
+        lan::{
+            LOOPBACK_BROADCAST, LanConfig, LanService, LocalDeviceInfo, MAX_DISCOVERY_DATAGRAM,
+            TCP_PORT_RANGE,
+        },
         tls::{self, PeerPin, TlsMaterial, subject_public_key_info},
     },
 };
@@ -310,6 +313,86 @@ async fn a_peer_added_by_address_connects_without_broadcast() {
 
     a_service.shutdown().await.unwrap();
     b_service.shutdown().await.unwrap();
+}
+
+/// `LanConfig::loopback` as the daemon's `--discovery-loopback` uses it,
+/// on a private port: nothing binds an address a LAN interface receives
+/// on, and two instances still find each other, by broadcast and by
+/// address.
+#[tokio::test]
+async fn loopback_only_peers_bind_nothing_but_loopback_and_still_meet() {
+    let a = peer("Peer A");
+    let b = peer("Peer B");
+    let c = peer("Peer C");
+    let a_id = a.identity.device_id().to_owned();
+    let b_id = b.identity.device_id().to_owned();
+    let c_id = c.identity.device_id().to_owned();
+    let port = free_udp_addr().port();
+    // Each announces once, when it starts: B's announcement brings A and B
+    // together, so only C's announcement to an address can bring in C.
+    let config = || {
+        LanConfig::loopback(port)
+            .with_announce_interval(Duration::from_secs(60))
+            .with_timeouts(
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+            )
+    };
+    let a_service = LanService::start(
+        config(),
+        local(&a_id, "Peer A"),
+        a.application.clone(),
+        a.commands,
+        a.identity.clone(),
+        a.trust_store.clone(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let b_service = LanService::start(
+        config(),
+        local(&b_id, "Peer B"),
+        b.application.clone(),
+        b.commands,
+        b.identity.clone(),
+        b.trust_store.clone(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    for service in [&a_service, &b_service] {
+        assert_eq!(
+            service.discovery_addr(),
+            SocketAddr::from((LOOPBACK_BROADCAST, port))
+        );
+        assert_eq!(service.tcp_addr().ip(), Ipv4Addr::LOCALHOST);
+    }
+    wait_for_reachability(&a.application, &b_id, DeviceReachability::Connected).await;
+    wait_for_reachability(&b.application, &a_id, DeviceReachability::Connected).await;
+
+    // A third instance that doesn't broadcast is found when added by a
+    // loopback address; one off loopback is never announced to.
+    let c_service = LanService::start(
+        config().with_announcement_targets(Vec::new()),
+        local(&c_id, "Peer C"),
+        c.application.clone(),
+        c.commands,
+        c.identity.clone(),
+        c.trust_store.clone(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    c.application
+        .announce_to(Ipv4Addr::new(192, 0, 2, 1))
+        .unwrap();
+    c.application.announce_to(Ipv4Addr::LOCALHOST).unwrap();
+    wait_for_reachability(&a.application, &c_id, DeviceReachability::Connected).await;
+
+    a_service.shutdown().await.unwrap();
+    b_service.shutdown().await.unwrap();
+    c_service.shutdown().await.unwrap();
 }
 
 // The two tests below play the KDE Connect side of the handshake byte for

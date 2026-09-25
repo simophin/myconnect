@@ -6,8 +6,8 @@
 //! plugins a [`PluginContext`] to reach them. The set of plugins is fixed at
 //! compile time ([`crate::plugins::builtin`]); nothing is loaded at runtime.
 //!
-//! Features not yet moved to a plugin are still routed by the fixed table in
-//! [`crate::plugins`]. See `docs/research/feature-modules.md`.
+//! See `docs/research/feature-modules.md` for how the daemon got this
+//! shape.
 
 use std::{
     any::Any,
@@ -16,6 +16,7 @@ use std::{
 };
 
 use axum::Router;
+use futures_util::future::{BoxFuture, join_all};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
@@ -86,6 +87,20 @@ pub trait Plugin: Any + Send + Sync {
     /// Called before the core publishes the device's new state, as for
     /// [`Self::disconnected`].
     fn unpaired(&self, _ctx: &PluginContext, _device_id: &str) {}
+
+    /// The daemon started: called once, inside the async runtime, before
+    /// the LAN transport and the API start, for a plugin that runs work of
+    /// its own (e.g. watching something on this machine). A core built
+    /// without the daemon, as in unit tests, never calls it.
+    fn started(self: Arc<Self>, _ctx: &PluginContext) {}
+
+    /// The daemon is stopping: end the plugin's own work and close what it
+    /// holds open. Called once, after the API and LAN transport have
+    /// stopped and every transfer has ended, never while holding the
+    /// core's lock. Every plugin's shutdown runs concurrently.
+    fn shutdown(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
 }
 
 /// What the core offers a plugin. Cheap to clone.
@@ -343,6 +358,16 @@ impl PluginRegistry {
         for plugin in &self.plugins {
             plugin.unpaired(ctx, device_id);
         }
+    }
+
+    pub fn started(&self, ctx: &PluginContext) {
+        for plugin in &self.plugins {
+            plugin.clone().started(ctx);
+        }
+    }
+
+    pub async fn shutdown(&self) {
+        join_all(self.plugins.iter().map(|plugin| plugin.shutdown())).await;
     }
 
     /// Every plugin's routes, merged.

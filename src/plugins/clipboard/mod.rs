@@ -28,6 +28,7 @@ use std::{
 };
 
 use axum::Router;
+use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{sync::watch, task::JoinHandle};
@@ -131,6 +132,10 @@ pub enum ClipboardSyncError {
 pub struct ClipboardPlugin {
     backend: Arc<dyn ClipboardService + Send + Sync>,
     snapshot: Mutex<ClipboardSnapshot>,
+    /// Following the backend's local changes, once the daemon has started.
+    follower: Mutex<Option<JoinHandle<()>>>,
+    /// Stops the follower at shutdown.
+    shutdown: CancellationToken,
 }
 
 impl ClipboardPlugin {
@@ -138,6 +143,8 @@ impl ClipboardPlugin {
         Self {
             backend,
             snapshot: Mutex::default(),
+            follower: Mutex::default(),
+            shutdown: CancellationToken::new(),
         }
     }
 
@@ -327,6 +334,44 @@ impl Plugin for ClipboardPlugin {
 
     fn routes(self: Arc<Self>, ctx: PluginContext) -> Router {
         http::routes(self, ctx)
+    }
+
+    /// Follow text copied on this machine, if the backend reports it.
+    fn started(self: Arc<Self>, ctx: &PluginContext) {
+        let Some(changes) = self.backend.watch_local_changes() else {
+            return;
+        };
+        let shutdown = self.shutdown.child_token();
+        let follower = self
+            .clone()
+            .follow_local_changes(ctx.clone(), changes, shutdown);
+        if let Some(previous) = self
+            .follower
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .replace(follower)
+        {
+            previous.abort();
+        }
+    }
+
+    /// Stop following local copies and release the backend.
+    fn shutdown(&self) -> BoxFuture<'_, ()> {
+        self.shutdown.cancel();
+        let follower = self
+            .follower
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let backend = self.backend.clone();
+        Box::pin(async move {
+            if let Some(follower) = follower {
+                let _ = follower.await;
+            }
+            // Releasing the desktop clipboard may wait briefly for a
+            // clipboard manager to take over the text we own (X11).
+            let _ = tokio::task::spawn_blocking(move || backend.release()).await;
+        })
     }
 
     fn settings(&self) -> Option<SettingsSection> {
@@ -645,5 +690,56 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    /// A clipboard that reports local copies, as the desktop's does, and
+    /// records being released.
+    struct WatchedClipboard {
+        memory: InMemoryClipboard,
+        changes: watch::Sender<Option<String>>,
+        released: std::sync::atomic::AtomicBool,
+    }
+
+    impl ClipboardService for WatchedClipboard {
+        fn get(&self) -> Result<Option<String>, ClipboardError> {
+            self.memory.get()
+        }
+        fn set(&self, text: &str) -> Result<(), ClipboardError> {
+            self.memory.set(text)
+        }
+        fn watch_local_changes(&self) -> Option<watch::Receiver<Option<String>>> {
+            Some(self.changes.subscribe())
+        }
+        fn release(&self) {
+            self.released
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn local_copies_are_followed_from_start_until_shutdown() {
+        let backend = Arc::new(WatchedClipboard {
+            memory: InMemoryClipboard::new(),
+            changes: watch::Sender::new(None),
+            released: Default::default(),
+        });
+        let (handle, _commands) = crate::application::testing::handle_with_plugins(
+            crate::plugins::builtin(backend.clone()),
+        );
+        let mut rx = connect_paired_peer(&handle, DEVICE_ID);
+
+        handle.start_plugins();
+        backend.changes.send_replace(Some("copied".into()));
+        let sent = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(content(&sent), "copied");
+
+        handle.shutdown_plugins().await;
+        assert!(backend.released.load(std::sync::atomic::Ordering::SeqCst));
+        backend.changes.send_replace(Some("after shutdown".into()));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(rx.try_recv().is_err());
     }
 }

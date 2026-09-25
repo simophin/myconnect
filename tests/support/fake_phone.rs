@@ -28,7 +28,7 @@ use myconnect::{
     config::LocalIdentity,
     plugins::{
         battery::PACKET_TYPE as BATTERY_PACKET_TYPE,
-        sftp::{PACKET_TYPE as SFTP_PACKET_TYPE, REQUEST_PACKET_TYPE},
+        browse::{PACKET_TYPE as SFTP_PACKET_TYPE, REQUEST_PACKET_TYPE},
     },
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
     transport::tls::{self, PeerPin, TlsMaterial},

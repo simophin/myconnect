@@ -158,6 +158,14 @@ impl ClipboardService for SystemClipboard {
             .send(Request::Write(text.to_owned()))
             .map_err(|_| ClipboardError::Unavailable)
     }
+
+    fn watch_local_changes(&self) -> Option<watch::Receiver<Option<String>>> {
+        Some(self.local_changes())
+    }
+
+    fn release(&self) {
+        self.stop();
+    }
 }
 
 impl Drop for SystemClipboard {

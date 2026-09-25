@@ -30,6 +30,10 @@ use crate::{
 };
 
 pub const DISCOVERY_PORT: u16 = 1716;
+/// Where loopback-only discovery ([`LanConfig::loopback`]) listens and
+/// announces: the broadcast address of `lo`, so every instance on the host
+/// hears every other.
+pub const LOOPBACK_BROADCAST: Ipv4Addr = Ipv4Addr::new(127, 255, 255, 255);
 const PROTOCOL_VERSION: u8 = 8;
 pub const TCP_PORT_RANGE: RangeInclusive<u16> = 1716..=1764;
 pub const MAX_DISCOVERY_DATAGRAM: usize = 8 * 1024;
@@ -49,6 +53,8 @@ pub struct LanConfig {
     peer_discovery_port: u16,
     tcp_bind_ip: Ipv4Addr,
     tcp_ports: RangeInclusive<u16>,
+    /// Keep discovery on loopback: see [`LanConfig::loopback`].
+    loopback_only: bool,
     announce_interval: Duration,
     connect_timeout: Duration,
     identity_timeout: Duration,
@@ -69,6 +75,7 @@ impl Default for LanConfig {
             peer_discovery_port: DISCOVERY_PORT,
             tcp_bind_ip: Ipv4Addr::UNSPECIFIED,
             tcp_ports: TCP_PORT_RANGE,
+            loopback_only: false,
             announce_interval: Duration::from_secs(30),
             connect_timeout: Duration::from_secs(5),
             identity_timeout: Duration::from_secs(5),
@@ -78,6 +85,29 @@ impl Default for LanConfig {
 }
 
 impl LanConfig {
+    /// Discovery and control connections on loopback only, for running
+    /// several instances against each other on one machine. Nothing binds
+    /// an address other interfaces receive on, so devices on the network
+    /// can neither discover this one nor connect to it, and it announces
+    /// only to [`LOOPBACK_BROADCAST`]. A peer added by address is announced
+    /// to only if the address is a loopback one, and then by that broadcast.
+    ///
+    /// Discovery binds the broadcast address itself rather than 127.0.0.1:
+    /// a socket bound to 127.0.0.1 doesn't receive datagrams sent to
+    /// 127.255.255.255, and the wildcard address would receive them from
+    /// every interface.
+    pub fn loopback(discovery_port: u16) -> Self {
+        let broadcast = SocketAddr::V4(SocketAddrV4::new(LOOPBACK_BROADCAST, discovery_port));
+        Self {
+            loopback_only: true,
+            ..Self::default()
+        }
+        .with_discovery_bind(broadcast)
+        .with_announcement_targets(vec![broadcast])
+        .with_peer_discovery_port(discovery_port)
+        .with_tcp_bind(Ipv4Addr::LOCALHOST, TCP_PORT_RANGE)
+    }
+
     pub fn with_discovery_bind(mut self, address: SocketAddr) -> Self {
         self.discovery_bind = address;
         self
@@ -148,7 +178,20 @@ impl LanService {
         cancellation: CancellationToken,
     ) -> Result<Self, LanError> {
         validate_local(&local)?;
-        let udp = Arc::new(bind_udp(config.discovery_bind)?);
+        let udp = match bind_udp(config.discovery_bind) {
+            // A system whose loopback interface has no broadcast address
+            // can't bind it; stay on loopback, where only announcements to
+            // 127.0.0.1 itself arrive.
+            Err(LanError::Socket(error))
+                if config.loopback_only && error.kind() == std::io::ErrorKind::AddrNotAvailable =>
+            {
+                debug!(%error, "loopback broadcast unavailable; binding 127.0.0.1");
+                let port = config.discovery_bind.port();
+                bind_udp(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))?
+            }
+            bound => bound?,
+        };
+        let udp = Arc::new(udp);
         let discovery_addr = udp.local_addr().map_err(LanError::Socket)?;
         let tcp = bind_tcp(config.tcp_bind_ip, config.tcp_ports.clone()).await?;
         let tcp_addr = tcp.local_addr().map_err(LanError::Socket)?;
@@ -243,6 +286,14 @@ async fn run(
             command = commands.recv(), if commands_open => match command {
                 Some(Command::AnnounceDiscovery) => {
                     announce(&udp, &config.announcement_targets, &announcement).await;
+                }
+                Some(Command::AnnounceTo { address }) if config.loopback_only => {
+                    if address.is_loopback() {
+                        let target = SocketAddr::V4(SocketAddrV4::new(LOOPBACK_BROADCAST, config.peer_discovery_port));
+                        announce(&udp, &[target], &announcement).await;
+                    } else {
+                        debug!(%address, "not announcing off loopback in loopback-only mode");
+                    }
                 }
                 Some(Command::AnnounceTo { address }) => {
                     let target = SocketAddr::V4(SocketAddrV4::new(address, config.peer_discovery_port));

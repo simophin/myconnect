@@ -173,7 +173,12 @@ cd ui && flutter run -d linux \
 
 To try file browsing without a phone, run
 `cargo run --example fake_phone -- <DATA_DIR> <STORAGE_DIR> <DESKTOP_ID>`
-as the peer instead.
+as the peer instead. It dials the desktop once, on the first
+announcement it hears, so restart it (same data dir) after the desktop
+restarts. It trusts the desktop's key only after a pairing request in the
+same run; a restarted phone lets the desktop in by password instead. To
+pair the app with it without clicking through the UI, pair a CLI daemon
+started on the app's data dir first, stop it, then start the app.
 
 Without a display (e.g. in an agent sandbox), run the built bundle under
 `Xvfb`, take screenshots with `import -display :NN -window root out.png`, and
@@ -202,5 +207,12 @@ their network without asking.
   Thunar) on the virtual display, and it may start helpers (`xfconfd`,
   `tumblerd`) that outlive it. Kill them afterwards, checking
   `/proc/<pid>/environ` first to make sure they belong to the private bus.
+- Quitting the app (the tray's Quit, the one path that stops the
+  daemon) works without a tray host: read `DBUS_SESSION_BUS_ADDRESS`
+  from `/proc/<app pid>/environ`, get the menu with `gdbus call --session
+  --dest org.kde.StatusNotifierItem-<pid>-1 --object-path
+  /StatusNotifierItem/Menu --method com.canonical.dbusmenu.GetLayout --
+  0 -1 '["label"]'`, and send `com.canonical.dbusmenu.Event -- <Quit's
+  id> clicked '<"">' 0`.
 - Don't clean up with `pkill -f <pattern>`: the pattern also matches the
   shell running the command, and kills it. Kill by PID.

@@ -27,7 +27,10 @@ collide with another run. Do this every time, without being asked:
   The app's embedded daemon already picks a free port.
 - **Network.** Pass `--discovery-loopback` (CLI) and
   `--dart-define=MYCONNECT_DISCOVERY_LOOPBACK=true` (app) so nothing
-  announces on the LAN. Loopback instances from other sessions can still
+  announces on or listens to the LAN: discovery binds `127.255.255.255:1716`
+  and the control and payload ports bind `127.0.0.1`, so real devices can
+  neither find nor dial the instance (`ss -lunpt` shows only loopback
+  addresses for its PID). Loopback instances from other sessions can still
   see yours in a scan, so pair only with the device id you started, never by
   name alone. Don't pair with or send to real devices without asking.
 - **Display and D-Bus.** Run the app under

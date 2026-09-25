@@ -29,11 +29,13 @@ The CLI interface is command based, allowing users to interact with MyConnect th
 
 - `myconnect run [--data-dir <dir>] [--download-dir <dir>] [--device-name <name>] [--discovery-loopback]` -
   Run the authenticated local daemon in the foreground. `--discovery-loopback`
-  restricts LAN discovery to loopback broadcast instead of the real network —
+  keeps discovery and connections on loopback instead of the real network —
   useful for running multiple local instances against each other for testing
   (a physical switch never reflects a broadcast frame back to the port it
   came from, so two instances on one machine otherwise can't discover each
-  other over a real NIC), at the cost of not discovering real devices.
+  other over a real NIC). Discovery binds `127.255.255.255:1716` and the
+  control and payload ports bind `127.0.0.1`, so real devices can neither
+  discover nor connect to the instance.
 - `myconnect devices [--watch]` - List devices and optionally follow changes.
 - `myconnect scan [--address <ip>] [--timeout <seconds>] [--watch]` -
   Broadcast a discovery request and list unpaired devices that answer.
@@ -70,7 +72,7 @@ src/
 ├── config/          # persistent identity, optional API token, peer trust
 ├── transport/        # UDP discovery, TCP/TLS, auxiliary payload connections
 ├── device.rs         # device registry and snapshots
-├── plugins/           # features: ping, findmyphone, battery, clipboard (plugins); share, sftp (fixed table)
+├── plugins/           # features: ping, findmyphone, battery, clipboard, share, browse
 ├── application(.rs/*) # orchestration: pairing/transfer state machines, event bus
 ├── api.rs               # local HTTP control plane (optional token auth)
 ├── client.rs             # HTTP client used by the CLI
