@@ -261,7 +261,8 @@ takes one new trait feature at a time.
 
 | Phase | Moves | Proves |
 | --- | --- | --- |
-| 0 (this branch) | ping | trait, registry, dispatch, capabilities, routes, open plugin events, `ApiProblem` for plugins |
+| 0 (done, #16) | ping | trait, registry, dispatch, capabilities, routes, open plugin events, `ApiProblem` for plugins |
+| 0b (done) | find my phone (ring), added after the plan the old way | a send-only plugin: `incoming()` and `handle_packet()` got defaults |
 | 1 | battery | `device_state` + `device_changed`, `disconnected`/`unpaired` hooks, `DeviceSnapshot` extension (UI change) |
 | 2 | clipboard | settings sections (UI + CLI change), `connected` hook, `broadcast`, plugin-owned global resource (`/clipboard`) |
 | 3 | share | transfers extracted into a core service; `streaming_routes`; payload/TLS access through the context |
@@ -330,6 +331,23 @@ sits behind auth and uses the shared problem format.
   `ping::send_ping(&handle.plugin_context(), ..)`. That's fine for tests
   and the CLI (which uses HTTP anyway), and it keeps feature functions out
   of the core's type.
-- **Capability filtering is only tested through ping** (as before). When
-  battery or clipboard lands, move one of those tests to `plugin.rs`
-  against a dummy plugin, so the core's `send` check has its own test.
+- **Capability filtering is only tested through ping and ring** (as
+  before). When battery or clipboard lands, move one of those tests to
+  `plugin.rs` against a dummy plugin, so the core's `send` check has its
+  own test.
+
+Moving find my phone (#15), which landed the old way while the plan was
+in review, showed:
+
+- **It confirmed the problem.** #15 edited `service.rs`, `api.rs`, the
+  `ApplicationService` trait and the capability table, and it conflicted
+  with #16 in three of them. As a plugin it is two small files, and
+  `service.rs` and `api.rs` only lost lines.
+- **A send-only plugin needed defaults.** Ring handles no packets, so
+  `incoming()` now defaults to none and `handle_packet()` to a no-op.
+  A plugin that declares incoming types still has to override the
+  handler; its tests would catch a missing one.
+- **Capability order moved.** Plugins' capabilities come first, so ring's
+  string moved in the identity packet. Order means nothing to peers, and
+  the capabilities test now compares sorted lists so the next move won't
+  break it.

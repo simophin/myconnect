@@ -240,7 +240,6 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
             "/devices/{device_id}",
             get(get_device).delete(delete_device),
         )
-        .route("/devices/{device_id}/ring", post(post_ring))
         .route(
             "/devices/{device_id}/clipboard",
             post(post_device_clipboard),
@@ -454,19 +453,6 @@ async fn delete_device(
         .forget_device(&device_id)
         .map_err(map_error)?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-/// Ask a paired, connected device that advertises
-/// `kdeconnect.findmyphone.request` to ring so it can be found.
-async fn post_ring(
-    State(state): State<ApiState>,
-    Path(device_id): Path<String>,
-) -> Result<StatusCode, ApiProblem> {
-    state
-        .application
-        .ring_device(&device_id)
-        .map_err(map_error)?;
-    Ok(StatusCode::ACCEPTED)
 }
 
 /// Send this machine's clipboard text to a paired, connected device, for
