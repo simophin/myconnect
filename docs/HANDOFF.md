@@ -12,9 +12,9 @@ the detail behind each feature and the traps found along the way.
 
 ## Read first
 
-1. [`ARCHITECTURE.md`](ARCHITECTURE.md): module map, state machines, the
-   full HTTP API, the FFI embedding (§9), known gaps (§11), browsing a
-   device's files (§12).
+1. [`ARCHITECTURE.md`](ARCHITECTURE.md): the core and its plugins, and
+   the module map (§2), state machines, the full HTTP API, the FFI
+   embedding (§9), known gaps (§11), browsing a device's files (§12).
 2. [`../ui/README.md`](../ui/README.md): how to run the app, including two
    instances on one machine.
 3. [`../ui/docs/adr/`](../ui/docs/adr/README.md): why the UI is shaped the
@@ -30,6 +30,10 @@ the detail behind each feature and the traps found along the way.
   snapshot, patches it from `/events`, and refetches after any reconnect
   (ADR 0003). A resource with events but no list endpoint (or the reverse)
   leaves the UI unable to recover after a gap.
+- **A feature is a plugin.** It lives in `src/plugins/<name>/`,
+  implements `core::Plugin`, and is one line in `plugins::builtin()`
+  (ARCHITECTURE §2). The core doesn't name features, and plugins don't
+  import each other: what two features share belongs in the core.
 - **Native code only starts and stops the daemon** (`ffi/`, ADR 0002). Don't
   add FFI functions for application features.
 - **Token auth is optional.** It is enforced only when the daemon was

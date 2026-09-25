@@ -20,54 +20,129 @@ The Flutter desktop app lives in `ui/`.
 
 ```text
 CLI (myconnect)       ─┐
-Flutter UI (ui/)       ├── local HTTP API (/api/v1) ── application core ── KDE Connect transport
+Flutter UI (ui/)       ├── local HTTP API (/api/v1) ── core + plugins ── KDE Connect transport
 Other automation      ─┘
 ```
 
 The CLI and the Flutter UI talk to the daemon exclusively through the local
 HTTP API. Neither owns sockets, pairing state, trust state, or transfer
 state — that all lives inside the daemon process, behind
-`ApplicationHandle`. The UI additionally uses the FFI library, but only to
+`core::Core`. The UI additionally uses the FFI library, but only to
 start and stop an embedded daemon (§9); the UI's own design decisions are
 recorded in [`ui/docs/adr/`](../ui/docs/adr/README.md).
 
 ## 2. Module map and dependency direction
 
+The daemon is a small **core** and a fixed set of **plugins**, one per
+feature. The core owns devices, connections, pairing, trust, transfers,
+settings and the event bus; a plugin owns one feature's packets, state,
+routes and events, and reaches the core only through the `PluginContext`
+it is given. The set of plugins is fixed at compile time, listed in
+`plugins::builtin()`; nothing is loaded at runtime, and there is no plugin
+ABI. Boundaries are kept by module visibility and review, in one crate.
+
 ```text
-binary (src/bin/myconnect) → client → api
-ffi (myconnect-ffi) → application::RunningService
-api → application
-application → config, device, transport
-application::RunningService → plugins::builtin (the composition root)
-plugins → application (the Plugin API), protocol
-device, transport → protocol
+binary (src/bin/myconnect) → daemon, client
+ffi (myconnect-ffi) → daemon
+daemon → core, plugins::builtin, api, transport (the composition root)
+api → core (core routes, plugin routes merged in)
+plugins/* → core (Plugin, PluginContext), api (ApiProblem, upload helpers), protocol
+core → config, transport, protocol
+transport::lan → core (it registers connections and delivers packets)
+client → core (snapshot and event types), plugins/* (their types)
 ```
 
 `protocol` and `transport` never depend on Axum, Clap, or API response
-types — they know nothing about HTTP. A plugin reaches the core only through
-`application::PluginContext`, and never another plugin.
+types. The core never names a plugin: it calls them only through
+`dyn Plugin`, and `daemon` is the one place that picks them. Plugins never
+import each other; what two features need (transfers, payload connections)
+is a core service.
 
 | Module | File(s) | Responsibility |
 | --- | --- | --- |
 | `protocol` | `src/protocol/{mod,packet,codec,verification}.rs` | Wire packet envelope, identity/pairing body types, bounded newline-delimited JSON codec, the protocol-v8 verification-code function. No I/O. |
 | `config` | `src/config/{mod,identity,settings,token,trust}.rs` | Local device identity (UUID + self-signed cert), the optional API bearer token (never persisted), filesystem-backed `TrustStore` of pinned peer certificates (one `trusted-devices/<id>.json` each, with the name, type and capabilities the peer last reported over an authenticated connection), and `settings.json` (user settings, written atomically). |
-| `transport` | `src/transport/{lan,tls,payload}.rs` | UDP discovery, TCP control-channel connect/accept, the real rustls TLS handshake and certificate pinning, and the auxiliary TLS payload connection used for file transfer. `LanConfig::loopback` (the daemon's `--discovery-loopback`) binds discovery to `127.255.255.255` and the control listener to `127.0.0.1`, so nothing on the LAN can discover or reach the instance. |
-| `device` | `src/device.rs` | `DeviceSnapshot` (whose `plugins` map the core fills from each plugin's `device_state` when it hands a snapshot out), `DeviceReachability`, and the in-memory device registry keyed by device ID. It starts with every paired device from the `TrustStore`, as `unavailable`, so paired devices are listed while offline. |
-| `plugins` | `src/plugins/mod.rs`, `src/plugins/{ping,findmyphone}/{mod,packet,http}.rs`, `src/plugins/battery/{mod,packet}.rs`, `src/plugins/clipboard/{mod,packet,http,backend}.rs`, `src/plugins/clipboard/backend/system.rs`, `src/plugins/share/{mod,packet,http}.rs`, `src/plugins/browse/{mod,packet,http,session,ssh,files}.rs` | The features. `builtin()` lists every one; each implements `application::Plugin`: ping, which owns its packet handling, `ping.received` event and `POST /devices/{id}/ping` route, find my phone, which only sends and owns `POST /devices/{id}/ring`, battery, which adds `plugins.battery` to device snapshots and clears it through the `disconnected`/`unpaired` hooks, and clipboard, which owns the synced text and `/clipboard`, the `plugins.clipboard` settings section, and its backends: the `ClipboardService` trait, the desktop clipboard `SystemClipboard` over `arboard`, and an in-memory one, §6, and share, which sends files through its streaming route `POST /devices/{id}/share` and saves files peers send, both as transfers of the core's transfers service, §5, and browse, which owns the per-device SFTP sessions with peers' file servers, the `/devices/{id}/files` routes (the upload as a streaming route), and closes its sessions through the `disconnected`/`unpaired`/`shutdown` hooks, §12. Clipboard follows the desktop clipboard from its `started` hook and releases it in `shutdown`. Advertises capability strings for the identity packet: ping, clipboard and share in both directions; `kdeconnect.sftp.request` outgoing and `kdeconnect.sftp` incoming only, since this build browses peers but serves no files; `kdeconnect.battery` incoming only, since it reads peers' batteries but reports none; `kdeconnect.findmyphone.request` outgoing only, since this build asks peers to ring but doesn't ring itself. |
-| `application` | `src/application.rs`, `src/application/{state,events,plugin,service,settings,transfers,payload}.rs` | Orchestration: connection registry, pairing state machine, the transfers service (`Transfers`, `TransferHandle`: the transfer state machine, progress throttling, cancellation, and cleanup, for every feature that moves a file, §5), payload connections for plugins (`PayloadPeer`: listen or dial with this device's certificate, or sign in to an SSH server on the device with its key, without handing out the key), user settings (with a section per plugin that has settings), bounded event bus, and the plugin API (`Plugin`, `PluginContext`, `PluginRegistry`; plugin events travel as `EventData::Plugin` with the same `{type, data}` shape). `testing` is a real core for unit tests. `RunningService` starts/stops a whole daemon (LAN + API) for the CLI and embedders. |
-| `api` | `src/api.rs`, `src/api/upload.rs` | Axum HTTP transport only — translates HTTP requests to `ApplicationService` calls and snapshots back to JSON, and merges in the plugins' routes. Optional bearer-token auth, body-size limits, SSE. Streaming routes (every plugin's `streaming_routes`) get the transfer-sized body limit and no request deadline; `upload` has the helpers they share (idle timeout, forwarding a multipart file part into a transfer). |
+| `transport` | `src/transport/{lan,tls,payload}.rs` | UDP discovery, TCP control-channel connect/accept, the real rustls TLS handshake and certificate pinning, and the auxiliary TLS payload connection used for file transfer. `LanConfig::loopback` (the daemon's `--discovery-loopback`) binds discovery to `127.255.255.255` and the control listener to `127.0.0.1`, so nothing on the LAN can discover or reach the instance. It takes `LanCommand`s (announce now, announce to one address) from the core. |
+| `core` | `src/core.rs` | `Core`, the cloneable handle to everything below: its state, construction, status, settings, and running the plugins' hooks. One `RwLock` holds what must change together (devices, connections, pairings); transfers, settings and every plugin's state have their own locks. |
+| | `src/core/devices.rs` | The device registry and `DeviceSnapshot` (whose `plugins` map is filled from each plugin's `device_state` when a snapshot leaves the core), discovery, forgetting a device, and keeping a paired device's trust record up to date. The registry starts with every paired device from the `TrustStore`, as `unavailable`, so paired devices are listed while offline. |
+| | `src/core/connections.rs` | Registering and dropping authenticated control channels, routing each incoming packet to the plugin that claims its type (only from paired devices), sending to devices that advertised a packet type, and `LanCommand`, the channel to the LAN transport. |
+| | `src/core/pairing.rs` | The pairing state machine (§4) in both directions, its timeouts, and the trust it writes or removes. |
+| | `src/core/transfers.rs`, `src/core/payload.rs` | The transfers service (`Transfers`, `TransferHandle`: the state machine, progress throttling, cancellation and cleanup, for every feature that moves a file, §5), and payload connections for plugins (`PayloadPeer`: listen or dial with this device's certificate, or sign in to an SSH server on the device with its key, without handing out the key). |
+| | `src/core/{plugin,events,settings,error}.rs` | The plugin API (`Plugin`, `PluginContext`, `PluginRegistry`, `Capabilities`, plugin events and settings sections), the bounded event bus (plugin events travel as `EventData::Plugin` with the same `{type, data}` shape), user settings with a section per plugin that has settings (§7), and `CoreError`. |
+| | `src/core/testing.rs` | A real core for unit tests: in-memory trust store, no plugins or just the one under test, no LAN. |
+| `plugins` | `src/plugins/mod.rs`, `src/plugins/{ping,findmyphone}/{mod,packet,http}.rs`, `src/plugins/battery/{mod,packet}.rs`, `src/plugins/clipboard/{mod,packet,http,backend}.rs`, `src/plugins/clipboard/backend/system.rs`, `src/plugins/share/{mod,packet,http}.rs`, `src/plugins/browse/{mod,packet,http,session,ssh,files}.rs` | The features, each a `core::Plugin`; `builtin()` lists them. Ping owns its packet handling, `ping.received` event and `POST /devices/{id}/ping`. Find my phone only sends, and owns `POST /devices/{id}/ring`. Battery adds `plugins.battery` to device snapshots and clears it through the `disconnected`/`unpaired` hooks. Clipboard owns the synced text and `/clipboard`, the `plugins.clipboard` settings section, and its backends (the `ClipboardService` trait, the desktop clipboard `SystemClipboard` over `arboard`, an in-memory one); it follows the desktop clipboard from its `started` hook and releases it in `shutdown` (§6). Share sends files through its streaming route `POST /devices/{id}/share` and saves files peers send, both as core transfers (§5). Browse owns the per-device SFTP sessions with peers' file servers and the `/devices/{id}/files` routes (the upload as a streaming route), and closes its sessions through the `disconnected`/`unpaired`/`shutdown` hooks (§12). Capabilities advertised in the identity packet are the union over the plugins: ping, clipboard and share in both directions; `kdeconnect.sftp.request` outgoing and `kdeconnect.sftp` incoming only, since this build browses peers but serves no files; `kdeconnect.battery` incoming only, since it reads peers' batteries but reports none; `kdeconnect.findmyphone.request` outgoing only, since this build asks peers to ring but doesn't ring itself. |
+| `daemon` | `src/daemon.rs` | The composition root: `RunningService` builds the core with `plugins::builtin()`, applies the stored settings, starts the plugins, the LAN transport (advertising the core's capabilities) and the API, and stops them in order. Used by the CLI's `run` and by the FFI. |
+| `api` | `src/api.rs`, `src/api/upload.rs` | The Axum server: the core's routes (`/status`, `/discovery`, `/devices`, `/pairings`, `/transfers`, `/settings`, `/events`), every plugin's routes merged in, `ApiProblem` (the `application/problem+json` error every handler returns, with `From<CoreError>`), optional bearer-token auth, body-size limits, request deadline and SSE. Streaming routes (every plugin's `streaming_routes`) get the transfer-sized body limit and no request deadline; `upload` has the helpers they share (idle timeout, forwarding a multipart file part into a transfer). |
 | `client` | `src/client.rs` | Typed HTTP client used by the CLI (and any future frontend) to talk to `api`. |
 | `src/bin/myconnect` | `cli.rs`, `main.rs` | Argument parsing and daemon bootstrap only. |
 | `myconnect-ffi` | `ffi/src/lib.rs` | `cdylib` exporting `myconnect_start` / `myconnect_stop` / `myconnect_free_string` (JSON in, JSON out) so a GUI process can embed a daemon. See §9. |
 
-A new feature is a module under `plugins/` implementing `application::Plugin`
-(packet types, packet handler, routes and streaming routes, what it adds to a device snapshot,
-a settings section, `connected`/`disconnected`/`unpaired` hooks, and
-`started`/`shutdown` hooks for work of its own) plus one line in
-`plugins::builtin()`.
-The set is fixed at compile time; nothing is loaded at runtime. Every
-feature has moved over; what is left of the plan is core cleanup (see
-[`research/feature-modules.md`](research/feature-modules.md)).
+### The `Plugin` trait
+
+```rust
+pub trait Plugin: Send + Sync + 'static {
+    fn id(&self) -> &'static str;                          // "ping"; names its settings and device state
+    fn incoming(&self) -> &'static [&'static str] { &[] }  // packet types it handles
+    fn outgoing(&self) -> &'static [&'static str];         // packet types it sends
+    fn handle_packet(&self, ctx: &PluginContext, device: &DeviceSnapshot, packet: &Packet) {}
+    fn routes(self: Arc<Self>, ctx: PluginContext) -> Router { Router::new() }
+    fn streaming_routes(self: Arc<Self>, ctx: PluginContext) -> Router { Router::new() }
+    fn device_state(&self, device_id: &str) -> Option<Value> { None }
+    fn settings(&self) -> Option<SettingsSection> { None }
+    fn connected(&self, ctx: &PluginContext, device: &DeviceSnapshot) {}
+    fn disconnected(&self, ctx: &PluginContext, device_id: &str) {}
+    fn unpaired(&self, ctx: &PluginContext, device_id: &str) {}
+    fn started(self: Arc<Self>, ctx: &PluginContext) {}
+    fn shutdown(&self) -> BoxFuture<'_, ()> { Box::pin(async {}) }
+}
+```
+
+Handlers are synchronous and spawn tasks when they need to, so the trait is
+dyn-compatible without `async_trait`. The core passes the context into each
+call rather than plugins storing it, so there is no `Arc` cycle between the
+core and its plugins. The rules the core keeps:
+
+- **Dispatch.** Pairing packets are the core's. Any other packet goes to
+  the plugin whose `incoming()` claims its type, and only from a paired
+  device; a type nobody claims is dropped. Two plugins claiming one type,
+  or sharing an id, panic when the registry is built, so every test fails.
+- **Locks.** The core never calls into a plugin while holding its own lock,
+  and a plugin doesn't hold its own while calling the core.
+- **Hooks.** `connected` runs after `device.connected` is published;
+  `disconnected` and `unpaired` run before the core publishes the device's
+  new state, so state a plugin clears there needs no extra
+  `device.updated`. `started` runs once in the daemon, inside the runtime,
+  before the transport starts (never in a unit-test core); `shutdown` runs
+  for every plugin concurrently after the API and transport have stopped
+  and every transfer has ended.
+- **HTTP.** `routes()` get the standard body limit, deadline and auth;
+  `streaming_routes()` (uploads) get the transfer-sized limit and no
+  overall deadline. Paths are resources under the device they act on
+  (`/devices/{id}/ping`) or a top-level resource of the plugin's own
+  (`/clipboard`), never a `/plugins/<id>/` prefix. Overlapping routes
+  panic when the router is built.
+- **Device state and settings.** A plugin adds to a device's snapshot
+  under `plugins.<id>` by answering `device_state` (pulled whenever a
+  snapshot leaves the core) and calls `ctx.device_changed(id)` when its
+  answer changes. It owns a typed settings section, stored and exposed
+  under `plugins.<id>` (§7), and reads it with `ctx.settings::<T>()`.
+- **Events and errors.** A plugin publishes its own event types
+  (`ctx.publish(&T)` for `T: PluginEventKind`); they look like core events
+  on the wire. Its errors map to `ApiProblem` inside the plugin; core errors
+  convert with `?`.
+
+`PluginContext` offers: `device(id)` and `device_changed(id)`;
+`send(device, packet)` (paired, connected, and the peer advertised the
+type), `can_send` and `broadcast(packet, except)`; `publish`;
+`settings::<T>()`; `transfers()`; and `payload_peer(device)` for payload
+connections and SSH sign-in without the private key.
+
+A new feature is a module under `plugins/` implementing `core::Plugin`,
+with its unit tests against `core::testing::handle_with_plugin`, plus one
+line in `plugins::builtin()`. `client.rs`, the CLI, the UI and this
+document follow it by hand. [`research/feature-modules.md`](research/feature-modules.md)
+records how the daemon was moved to this shape, feature by feature, and
+what each step taught.
 
 ## 3. Connection lifecycle
 
@@ -97,9 +172,10 @@ feature has moved over; what is left of the plan is core cleanup (see
    accepted at the TLS layer (so pairing can proceed) but cannot exchange
    any packet type other than pairing packets until paired (see §4).
 4. **Steady state**: a per-connection packet read/write loop
-   (`application::service::ApplicationHandle`) dispatches incoming packets
-   by type — pairing packets always; ping/clipboard/share packets only for
-   already-paired devices.
+   (`transport::lan`) hands each incoming packet to the core
+   (`Core::handle_peer_packet`), which handles pairing packets itself and
+   routes every other type to the plugin that claims it, only for
+   already-paired devices (§2).
 
 ## 4. Pairing state machine
 
@@ -136,7 +212,7 @@ States: `requested → awaiting_confirmation → accepted | rejected | expired |
 
 States: `queued → connecting → transferring → completed | cancelled | failed`.
 
-- Transfers are a core service (`application::Transfers`) that every feature
+- Transfers are a core service (`core::Transfers`) that every feature
   moving a file uses: sharing and browsing (§12). A feature calls
   `PluginContext::transfers().begin(..)` and gets a `TransferHandle` that owns
   the state machine, records progress, and ends the transfer; a handle

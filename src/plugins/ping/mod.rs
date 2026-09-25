@@ -17,8 +17,7 @@ use serde::{Deserialize, Serialize};
 pub use packet::{PACKET_TYPE, PingBody, build_packet};
 
 use crate::{
-    application::{ApplicationError, Plugin, PluginContext, PluginEventKind},
-    device::DeviceSnapshot,
+    core::{CoreError, DeviceSnapshot, Plugin, PluginContext, PluginEventKind},
     protocol::Packet,
 };
 
@@ -68,8 +67,8 @@ pub fn send_ping(
     ctx: &PluginContext,
     device_id: &str,
     message: Option<String>,
-) -> Result<(), ApplicationError> {
-    let packet = build_packet(unix_millis(), message).map_err(|_| ApplicationError::Internal)?;
+) -> Result<(), CoreError> {
+    let packet = build_packet(unix_millis(), message).map_err(|_| CoreError::Internal)?;
     ctx.send(device_id, packet)
 }
 
@@ -103,16 +102,16 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::application::{
+    use crate::core::{
         EventData,
-        testing::{handle, make_identity},
+        testing::{handle_with_plugin, make_identity},
     };
 
     const DEVICE_ID: &str = "740bd4b9b4184ee497d6caf1da8151be";
 
     #[test]
     fn unpaired_devices_cannot_be_pinged() {
-        let (handle, _commands) = handle();
+        let (handle, _plugin, _commands) = handle_with_plugin(PingPlugin);
         let identity = make_identity(DEVICE_ID, vec![PACKET_TYPE.into()]);
         handle.discover_device(&identity, false, 1).unwrap();
         let (tx, _rx) = mpsc::channel(4);
@@ -124,15 +123,15 @@ mod tests {
         // a silent no-op.
         assert!(matches!(
             send_ping(&handle.plugin_context(), DEVICE_ID, None),
-            Err(ApplicationError::NotPaired)
+            Err(CoreError::NotPaired)
         ));
     }
 
     #[test]
     fn paired_devices_that_accept_pings_can_be_pinged() {
         // Refusals for other devices are the core's, tested in
-        // `application::plugin`.
-        let (handle, _commands) = handle();
+        // `core::plugin`.
+        let (handle, _plugin, _commands) = handle_with_plugin(PingPlugin);
         let identity = make_identity(DEVICE_ID, vec![PACKET_TYPE.into()]);
         handle.discover_device(&identity, true, 1).unwrap();
         let (tx, mut rx) = mpsc::channel(4);
@@ -149,7 +148,7 @@ mod tests {
 
     #[test]
     fn pings_from_paired_devices_are_published_and_others_are_dropped() {
-        let (handle, _commands) = handle();
+        let (handle, _plugin, _commands) = handle_with_plugin(PingPlugin);
         let unpaired_id = "850bd4b9b4184ee497d6caf1da8151be";
         handle
             .discover_device(&make_identity(DEVICE_ID, Vec::new()), true, 1)

@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::broadcast;
 
+use super::DeviceSnapshot;
 use super::{PairingSnapshot, PluginEvent, SettingsSnapshot, TransferSnapshot};
-use crate::device::DeviceSnapshot;
 
-/// Data carried by an application event: one of the core's own, or a
+/// Data carried by an event: one of the core's own, or a
 /// plugin's. Both serialize as `{"type": ..., "data": ...}`; any type the
 /// core doesn't know deserializes as [`EventData::Plugin`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,10 +67,10 @@ impl EventData {
     }
 }
 
-/// Sequenced event sent to API and other application clients.
+/// Sequenced event sent to `/events` and other clients of the core.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ApplicationEvent {
+pub struct CoreEvent {
     pub sequence: u64,
     pub timestamp: u64,
     #[serde(flatten)]
@@ -84,7 +84,7 @@ struct EventBusState {
 
 #[derive(Debug)]
 struct EventBusInner {
-    sender: broadcast::Sender<ApplicationEvent>,
+    sender: broadcast::Sender<CoreEvent>,
     state: Mutex<EventBusState>,
 }
 
@@ -109,11 +109,11 @@ impl EventBus {
         })
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<ApplicationEvent> {
+    pub fn subscribe(&self) -> broadcast::Receiver<CoreEvent> {
         self.inner.sender.subscribe()
     }
 
-    pub fn publish(&self, event: EventData) -> Result<ApplicationEvent, EventBusError> {
+    pub fn publish(&self, event: EventData) -> Result<CoreEvent, EventBusError> {
         // Sequence assignment and send share a lock so concurrent publishers are
         // observed in monotonically increasing order.
         let mut state = self
@@ -125,7 +125,7 @@ impl EventBus {
         state.next_sequence = sequence
             .checked_add(1)
             .ok_or(EventBusError::SequenceExhausted)?;
-        let event = ApplicationEvent {
+        let event = CoreEvent {
             sequence,
             timestamp: unix_millis(),
             event,
@@ -230,7 +230,7 @@ mod tests {
         assert_eq!(value["data"]["hand"], "left");
         assert_eq!(event.event.event_type(), "wave.received");
 
-        let parsed: ApplicationEvent = serde_json::from_value(value).unwrap();
+        let parsed: CoreEvent = serde_json::from_value(value).unwrap();
         let EventData::Plugin(plugin) = parsed.event else {
             panic!("expected a plugin event");
         };
@@ -238,7 +238,7 @@ mod tests {
 
         // Core events still parse as their own variants.
         let core = serde_json::to_value(bus.publish(renamed("hi")).unwrap()).unwrap();
-        let parsed: ApplicationEvent = serde_json::from_value(core).unwrap();
+        let parsed: CoreEvent = serde_json::from_value(core).unwrap();
         assert!(matches!(parsed.event, EventData::SettingsChanged(_)));
     }
 

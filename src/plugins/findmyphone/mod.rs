@@ -14,7 +14,7 @@ use axum::Router;
 
 pub use packet::{REQUEST_PACKET_TYPE, build_request_packet};
 
-use crate::application::{ApplicationError, Plugin, PluginContext};
+use crate::core::{CoreError, Plugin, PluginContext};
 
 pub struct FindMyPhonePlugin;
 
@@ -35,7 +35,7 @@ impl Plugin for FindMyPhonePlugin {
 /// Ask a paired, connected device to ring, with a
 /// `kdeconnect.findmyphone.request`. Refused, with a typed error, unless
 /// the device advertised that packet type.
-pub fn ring_device(ctx: &PluginContext, device_id: &str) -> Result<(), ApplicationError> {
+pub fn ring_device(ctx: &PluginContext, device_id: &str) -> Result<(), CoreError> {
     ctx.send(device_id, build_request_packet(unix_millis()))
 }
 
@@ -55,13 +55,13 @@ mod tests {
 
     use super::*;
     use crate::{
-        application::testing::{handle, make_identity},
+        core::testing::{handle_with_plugin, make_identity},
         plugins::ping,
     };
 
     #[test]
     fn devices_that_accept_it_can_be_asked_to_ring() {
-        let (handle, _commands) = handle();
+        let (handle, _plugin, _commands) = handle_with_plugin(FindMyPhonePlugin);
         let ctx = handle.plugin_context();
         let device_id = "740bd4b9b4184ee497d6caf1da8151be";
         let identity = make_identity(device_id, vec![ping::PACKET_TYPE.into()]);
@@ -74,7 +74,7 @@ mod tests {
         // Accepting pings says nothing about ringing.
         assert!(matches!(
             ring_device(&ctx, device_id),
-            Err(ApplicationError::UnsupportedByPeer)
+            Err(CoreError::UnsupportedByPeer)
         ));
 
         let identity = make_identity(device_id, vec![REQUEST_PACKET_TYPE.into()]);

@@ -4,10 +4,10 @@
 //! future GUI can share the same behavior.
 
 pub mod api;
-pub mod application;
 pub mod client;
 pub mod config;
-pub mod device;
+pub mod core;
+pub mod daemon;
 pub mod plugins;
 pub mod protocol;
 pub mod transport;

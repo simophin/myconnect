@@ -24,8 +24,7 @@ use serde_json::Value;
 pub use packet::{BatteryBody, PACKET_TYPE};
 
 use crate::{
-    application::{Plugin, PluginContext},
-    device::DeviceSnapshot,
+    core::{DeviceSnapshot, Plugin, PluginContext},
     protocol::Packet,
 };
 
@@ -124,9 +123,9 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::application::{
-        ApplicationHandle, ApplicationService, EventData, Query, QueryResult,
-        testing::{handle, make_identity},
+    use crate::core::{
+        Core, EventData,
+        testing::{handle_with_plugin, make_identity},
     };
 
     const PAIRED_ID: &str = "740bd4b9b4184ee497d6caf1da8151be";
@@ -140,24 +139,16 @@ mod tests {
         .unwrap()
     }
 
-    fn battery(handle: &ApplicationHandle, device_id: &str) -> Option<BatteryStatus> {
-        match handle
-            .query(Query::Device {
-                device_id: device_id.into(),
-            })
-            .unwrap()
-        {
-            QueryResult::Device(Some(device)) => BatteryStatus::of(&device),
-            other => panic!("unexpected result {other:?}"),
-        }
+    fn battery(handle: &Core, device_id: &str) -> Option<BatteryStatus> {
+        BatteryStatus::of(&handle.device(device_id).expect("a known device"))
     }
 
     /// A paired device, connected, with events subscribed after it was.
     fn connected() -> (
-        ApplicationHandle,
-        tokio::sync::broadcast::Receiver<crate::application::ApplicationEvent>,
+        Core,
+        tokio::sync::broadcast::Receiver<crate::core::CoreEvent>,
     ) {
-        let (handle, _commands) = handle();
+        let (handle, _plugin, _commands) = handle_with_plugin(BatteryPlugin::default());
         handle
             .discover_device(&make_identity(PAIRED_ID, Vec::new()), true, 1)
             .unwrap();
@@ -170,7 +161,7 @@ mod tests {
     }
 
     fn device_event(
-        events: &mut tokio::sync::broadcast::Receiver<crate::application::ApplicationEvent>,
+        events: &mut tokio::sync::broadcast::Receiver<crate::core::CoreEvent>,
     ) -> EventData {
         events.try_recv().unwrap().event
     }

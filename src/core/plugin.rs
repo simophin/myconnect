@@ -4,13 +4,13 @@
 //! and sends, handles packets from paired devices, and brings its own HTTP
 //! routes. The core owns connections, pairing and the event bus, and gives
 //! plugins a [`PluginContext`] to reach them. The set of plugins is fixed at
-//! compile time ([`crate::plugins::builtin`]); nothing is loaded at runtime.
+//! compile time: the composition root ([`crate::daemon`]) passes the
+//! built-in plugins to [`super::Core::new`]; nothing is loaded at runtime.
 //!
-//! See `docs/research/feature-modules.md` for how the daemon got this
-//! shape.
+//! See `docs/ARCHITECTURE.md` §2 for the shape, and
+//! `docs/research/feature-modules.md` for how the daemon got it.
 
 use std::{
-    any::Any,
     collections::{BTreeMap, HashMap},
     sync::Arc,
 };
@@ -20,11 +20,11 @@ use futures_util::future::{BoxFuture, join_all};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
-use super::{ApplicationError, ApplicationHandle, EventData, PayloadPeer, Transfers};
-use crate::{device::DeviceSnapshot, protocol::Packet};
+use super::{Core, CoreError, DeviceSnapshot, EventData, PayloadPeer, Transfers};
+use crate::protocol::Packet;
 
 /// A feature of the daemon, plugged into the core.
-pub trait Plugin: Any + Send + Sync {
+pub trait Plugin: Send + Sync + 'static {
     /// Stable identifier, e.g. `"ping"`.
     fn id(&self) -> &'static str;
 
@@ -106,24 +106,24 @@ pub trait Plugin: Any + Send + Sync {
 /// What the core offers a plugin. Cheap to clone.
 #[derive(Clone)]
 pub struct PluginContext {
-    core: ApplicationHandle,
+    core: Core,
 }
 
 impl PluginContext {
-    pub(super) fn new(core: ApplicationHandle) -> Self {
+    pub(super) fn new(core: Core) -> Self {
         Self { core }
     }
 
     /// Queue `packet` to a device, provided it is paired, connected, and has
     /// advertised the packet's type in its incoming capabilities.
-    pub fn send(&self, device_id: &str, packet: Packet) -> Result<(), ApplicationError> {
+    pub fn send(&self, device_id: &str, packet: Packet) -> Result<(), CoreError> {
         self.core.send_to_capable(device_id, packet)
     }
 
     /// Whether [`Self::send`] would take a packet of `packet_type` for the
     /// device now, and the error it would refuse it with if not; for a
     /// plugin that has work to do before it can build the packet.
-    pub fn can_send(&self, device_id: &str, packet_type: &str) -> Result<(), ApplicationError> {
+    pub fn can_send(&self, device_id: &str, packet_type: &str) -> Result<(), CoreError> {
         self.core.check_capable(device_id, packet_type)
     }
 
@@ -157,7 +157,7 @@ impl PluginContext {
 
     /// What it takes to open payload connections with a paired, connected
     /// device, for moving a file's bytes beside the control connection.
-    pub fn payload_peer(&self, device_id: &str) -> Result<PayloadPeer, ApplicationError> {
+    pub fn payload_peer(&self, device_id: &str) -> Result<PayloadPeer, CoreError> {
         self.core.payload_peer(device_id)
     }
 
@@ -168,8 +168,8 @@ impl PluginContext {
     }
 
     /// Publish a plugin event to `/events` subscribers.
-    pub fn publish<T: PluginEventKind>(&self, event: &T) -> Result<(), ApplicationError> {
-        let event = PluginEvent::new(event).map_err(|_| ApplicationError::Internal)?;
+    pub fn publish<T: PluginEventKind>(&self, event: &T) -> Result<(), CoreError> {
+        let event = PluginEvent::new(event).map_err(|_| CoreError::Internal)?;
         self.core.event_bus().publish(EventData::Plugin(event))?;
         Ok(())
     }
@@ -251,6 +251,15 @@ impl SettingsSection {
     }
 }
 
+/// The capability strings a device advertises in its identity packet's
+/// `incomingCapabilities` and `outgoingCapabilities`: the union over its
+/// plugins.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Capabilities {
+    pub incoming: Vec<String>,
+    pub outgoing: Vec<String>,
+}
+
 /// The plugins of this build, indexed by the packet types they handle.
 pub struct PluginRegistry {
     plugins: Vec<Arc<dyn Plugin>>,
@@ -301,6 +310,15 @@ impl PluginRegistry {
             .map(|index| &self.plugins[*index])
     }
 
+    /// The packet types these plugins receive and send, for the identity
+    /// packet.
+    pub fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            incoming: self.incoming().map(str::to_owned).collect(),
+            outgoing: self.outgoing().map(str::to_owned).collect(),
+        }
+    }
+
     pub fn incoming(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.plugins
             .iter()
@@ -324,14 +342,6 @@ impl PluginRegistry {
                 Some((plugin.id().to_owned(), state))
             })
             .collect()
-    }
-
-    /// The plugin of type `T`, if this build has one.
-    pub fn get<T: Plugin>(&self) -> Option<Arc<T>> {
-        self.plugins.iter().find_map(|plugin| {
-            let plugin: Arc<dyn Any + Send + Sync> = plugin.clone();
-            plugin.downcast::<T>().ok()
-        })
     }
 
     /// Every plugin's settings section.
@@ -457,7 +467,7 @@ mod tests {
     impl Waver {
         const PACKET_TYPE: &'static str = "x.wave";
 
-        fn wave(ctx: &PluginContext, device_id: &str) -> Result<(), ApplicationError> {
+        fn wave(ctx: &PluginContext, device_id: &str) -> Result<(), CoreError> {
             ctx.send(
                 device_id,
                 Packet::from_body(1_u64, Self::PACKET_TYPE, &serde_json::json!({})).unwrap(),
@@ -479,7 +489,7 @@ mod tests {
         use tokio::sync::mpsc;
         use tokio_util::sync::CancellationToken;
 
-        use crate::application::testing::{handle, make_identity};
+        use crate::core::testing::{handle, make_identity};
 
         let (handle, _commands) = handle();
         let ctx = handle.plugin_context();
@@ -487,20 +497,20 @@ mod tests {
         assert_eq!(Waver.outgoing(), [Waver::PACKET_TYPE]);
         assert!(matches!(
             Waver::wave(&ctx, device_id),
-            Err(ApplicationError::UnknownDevice)
+            Err(CoreError::UnknownDevice)
         ));
 
         let accepting = make_identity(device_id, vec![Waver::PACKET_TYPE.into()]);
         handle.discover_device(&accepting, false, 1).unwrap();
         assert!(matches!(
             Waver::wave(&ctx, device_id),
-            Err(ApplicationError::NotPaired)
+            Err(CoreError::NotPaired)
         ));
 
         handle.discover_device(&accepting, true, 2).unwrap();
         assert!(matches!(
             Waver::wave(&ctx, device_id),
-            Err(ApplicationError::DeviceNotConnected)
+            Err(CoreError::DeviceNotConnected)
         ));
 
         // Paired and connected, but the peer never advertised the packet
@@ -513,7 +523,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             Waver::wave(&ctx, device_id),
-            Err(ApplicationError::UnsupportedByPeer)
+            Err(CoreError::UnsupportedByPeer)
         ));
         assert!(rx.try_recv().is_err());
 
@@ -528,7 +538,7 @@ mod tests {
         use tokio::sync::mpsc;
         use tokio_util::sync::CancellationToken;
 
-        use crate::application::testing::{handle, make_identity};
+        use crate::core::testing::{handle, make_identity};
 
         let (handle, _commands) = handle();
         let connect = |device_id: &str, paired: bool, accepts: bool| {

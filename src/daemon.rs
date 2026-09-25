@@ -1,3 +1,7 @@
+//! The composition root: builds a whole daemon (core, plugins, LAN
+//! transport and control API) for the CLI and embedders, and is the one
+//! place that names the built-in plugins.
+
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
@@ -15,6 +19,7 @@ use crate::{
         ApiToken, FilesystemTrustStore, LocalIdentity, SettingsFile, StoredSettings, TrustStore,
         default_config_dir,
     },
+    core::{Core, LocalDeviceSnapshot, Settings, SettingsDefaults, TransferConfig},
     plugins::{
         self,
         clipboard::{ClipboardService, InMemoryClipboard, SystemClipboard},
@@ -24,37 +29,6 @@ use crate::{
         lan::{DISCOVERY_PORT, LanConfig, LanService, LocalDeviceInfo},
         tls::subject_public_key_info,
     },
-};
-
-mod events;
-mod payload;
-mod plugin;
-mod service;
-mod settings;
-mod state;
-#[cfg(test)]
-pub(crate) mod testing;
-mod transfers;
-
-use settings::Settings;
-
-pub use events::{ApplicationEvent, EventBus, EventBusError, EventData};
-pub use payload::{AcceptedPayload, DialedPayload, PayloadListener, PayloadPeer, SshAuthError};
-pub use plugin::{
-    Plugin, PluginContext, PluginEvent, PluginEventKind, PluginRegistry, PluginSettings,
-    SettingsSection,
-};
-pub use service::{ApplicationError, ApplicationHandle, ApplicationService};
-pub use settings::{SettingsDefaults, SettingsPatch, SettingsSnapshot};
-pub use state::{
-    Command, LocalDeviceSnapshot, OperationErrorCode, Pairing, PairingDirection, PairingSnapshot,
-    PairingStatus, PairingTransitionError, Query, QueryResult, StatusSnapshot, Transfer,
-    TransferDirection, TransferProgressError, TransferSnapshot, TransferStatus,
-    TransferTransitionError,
-};
-pub use transfers::{
-    DEFAULT_MAX_TRANSFER_BYTES, FileNameError, PROGRESS_EVENT_INTERVAL, TransferConfig,
-    TransferHandle, Transfers, sanitize_file_name, upload_channel,
 };
 
 /// Options for starting the MyConnect service.
@@ -107,12 +81,12 @@ impl Default for RunRequest {
     }
 }
 
-/// A started daemon: LAN transport, application core, and control API.
+/// A started daemon: LAN transport, core, and control API.
 ///
 /// The CLI runs one until Ctrl-C; an embedding frontend (see the `ffi` crate)
 /// starts one, reads [`RunningService::api_addr`], and shuts it down on exit.
 pub struct RunningService {
-    application: ApplicationHandle,
+    core: Core,
     lan: LanService,
     server: ApiServer,
 }
@@ -167,7 +141,7 @@ impl RunningService {
             Some(clipboard) => Arc::new(clipboard),
             None => InMemoryClipboard::shared(),
         };
-        let (application, commands) = ApplicationHandle::new(
+        let (core, commands) = Core::new(
             LocalDeviceSnapshot {
                 device_id: identity.device_id().to_owned(),
                 device_name: device_name.clone(),
@@ -181,10 +155,10 @@ impl RunningService {
             identity.clone(),
             transfer_config,
         )?;
-        application.install_settings(settings);
-        application.start_plugins();
+        core.install_settings(settings);
+        core.start_plugins();
         let shutdown = CancellationToken::new();
-        let capabilities = plugins::capabilities();
+        let capabilities = core.capabilities();
         let lan_config = if request.discovery_loopback {
             LanConfig::loopback(DISCOVERY_PORT)
         } else {
@@ -199,7 +173,7 @@ impl RunningService {
                 incoming_capabilities: capabilities.incoming,
                 outgoing_capabilities: capabilities.outgoing,
             },
-            application.clone(),
+            core.clone(),
             commands,
             identity,
             trust_store,
@@ -210,18 +184,14 @@ impl RunningService {
 
         let server = ApiServer::start(
             ApiServerConfig::new(request.api_port)?.with_host(request.api_host),
-            Arc::new(application.clone()),
+            core.clone(),
             request.api_token,
             shutdown.clone(),
         )
         .await?;
         info!(address = %server.local_addr(), "local control API listening");
 
-        Ok(Self {
-            application,
-            lan,
-            server,
-        })
+        Ok(Self { core, lan, server })
     }
 
     /// The address the control API actually bound, including the port chosen
@@ -234,15 +204,11 @@ impl RunningService {
     /// bounded window to clean up their partial files, then stop the
     /// plugins.
     pub async fn shutdown(self) -> Result<()> {
-        let Self {
-            application,
-            lan,
-            server,
-        } = self;
+        let Self { core, lan, server } = self;
         let server_result = server.shutdown().await;
         let lan_result = lan.shutdown().await;
-        application.shutdown_transfers(Duration::from_secs(5)).await;
-        application.shutdown_plugins().await;
+        core.shutdown_transfers(Duration::from_secs(5)).await;
+        core.shutdown_plugins().await;
         server_result?;
         lan_result?;
         Ok(())

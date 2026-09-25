@@ -31,11 +31,10 @@ pub use packet::{
 };
 
 use crate::{
-    application::{
-        ApplicationError, OperationErrorCode, PayloadPeer, Plugin, PluginContext,
+    core::{
+        CoreError, DeviceSnapshot, OperationErrorCode, PayloadPeer, Plugin, PluginContext,
         TransferDirection, TransferHandle, TransferSnapshot, sanitize_file_name, upload_channel,
     },
-    device::DeviceSnapshot,
     protocol::Packet,
 };
 
@@ -73,19 +72,17 @@ pub fn send_file(
     device_id: &str,
     file_name: String,
     declared_size: u64,
-) -> Result<(TransferSnapshot, mpsc::Sender<Bytes>), ApplicationError> {
+) -> Result<(TransferSnapshot, mpsc::Sender<Bytes>), CoreError> {
     if file_name.trim().is_empty() {
-        return Err(ApplicationError::InvalidFileName);
+        return Err(CoreError::InvalidFileName);
     }
     let limit = ctx.transfers().max_bytes();
     if declared_size > limit {
-        return Err(ApplicationError::TransferTooLarge { limit });
+        return Err(CoreError::TransferTooLarge { limit });
     }
     ctx.can_send(device_id, PACKET_TYPE)?;
     let peer = ctx.payload_peer(device_id)?;
-    let device = ctx
-        .device(device_id)
-        .ok_or(ApplicationError::UnknownDevice)?;
+    let device = ctx.device(device_id).ok_or(CoreError::UnknownDevice)?;
 
     let transfer = ctx.transfers().begin(
         &device,
@@ -205,16 +202,16 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::application::{
-        ApplicationHandle, TransferStatus,
-        testing::{handle, make_identity},
+    use crate::core::{
+        Core, TransferStatus,
+        testing::{handle_with_plugin, make_identity},
     };
 
     const PEER: &str = "740bd4b9b4184ee497d6caf1da8151be";
 
     /// A paired, connected peer that accepts share requests; its packets
     /// arrive on the returned receiver.
-    fn paired_peer(handle: &ApplicationHandle) -> mpsc::Receiver<Packet> {
+    fn paired_peer(handle: &Core) -> mpsc::Receiver<Packet> {
         let identity = make_identity(PEER, vec![PACKET_TYPE.into()]);
         handle.discover_device(&identity, true, 1).unwrap();
         let (tx, rx) = mpsc::channel(4);
@@ -226,27 +223,27 @@ mod tests {
 
     #[test]
     fn sending_is_refused_before_a_transfer_is_recorded() {
-        let (handle, _commands) = handle();
+        let (handle, _plugin, _commands) = handle_with_plugin(SharePlugin);
         let ctx = handle.plugin_context();
         assert!(matches!(
             send_file(&ctx, PEER, "a.txt".into(), 1),
-            Err(ApplicationError::UnknownDevice)
+            Err(CoreError::UnknownDevice)
         ));
         let _packets = paired_peer(&handle);
         assert!(matches!(
             send_file(&ctx, PEER, " ".into(), 1),
-            Err(ApplicationError::InvalidFileName)
+            Err(CoreError::InvalidFileName)
         ));
         assert!(matches!(
             send_file(&ctx, PEER, "a.txt".into(), u64::MAX),
-            Err(ApplicationError::TransferTooLarge { .. })
+            Err(CoreError::TransferTooLarge { .. })
         ));
         assert!(ctx.transfers().list().is_empty());
     }
 
     #[tokio::test]
     async fn sending_offers_the_file_on_a_payload_port() {
-        let (handle, _commands) = handle();
+        let (handle, _plugin, _commands) = handle_with_plugin(SharePlugin);
         let mut packets = paired_peer(&handle);
         let ctx = handle.plugin_context();
 
@@ -284,7 +281,7 @@ mod tests {
 
     #[test]
     fn requests_that_cannot_be_saved_safely_are_recorded_as_failed() {
-        let (handle, _commands) = handle();
+        let (handle, _plugin, _commands) = handle_with_plugin(SharePlugin);
         let _packets = paired_peer(&handle);
 
         let traversal = build_request_packet(1_u64, "..".into(), None, 10, 1741).unwrap();

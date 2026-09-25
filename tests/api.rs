@@ -2,11 +2,11 @@ use std::{sync::Arc, time::Duration};
 
 use myconnect::{
     api::{ApiServer, ApiServerConfig},
-    application::{
-        ApplicationHandle, Command, EventData, LocalDeviceSnapshot, PluginEvent, TransferConfig,
-    },
     config::{ApiToken, FilesystemTrustStore, LocalIdentity},
-    device::DeviceRegistry,
+    core::{
+        Core, DeviceRegistry, EventData, LanCommand, LocalDeviceSnapshot, PluginEvent,
+        TransferConfig,
+    },
     plugins::clipboard::{ClipboardSettings, ClipboardSnapshot, InMemoryClipboard},
     protocol::{DeviceType, IdentityBody},
 };
@@ -21,8 +21,8 @@ use tokio_util::sync::CancellationToken;
 struct TestServer {
     _directory: tempfile::TempDir,
     token: Option<ApiToken>,
-    application: ApplicationHandle,
-    commands: tokio::sync::mpsc::Receiver<Command>,
+    application: Core,
+    commands: tokio::sync::mpsc::Receiver<LanCommand>,
     server: ApiServer,
 }
 
@@ -39,7 +39,7 @@ impl TestServer {
         let directory = tempfile::tempdir().unwrap();
         let identity =
             Arc::new(LocalIdentity::load_or_create(directory.path().join("identity")).unwrap());
-        let (application, commands) = ApplicationHandle::new(
+        let (application, commands) = Core::new(
             LocalDeviceSnapshot {
                 device_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
                 device_name: "Test Device".into(),
@@ -78,7 +78,7 @@ impl TestServer {
                 .unwrap()
                 .with_shutdown_timeout(Duration::from_secs(2))
                 .with_request_timeout(request_timeout),
-            Arc::new(application.clone()),
+            application.clone(),
             token.clone(),
             CancellationToken::new(),
         )
@@ -291,7 +291,7 @@ async fn control_plane_is_authenticated_and_runs_on_ephemeral_loopback() {
     assert!(discovery.starts_with("HTTP/1.1 202 Accepted"));
     assert_eq!(
         server.commands.recv().await,
-        Some(Command::AnnounceDiscovery)
+        Some(LanCommand::AnnounceDiscovery)
     );
 
     server.server.shutdown().await.unwrap();
@@ -886,7 +886,7 @@ async fn discovery_can_be_sent_to_one_unicast_address() {
     );
     assert_eq!(
         server.commands.recv().await,
-        Some(Command::AnnounceTo {
+        Some(LanCommand::AnnounceTo {
             address: "192.168.1.20".parse().unwrap()
         })
     );
@@ -896,7 +896,7 @@ async fn discovery_can_be_sent_to_one_unicast_address() {
     assert!(broadcast.starts_with("HTTP/1.1 202 Accepted"));
     assert_eq!(
         server.commands.recv().await,
-        Some(Command::AnnounceDiscovery)
+        Some(LanCommand::AnnounceDiscovery)
     );
 
     for address in [

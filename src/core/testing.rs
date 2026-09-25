@@ -1,6 +1,5 @@
-//! A real core for unit tests, of the core and of plugins: every built-in
-//! plugin (or the ones a test gives), an in-memory trust store and
-//! clipboard, no LAN transport.
+//! A real core for unit tests, of the core and of plugins: no plugins, or
+//! the one a test gives, an in-memory trust store, no LAN transport.
 //! Register a connection with an `mpsc` channel to see the packets a device
 //! is sent.
 
@@ -8,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
-use super::{ApplicationHandle, Command, LocalDeviceSnapshot, Plugin, TransferConfig};
+use super::{Core, LanCommand, LocalDeviceSnapshot, Plugin, TransferConfig};
 use crate::{
     config::{LocalIdentity, TrustError, TrustStore, TrustedDevice},
     protocol::{DeviceType, IdentityBody},
@@ -50,35 +49,35 @@ impl TrustStore for MemoryTrustStore {
     }
 }
 
-/// A core with no devices. Its command queue and event bus hold one item
-/// each, so tests see overflow early.
-pub(crate) fn handle() -> (ApplicationHandle, mpsc::Receiver<Command>) {
+/// A core with no devices and no plugins. Its command queue and event bus
+/// hold one item each, so tests see overflow early.
+pub(crate) fn handle() -> (Core, mpsc::Receiver<LanCommand>) {
     handle_with_trust(MemoryTrustStore::default())
 }
 
 pub(crate) fn handle_with_trust(
     trust_store: MemoryTrustStore,
-) -> (ApplicationHandle, mpsc::Receiver<Command>) {
-    build(
-        trust_store,
-        crate::plugins::builtin(crate::plugins::clipboard::InMemoryClipboard::shared()),
-    )
+) -> (Core, mpsc::Receiver<LanCommand>) {
+    build(trust_store, Vec::new())
 }
 
-/// A core with no devices, running `plugins`.
-pub(crate) fn handle_with_plugins(
-    plugins: Vec<Arc<dyn Plugin>>,
-) -> (ApplicationHandle, mpsc::Receiver<Command>) {
-    build(MemoryTrustStore::default(), plugins)
+/// A core with no devices running only `plugin`, and the plugin, so a
+/// plugin is tested on its own.
+pub(crate) fn handle_with_plugin<P: Plugin>(
+    plugin: P,
+) -> (Core, Arc<P>, mpsc::Receiver<LanCommand>) {
+    let plugin = Arc::new(plugin);
+    let (core, commands) = build(MemoryTrustStore::default(), vec![plugin.clone()]);
+    (core, plugin, commands)
 }
 
 fn build(
     trust_store: MemoryTrustStore,
     plugins: Vec<Arc<dyn Plugin>>,
-) -> (ApplicationHandle, mpsc::Receiver<Command>) {
+) -> (Core, mpsc::Receiver<LanCommand>) {
     let directory = tempfile::tempdir().unwrap();
     let identity = Arc::new(LocalIdentity::load_or_create(directory.path()).unwrap());
-    ApplicationHandle::new(
+    Core::new(
         LocalDeviceSnapshot {
             device_id: "local".into(),
             device_name: "MyConnect".into(),

@@ -1,10 +1,13 @@
 # Research: one module per feature
 
-Status: proposal (2026-09-25), with phases 0 (ping, §7), 0b (find my
-phone), 1 (battery), 2 (clipboard), 3 (share) and 4 (browse)
-implemented; only the core cleanup (phase 5) is left.
-Once it is accepted, the target shape moves into `ARCHITECTURE.md` §2 and
-this file becomes the history behind it.
+Status: done (2026-09-25). Every phase is implemented: 0 (ping, §7), 0b
+(find my phone), 1 (battery), 2 (clipboard), 3 (share), 4 (browse) and 5
+(core cleanup). The shape as built is described in
+[`ARCHITECTURE.md`](../ARCHITECTURE.md) §2, which is the source of truth;
+this file is the history behind it: the reasoning, the plan, and what
+each phase found (§8). Paths and type names below are as they were when
+each part was written (`application/` is now `core/`, `ApplicationHandle`
+is `Core`).
 
 Question: how should the daemon be split so that a feature (ping,
 battery, clipboard, share, browsing) lives in one module that plugs into a
@@ -126,6 +129,9 @@ dispatch. The hard parts are what the trait has to answer:
 | D. Message-passing actors per plugin (each plugin a task with an inbox) | More isolation, but every call becomes async request/response and the current synchronous handlers would need rewriting. Unnecessary: per-plugin locks give the same isolation here. |
 
 ## 5. Target shape
+
+This was the plan. §8 records where the result differs; `ARCHITECTURE.md`
+§2 describes it as built.
 
 ### 5.1 Layout
 
@@ -289,7 +295,7 @@ takes one new trait feature at a time.
 | 2 (done) | clipboard | settings sections (UI + CLI change), `connected` hook, `broadcast`, plugin-owned global resource (`/clipboard`) |
 | 3 (done) | share | transfers extracted into a core service; `streaming_routes`; payload/TLS access through the context |
 | 4 (done) | browse (sftp) | plugin-owned sessions, `shutdown` (and `started`) hooks; `service/browse.rs` and `transport/sftp.rs` move into the plugin; SSH sign-in through the context; the clipboard follower moves into its plugin |
-| 5 | core cleanup | split what is left of `service.rs` into `devices`/`connections`/`pairing`; remove `ApplicationService`, `Query`, `Command`/`QueryResult` (the LAN command channel stays, as a core-internal type); rename `application` → `core`; move `RunningService` to a composition-root module; update ARCHITECTURE §2 and remove the "deliberately not a plugin system" notes |
+| 5 (done) | core cleanup | split what is left of `service.rs` into `devices`/`connections`/`pairing`; remove `ApplicationService`, `Query`, `Command`/`QueryResult` (the LAN command channel stays, as a core-internal type); rename `application` → `core`; move `RunningService` to a composition-root module; update ARCHITECTURE §2 and remove the "deliberately not a plugin system" notes |
 
 Phases 1–4 are independent enough to run in parallel worktrees once
 phase 0 lands. That is the goal in miniature.
@@ -313,7 +319,7 @@ Implemented on this branch:
 
 Findings from the pilot are recorded in §8.
 
-## 8. Findings from the pilot
+## 8. Findings
 
 All "done means" Rust checks pass (fmt, clippy `-D warnings`, 185 tests).
 A daemon started with a token was probed live: the plugin's route returns
@@ -718,3 +724,83 @@ Moving browse (phase 4) showed:
     display with `--system-clipboard`; text set through one reached the
     display's clipboard, the other followed it as a local copy and synced
     it to its paired peer, and each daemon stopped within 0.2 s.
+
+The core cleanup (phase 5) showed:
+
+- **`application` is `core`, and its types followed.** `ApplicationHandle`
+  is `Core`, `ApplicationError` is `CoreError`, `ApplicationEvent` is
+  `CoreEvent`. A module named `core` at the crate root shadows the `core`
+  crate only for `use core::…` written in `lib.rs` itself; nothing does,
+  and macros use `::core`. `crate::device` moved in as `core/devices.rs`
+  (`myconnect::device::*` is now `myconnect::core::*`), since the registry
+  is core state that nothing else touches.
+- **The trait, `Query`, `QueryResult` and `Command` are gone.** The API
+  server takes the `Core` and calls plain methods (`status()`,
+  `devices()`, `device(id)`, `pairings()`, `pairing(id)`,
+  `transfers().list()`, `settings()`). With them went the handlers'
+  "unexpected query result → 500" arms and `UnexpectedQueryResult`, and
+  `GET /status` can no longer fail. `Command` is `LanCommand`, the
+  channel from the core to the LAN transport, with the two variants it
+  actually carried (`AnnounceDiscovery`, `AnnounceTo`); the four pairing
+  and forget variants were never sent. `announce()` replaces
+  `command(Command::AnnounceDiscovery)`. The error codes
+  (`command_queue_full`, `application_unavailable`) didn't change.
+- **Plugin routes are a crate-internal method,** `Core::plugin_routes()`
+  and `plugin_streaming_routes()`, called only by the server. They could
+  have moved to the composition root (build the routers there and hand
+  them to `ApiServer::start`), but that would make every test that starts
+  an API server build them too, for no gain.
+- **The split is by file, not by lock.** `service.rs` became
+  `core/devices.rs`, `core/connections.rs` and `core/pairing.rs` (plus
+  `core/error.rs`), each an `impl Core` block for what it acts on, over
+  the same `CoreState` behind the same lock. Devices, connections and
+  pairings change together (accepting a pairing reads the connection,
+  writes trust and flips the device's `paired` and `pairing` at once),
+  so separate locks would have added ordering rules for nothing. `Core`
+  and `CoreState` sit in `core.rs`, the module root, so the child modules
+  see their private fields without widening them; methods one child calls
+  in another are `pub(super)`. `state.rs` dissolved: the pairing types went
+  to `pairing.rs`, the transfer types to `transfers.rs`. The moves were
+  split into their own commits so `git log --follow` and
+  `--color-moved` show them as moves. `service.rs` was 3,192 lines when
+  this plan started and 1,683 at the start of this phase; the largest core
+  file is now `transfers.rs` (1,049 lines, 280 of them tests).
+- **The composition root is `daemon.rs`.** `RunningService`, `RunRequest`
+  and `run_service` moved there, and it is the only non-test caller of
+  `plugins::builtin()`. The core now names no plugin, and `plugins` is
+  reached from the core only through `dyn Plugin`.
+- **Capabilities come from the running core.** `Core::capabilities()`
+  (from `PluginRegistry::capabilities()`) replaced `plugins::
+  capabilities()` and its throwaway registry; the daemon and the e2e tests
+  advertise exactly what the core they built runs. The identity packet
+  didn't change; its test now reads the registry of `builtin()`.
+- **`Core::plugin::<T>()` is gone,** with `PluginRegistry::get` and the
+  `Any` supertrait on `Plugin`. The two e2e tests that drove a plugin
+  directly keep an `Arc` to it and swap it into `builtin()`'s list. The
+  unit test kit no longer builds `builtin()` either: `testing::handle()`
+  is a core without plugins, and `handle_with_plugin(p)` runs only the
+  plugin under test and returns it. No plugin's unit tests needed another
+  plugin.
+- **Not done, on purpose:** the core's HTTP handlers stay in `api.rs`
+  rather than moving to a `core/http.rs` as §5.1 sketched. They return
+  `ApiProblem`, which lives in `api` for plugins to share, so moving them
+  would add a core → api edge to save a file. `Core::new` still takes nine
+  arguments; a builder would read better but touches every test. The
+  "deliberately not a plugin system" notes the plan mentions were already
+  gone with the fixed table in phase 4; ARCHITECTURE §2 now describes the
+  plugin system instead.
+- **No wire change.** Routes, JSON, events, error codes and the identity
+  packet are the same; Rust callers change shape (`myconnect::core`,
+  `myconnect::daemon`).
+- **Checked live**, isolated (a temporary data and download dir each, free
+  ports, loopback discovery, a private Xvfb display and D-Bus session):
+  the app, a CLI peer, and the fake phone. Pairing an incoming request
+  from the peer in the app (codes matched), ping both ways, clipboard
+  both ways (through the app's X clipboard, read and written by a third
+  daemon with `--system-clipboard` on the same display), a 5 MB file both
+  ways through the file picker and `myconnect send` (byte-identical),
+  pairing the fake phone from the app's Add device page, its battery
+  (`Connected · 73%`), browsing its storage and downloading a file,
+  ringing it from the tray menu, and Quit from the tray. `ss -lunpt`
+  showed only `127.255.255.255:1716` and `127.0.0.1` listeners for every
+  process started.

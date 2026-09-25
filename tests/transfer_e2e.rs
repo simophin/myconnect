@@ -18,13 +18,11 @@ use std::{
 
 use bytes::Bytes;
 use myconnect::{
-    application::{
-        ApplicationError, ApplicationHandle, ApplicationService, EventData, LocalDeviceSnapshot,
-        Query, QueryResult, TransferConfig, TransferDirection, TransferSnapshot, TransferStatus,
-    },
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
-    device::DeviceReachability,
-    plugins,
+    core::{
+        Core, CoreError, DeviceReachability, EventData, LocalDeviceSnapshot, TransferConfig,
+        TransferDirection, TransferSnapshot, TransferStatus,
+    },
     plugins::{clipboard::InMemoryClipboard, share},
     protocol::DeviceType,
     transport::{
@@ -39,8 +37,8 @@ use uuid::Uuid;
 /// Two connected, paired peers with a real LAN transport and a real
 /// auxiliary payload path, ready to exchange files.
 struct Harness {
-    a: ApplicationHandle,
-    b: ApplicationHandle,
+    a: Core,
+    b: Core,
     a_id: String,
     b_id: String,
     b_download_dir: PathBuf,
@@ -68,8 +66,8 @@ fn test_config(bind: SocketAddr, target: SocketAddr) -> LanConfig {
         )
 }
 
-fn local(device_id: &str, name: &str) -> LocalDeviceInfo {
-    let capabilities = plugins::capabilities();
+fn local(core: &Core, device_id: &str, name: &str) -> LocalDeviceInfo {
+    let capabilities = core.capabilities();
     LocalDeviceInfo {
         device_id: device_id.into(),
         device_name: name.into(),
@@ -79,18 +77,10 @@ fn local(device_id: &str, name: &str) -> LocalDeviceInfo {
     }
 }
 
-async fn wait_for_reachability(
-    application: &ApplicationHandle,
-    device_id: &str,
-    expected: DeviceReachability,
-) {
+async fn wait_for_reachability(application: &Core, device_id: &str, expected: DeviceReachability) {
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            if let QueryResult::Device(Some(device)) = application
-                .query(Query::Device {
-                    device_id: device_id.into(),
-                })
-                .unwrap()
+            if let Some(device) = application.device(device_id)
                 && device.reachability == expected
             {
                 break;
@@ -102,14 +92,10 @@ async fn wait_for_reachability(
     .unwrap();
 }
 
-async fn wait_for_paired(application: &ApplicationHandle, device_id: &str, expected: bool) {
+async fn wait_for_paired(application: &Core, device_id: &str, expected: bool) {
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            if let QueryResult::Device(Some(device)) = application
-                .query(Query::Device {
-                    device_id: device_id.into(),
-                })
-                .unwrap()
+            if let Some(device) = application.device(device_id)
                 && device.paired == expected
             {
                 break;
@@ -122,15 +108,13 @@ async fn wait_for_paired(application: &ApplicationHandle, device_id: &str, expec
 }
 
 async fn wait_for_transfer_status(
-    application: &ApplicationHandle,
+    application: &Core,
     transfer_id: Uuid,
     expected: TransferStatus,
 ) -> TransferSnapshot {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let QueryResult::Transfer(Some(snapshot)) =
-                application.query(Query::Transfer { transfer_id }).unwrap()
-            {
+            if let Some(snapshot) = application.transfers().get(transfer_id) {
                 if snapshot.status == expected {
                     return snapshot;
                 }
@@ -193,7 +177,7 @@ async fn connected_and_paired_with(
             .with_payload_connect_timeout(Duration::from_millis(500)),
     );
 
-    let (a_application, a_commands) = ApplicationHandle::new(
+    let (a_application, a_commands) = Core::new(
         LocalDeviceSnapshot {
             device_id: a_identity.device_id().to_owned(),
             device_name: a_name.to_owned(),
@@ -208,7 +192,7 @@ async fn connected_and_paired_with(
         a_transfer_config,
     )
     .unwrap();
-    let (b_application, b_commands) = ApplicationHandle::new(
+    let (b_application, b_commands) = Core::new(
         LocalDeviceSnapshot {
             device_id: b_identity.device_id().to_owned(),
             device_name: b_name.to_owned(),
@@ -231,7 +215,7 @@ async fn connected_and_paired_with(
 
     let a_service = LanService::start(
         test_config(a_udp, b_udp),
-        local(&a_id, a_name),
+        local(&a_application, &a_id, a_name),
         a_application.clone(),
         a_commands,
         a_identity,
@@ -242,7 +226,7 @@ async fn connected_and_paired_with(
     .unwrap();
     let b_service = LanService::start(
         test_config(b_udp, a_udp),
-        local(&b_id, b_name),
+        local(&b_application, &b_id, b_name),
         b_application.clone(),
         b_commands,
         b_identity,
@@ -305,10 +289,7 @@ async fn run_successful_transfer(harness: &Harness, file_name: &str, data: Vec<u
 
     // The peer must show a matching, independently completed incoming
     // transfer resource.
-    let incoming_transfers = match harness.b.query(Query::Transfers).unwrap() {
-        QueryResult::Transfers(transfers) => transfers,
-        other => panic!("unexpected query result: {other:?}"),
-    };
+    let incoming_transfers = harness.b.transfers().list();
     let incoming = incoming_transfers
         .into_iter()
         .find(|transfer| {
@@ -366,7 +347,7 @@ async fn unpaired_device_cannot_initiate_a_transfer() {
     let a_dir = tempfile::tempdir().unwrap();
     let a_identity = Arc::new(LocalIdentity::load_or_create(a_dir.path()).unwrap());
     let a_pubkey = subject_public_key_info(a_identity.certificate_der()).unwrap();
-    let (a_application, _commands) = ApplicationHandle::new(
+    let (a_application, _commands) = Core::new(
         LocalDeviceSnapshot {
             device_id: a_identity.device_id().to_owned(),
             device_name: "Sender".to_owned(),
@@ -389,7 +370,7 @@ async fn unpaired_device_cannot_initiate_a_transfer() {
             "f.bin".into(),
             10
         ),
-        Err(ApplicationError::UnknownDevice)
+        Err(CoreError::UnknownDevice)
     ));
 }
 
@@ -442,7 +423,7 @@ async fn oversized_payload_is_rejected_by_the_receiver_without_dialing() {
     // transfer resource is recorded as failed and no file is ever written.
     let incoming_transfers = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            if let QueryResult::Transfers(transfers) = harness.b.query(Query::Transfers).unwrap()
+            if let transfers = harness.b.transfers().list()
                 && !transfers.is_empty()
             {
                 return transfers;
@@ -475,7 +456,7 @@ async fn path_traversal_filename_is_rejected_without_touching_the_filesystem() {
     // the pairing unit tests use, avoiding the need to fabricate a second
     // malicious TLS client for what is fundamentally an application-layer
     // check). `sanitize_file_name` (unit tested in
-    // `application::transfers::tests`) also proves that a traversal attempt
+    // `core::transfers::tests`) also proves that a traversal attempt
     // with a real basename, such as `../../etc/passwd`, is normalized down
     // to just `passwd` rather than rejected outright, so it can never escape
     // the download directory either way.
@@ -484,10 +465,7 @@ async fn path_traversal_filename_is_rejected_without_touching_the_filesystem() {
 
     // No network activity is expected at all: the rejection happens
     // synchronously, before any payload port is ever dialed.
-    let transfers = match harness.b.query(Query::Transfers).unwrap() {
-        QueryResult::Transfers(transfers) => transfers,
-        other => panic!("unexpected query result: {other:?}"),
-    };
+    let transfers = harness.b.transfers().list();
     let rejected = transfers
         .into_iter()
         .find(|transfer| transfer.direction == TransferDirection::Incoming)
@@ -517,7 +495,7 @@ async fn unreachable_payload_port_fails_the_incoming_transfer() {
 
     let transfers = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if let QueryResult::Transfers(transfers) = harness.b.query(Query::Transfers).unwrap()
+            if let transfers = harness.b.transfers().list()
                 && !transfers.is_empty()
             {
                 return transfers;
@@ -557,12 +535,7 @@ async fn cancelling_an_outgoing_transfer_stops_it_and_cleans_up() {
     // Give the payload connection a moment to establish before cancelling.
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if let QueryResult::Transfer(Some(snapshot)) = harness
-                .a
-                .query(Query::Transfer {
-                    transfer_id: started.id,
-                })
-                .unwrap()
+            if let Some(snapshot) = harness.a.transfers().get(started.id)
                 && matches!(
                     snapshot.status,
                     TransferStatus::Transferring | TransferStatus::Connecting
@@ -579,12 +552,7 @@ async fn cancelling_an_outgoing_transfer_stops_it_and_cleans_up() {
     harness.a.cancel_transfer(started.id).unwrap();
     let final_snapshot = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            if let QueryResult::Transfer(Some(snapshot)) = harness
-                .a
-                .query(Query::Transfer {
-                    transfer_id: started.id,
-                })
-                .unwrap()
+            if let Some(snapshot) = harness.a.transfers().get(started.id)
                 && matches!(
                     snapshot.status,
                     TransferStatus::Cancelled | TransferStatus::Failed
