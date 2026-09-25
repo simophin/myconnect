@@ -1,5 +1,5 @@
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
     sync::Arc,
     time::Duration,
@@ -80,13 +80,14 @@ pub struct RunRequest {
     /// Port the local control API listens on; `0` picks a free port, which
     /// [`RunningService::api_addr`] then reports.
     pub api_port: u16,
-    /// Restrict LAN discovery broadcasts to loopback instead of the real
-    /// network. A physical switch never reflects a broadcast frame back to
-    /// the port it arrived on, so two instances on the same host normally
-    /// can't discover each other over a real NIC; loopback broadcast does
-    /// not have that limitation. Useful for running multiple local
-    /// instances against each other without a second machine, at the cost
-    /// of not discovering real devices on the LAN.
+    /// Keep discovery and every connection a device makes to this one
+    /// (control and payload ports) on loopback, instead of the real
+    /// network: see [`LanConfig::loopback`]. A physical switch never
+    /// reflects a broadcast frame back to the port it arrived on, so two
+    /// instances on the same host normally can't discover each other over a
+    /// real NIC; loopback broadcast does not have that limitation. Useful
+    /// for running multiple local instances against each other without a
+    /// second machine; devices on the LAN can't see or reach this one.
     pub discovery_loopback: bool,
     /// Sync the desktop clipboard rather than an in-memory one. Falls back to
     /// the in-memory clipboard, with a warning, when the session has no
@@ -153,6 +154,11 @@ impl RunningService {
             ..StoredSettings::default()
         });
         let initial = settings.snapshot();
+        let mut transfer_config = TransferConfig::new(initial.download_dir.clone());
+        if request.discovery_loopback {
+            // Payload ports are the other thing a device dials.
+            transfer_config = transfer_config.with_payload_bind_ip(Ipv4Addr::LOCALHOST);
+        }
         let device_name = initial.device_name.clone();
         let system_clipboard = if request.system_clipboard {
             match SystemClipboard::start() {
@@ -181,7 +187,7 @@ impl RunningService {
             32,
             256,
             identity.clone(),
-            TransferConfig::new(initial.download_dir),
+            transfer_config,
         )?;
         application.install_settings(settings);
         let shutdown = CancellationToken::new();
@@ -197,18 +203,11 @@ impl RunningService {
             (clipboard, follower)
         });
         let capabilities = plugins::capabilities();
-        let mut lan_config = LanConfig::default();
-        if request.discovery_loopback {
-            // The bind stays on the wildcard address: a socket bound to a single
-            // address only accepts packets addressed to that exact address, so
-            // binding to 127.0.0.1 specifically would silently drop incoming
-            // packets addressed to the 127.255.255.255 broadcast below. Only the
-            // announce target needs to change to keep discovery off the real
-            // network.
-            lan_config = lan_config.with_announcement_targets(vec![SocketAddr::V4(
-                SocketAddrV4::new(Ipv4Addr::new(127, 255, 255, 255), DISCOVERY_PORT),
-            )]);
-        }
+        let lan_config = if request.discovery_loopback {
+            LanConfig::loopback(DISCOVERY_PORT)
+        } else {
+            LanConfig::default()
+        };
         let lan = LanService::start(
             lan_config,
             LocalDeviceInfo {

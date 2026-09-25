@@ -67,7 +67,7 @@ remove the entry.
 | `MYCONNECT_DATA_DIR` | Identity/trust directory for the embedded daemon. |
 | `MYCONNECT_DOWNLOAD_DIR` | Where the embedded daemon saves received files. Overrides the saved setting for this run. |
 | `MYCONNECT_DEVICE_NAME` | Name advertised to peers. Overrides the saved setting for this run; without either, the host name. |
-| `MYCONNECT_DISCOVERY_LOOPBACK` | `true` to discover only instances on this machine. |
+| `MYCONNECT_DISCOVERY_LOOPBACK` | `true` to discover only instances on this machine: nothing listens on other interfaces, so devices on the LAN can't see or reach it. |
 | `MYCONNECT_SYSTEM_CLIPBOARD` | `false` to keep the embedded daemon's clipboard in memory instead of syncing the desktop clipboard. |
 | `MYCONNECT_VERSION` | Version shown in Settings; CI sets it from the release tag. Without it, `dev`. |
 

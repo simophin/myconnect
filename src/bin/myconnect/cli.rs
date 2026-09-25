@@ -69,9 +69,10 @@ enum Command {
         /// Name this device advertises to peers.
         #[arg(long, value_name = "NAME")]
         device_name: Option<String>,
-        /// Restrict LAN discovery to loopback instead of the real network,
-        /// so multiple local instances can discover each other without a
-        /// second machine. Real devices on the LAN will not be discovered.
+        /// Keep discovery and connections on loopback instead of the real
+        /// network, so multiple local instances can discover each other
+        /// without a second machine. Nothing listens on other interfaces:
+        /// devices on the LAN can neither discover nor reach this one.
         #[arg(long)]
         discovery_loopback: bool,
         /// Sync the desktop clipboard instead of an in-memory one, which
