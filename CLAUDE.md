@@ -40,8 +40,9 @@ collide with another run. Do this every time, without being asked:
   session: launched on the owner's session bus, it would just raise their
   running app and exit. A private bus also keeps notifications, the tray
   and file dialogs off the owner's desktop. Run `cargo test` the same way:
-  the `clipboard::system` tests read and write the real clipboard, so on the
-  owner's display they clobber it and fail when it changes under them.
+  the `plugins::clipboard::backend::system` tests read and write the real
+  clipboard, so on the owner's display they clobber it and fail when it
+  changes under them.
 - **Processes.** Keep the PIDs you start and kill those, not
   `pkill -f <pattern>`, which can hit another session's processes.
 

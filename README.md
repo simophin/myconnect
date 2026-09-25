@@ -71,9 +71,9 @@ src/
 ├── protocol/        # wire packet models and bounded framing
 ├── config/          # persistent identity, optional API token, peer trust
 ├── transport/        # UDP discovery, TCP/TLS, auxiliary payload connections
-├── device.rs         # device registry and snapshots
-├── plugins/           # features: ping, findmyphone, battery, clipboard, share, browse
-├── application(.rs/*) # orchestration: pairing/transfer state machines, event bus
+├── core(.rs/*)       # devices, connections, pairing, transfers, settings, events, plugin API
+├── plugins/          # features: ping, findmyphone, battery, clipboard, share, browse
+├── daemon.rs         # composition root: core + built-in plugins + LAN + API
 ├── api.rs               # local HTTP control plane (optional token auth)
 ├── client.rs             # HTTP client used by the CLI
 └── bin/
@@ -84,7 +84,7 @@ ffi/                      # myconnect-ffi: C ABI to embed a daemon (start/stop)
 ui/                       # Flutter desktop app (see ui/README.md, ui/docs/adr/)
 ```
 
-Keeping behavior in the library lets other frontends use the same application
+Keeping behavior in the library lets other frontends use the same daemon
 API. The Flutter UI embeds a daemon through `ffi/` and then talks to it only
 over HTTP, so no GUI dependencies leak into the Rust crates. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for module
 boundaries, data flow, the full HTTP API, and the pairing/transfer state
