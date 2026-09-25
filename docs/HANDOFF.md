@@ -75,7 +75,12 @@ Arch Linux PKGBUILD; Windows is built only locally.
 
 ## Open work
 
-No larger item is planned. What is left:
+**Replacing the Flutter UI with a native Rust UI (iced).** Decided by the
+owner on 2026-09-25. Follow [`PLAN_ICED_UI.md`](PLAN_ICED_UI.md) step by
+step. Until its last step, the Flutter app below keeps working and its
+checks still have to pass.
+
+Other items still open:
 
 **Packaging.** The macOS and Windows builds bundle the daemon, but their
 first launch was never recorded here. On macOS, check that a download
