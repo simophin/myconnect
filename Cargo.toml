@@ -10,7 +10,7 @@ default-run = "myconnect"
 [features]
 # The desktop UI: `src/ui/` and each plugin's `ui.rs`. Off by default so the
 # CLI and daemon build without iced; the `gui` crate turns it on.
-gui = ["dep:iced", "dep:iced_fonts"]
+gui = ["dep:iced", "dep:iced_fonts", "dep:opener"]
 
 [dependencies]
 anyhow = "1"
@@ -48,6 +48,7 @@ russh-sftp = "3"
 # The desktop UI (`gui` feature). Upgrading iced is its own change.
 iced = { version = "0.14", features = ["advanced"], optional = true }
 iced_fonts = { version = "0.3", features = ["lucide"], optional = true }
+opener = { version = "0.8", features = ["reveal"], optional = true }
 
 [dev-dependencies]
 iced_runtime = "0.14"

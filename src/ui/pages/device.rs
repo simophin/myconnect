@@ -9,7 +9,7 @@ use iced_fonts::lucide;
 
 use super::{
     devices::{device_icon, is_connected, status_row},
-    transfers::transfer_row,
+    transfers::{self, transfer_row},
 };
 use crate::{
     core::DeviceSnapshot,
@@ -25,20 +25,34 @@ use crate::{
 /// How many of the device's transfers the page lists.
 const RECENT_TRANSFERS: usize = 5;
 
+/// What the page's buttons ask for.
+pub struct Actions<M> {
+    /// Open a page. Back goes to the device list.
+    pub navigate: fn(Route) -> M,
+    /// Wrap a plugin action's message.
+    pub plugin: fn(PluginMessage) -> M,
+    /// Ask to unpair the device.
+    pub unpair: fn(&DeviceSnapshot) -> M,
+    /// The recent transfers' buttons.
+    pub transfer: transfers::Actions<M>,
+}
+
 /// The page of the device `device_id`, from what `store` holds, with each
-/// plugin's status and actions. `navigate` makes the message that opens a
-/// page (Back goes to the device list), `plugin` wraps an action's message,
-/// and `unpair` asks to unpair the device; `unpairing` disables it while an
-/// unpair runs.
+/// plugin's status and actions. `unpairing` disables Unpair while an unpair
+/// runs.
 pub fn view<'a, Message: Clone + 'a>(
     store: &'a Store,
     plugins: &'a [Box<dyn ErasedUiPlugin>],
     device_id: &str,
     unpairing: bool,
-    navigate: impl Fn(Route) -> Message,
-    plugin: impl Fn(PluginMessage) -> Message,
-    unpair: impl Fn(&DeviceSnapshot) -> Message,
+    actions: &Actions<Message>,
 ) -> Element<'a, Message> {
+    let Actions {
+        navigate,
+        plugin,
+        unpair,
+        transfer: transfer_actions,
+    } = actions;
     let back = Some(navigate(Route::Devices));
     let Some(device) = store.device(device_id) else {
         return widgets::page(
@@ -55,11 +69,11 @@ pub fn view<'a, Message: Clone + 'a>(
     let mut content = column![
         summary(device, plugins),
         facts(device),
-        actions(
+        action_buttons(
             plugins
                 .iter()
                 .flat_map(|each| each.device_actions(device))
-                .map(|action| action.map(&plugin)),
+                .map(|action| action.map(plugin)),
         ),
     ]
     .spacing(16);
@@ -69,7 +83,7 @@ pub fn view<'a, Message: Clone + 'a>(
         let rows = transfers
             .into_iter()
             .take(RECENT_TRANSFERS)
-            .map(|transfer| transfer_row(transfer, false));
+            .map(|transfer| transfer_row(transfer, false, transfer_actions));
         content = content.push(
             column![
                 row![
@@ -164,7 +178,7 @@ fn type_name(device_type: DeviceType) -> &'static str {
 
 /// The plugins' actions as buttons, wrapping onto more lines as needed. A
 /// disabled action is shown, but can't be pressed.
-fn actions<'a, Message: Clone + 'a>(
+fn action_buttons<'a, Message: Clone + 'a>(
     actions: impl Iterator<Item = DeviceAction<Message>>,
 ) -> Element<'a, Message> {
     let buttons = actions.map(|action| {
@@ -286,6 +300,9 @@ mod tests {
         Go(Route),
         Plugin(String),
         Unpair(String),
+        Cancel(uuid::Uuid),
+        Open(std::path::PathBuf),
+        Reveal(std::path::PathBuf),
     }
 
     fn plugins() -> Vec<Box<dyn ErasedUiPlugin>> {
@@ -303,9 +320,16 @@ mod tests {
             plugins,
             device_id,
             unpairing,
-            Asked::Go,
-            |message| Asked::Plugin(format!("{message:?}")),
-            |device| Asked::Unpair(device.device_id.clone()),
+            &Actions {
+                navigate: Asked::Go,
+                plugin: |message| Asked::Plugin(format!("{message:?}")),
+                unpair: |device| Asked::Unpair(device.device_id.clone()),
+                transfer: transfers::Actions {
+                    cancel: Asked::Cancel,
+                    open: Asked::Open,
+                    reveal: Asked::Reveal,
+                },
+            },
         )
     }
 

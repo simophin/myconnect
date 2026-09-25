@@ -6,15 +6,16 @@ early steps build the ground the later ones stand on. Steps marked
 *independent* can run in parallel worktrees once their prerequisites have
 landed.
 
-Status (2026-09-25): decided by the owner. Steps 1 to 7 are done: `gui/`
+Status (2026-09-25): decided by the owner. Steps 1 to 8 are done: `gui/`
 is the thin composition root, the spike's device list lives in `src/ui/`,
 features plug in through the `UiPlugin` seam (battery first), the shell
 has routing, toasts, dialogs, startup screens and error wording, the
 store caches devices, pairings, transfers and settings for the pages, the
 devices page is finished, the device page has ping, ring, send
 clipboard, recent transfers and unpair, and Add device, the pairing page
-and the incoming pairing prompt pair in both directions. Next are steps 8
-and 9. Each finished step says so under its heading, with what differs
+and the incoming pairing prompt pair in both directions, and the
+Transfers page shows progress, cancels, and opens received files. Next is
+step 9. Each finished step says so under its heading, with what differs
 from the plan.
 
 ## Read first
@@ -828,6 +829,51 @@ dark.
 
 ### 8. Transfers
 
+**Done (2026-09-25).** Where it differs from the text below:
+- `pages::transfers::view(store, actions, back, retry)` and
+  `transfer_row(transfer, show_device, actions)`, where
+  `transfers::Actions` holds `fn` constructors for Cancel, Open file and
+  Open folder. Each row is a card on the page; the device page's recent
+  transfers get the same buttons. `pages::device::view` now takes a
+  `device::Actions` struct too (navigate, plugin, unpair, transfer), which
+  also keeps it under clippy's argument limit.
+- Before `transferring` the bar is `activity_bar`, the sweep from step 7.
+  `format_bytes` and the status wording were already ported in step 6.
+- Cancel calls `Core::cancel_transfer` directly in `update` (a lock, no
+  I/O) and applies the snapshot through `Store::apply_transfer`; the
+  transfer's task marks it cancelled and the event updates the row. An
+  error (already ended, unknown) toasts in the core's words. Cancel isn't
+  disabled while it runs: it answers at once.
+- Opening is `ui::desktop::open`: an `Open` trait with `open` and `reveal`,
+  the `System` one through `opener` (the `reveal` feature; its `zbus` was
+  already in the tree), and a fake in tests. The shell runs it in
+  `spawn_blocking` on the daemon's runtime and toasts only a failure,
+  "Couldn’t open {path}". Open folder *reveals* the file (FileManager1
+  over D-Bus on Linux, falling back to opening the folder), where Flutter
+  opened the parent folder. On Linux `xdg-open` isn't waited for, so a
+  missing file would fail silently; `System` checks the path exists
+  first.
+- The transfers page's loading and failed states are drawn, but the core's
+  transfer list can't fail, so only Loading and Loaded occur.
+- Tests: the page (devices named, newest first, Cancel only while running,
+  Open file/folder only on completed with a saved path, empty and loading,
+  Back) and the shell against a real core: a transfer at 50 of 100 bytes,
+  Cancel reaches the core, the ended transfer reads "Cancelled" with no
+  Cancel button, and cancelling it again toasts why; opening reports only
+  failures. Snapshots `transfers`, `transfers-empty`.
+- Checked in the real app against a CLI peer (loopback, Xvfb, private
+  bus): a 1.5 GB send shows live progress on the Transfers page, Cancel
+  at about 870 MB turns the row "Cancelled" and removes the partial file,
+  and the sender reports it failed. Open file launched the default app
+  with the file; with the file deleted it toasts "Couldn’t open {path}".
+  Open folder activated Thunar through FileManager1, which under Xvfb
+  answers but maps no window (a `gdbus` call does the same).
+- Trap found: start a private `dbus-daemon` with the virtual display's
+  environment (`env -u WAYLAND_DISPLAY DISPLAY=:NN dbus-daemon --session
+  --fork …`). Services it activates (Thunar for Open folder, portals)
+  inherit *its* environment, and would otherwise open on the owner's
+  desktop.
+
 **Build:**
 - The Transfers page and a `transfer_row` widget (Appendix A §7):
   - direction icon, name, "From/To {device} · status";
@@ -1222,12 +1268,12 @@ Dropping applies on X11, macOS and Windows, not on Wayland (see Owner decisions)
 - [ ] Files sent one at a time; failures summarised once (send and upload wording)
 
 ### §7 Transfers (`features/transfers/`)
-- [ ] Page: newest first; empty "No transfers yet"; loading; error + Retry
-- [ ] Row: direction icon, name, "From/To {device} · status", status wording incl. failure reasons
-- [ ] Progress: determinate while transferring, indeterminate before
-- [ ] Cancel while active; toast on error
-- [ ] Open file / Open folder on completed with `savedPath`; toast "Couldn't open {path}"
-- [ ] `format_bytes` as in `transfer_tile.dart:107-118`
+- [x] Page: newest first; empty "No transfers yet"; loading; error + Retry
+- [x] Row: direction icon, name, "From/To {device} · status", status wording incl. failure reasons
+- [x] Progress: determinate while transferring, indeterminate before
+- [x] Cancel while active; toast on error
+- [x] Open file / Open folder on completed with `savedPath`; toast "Couldn't open {path}"
+- [x] `format_bytes` as in `transfer_tile.dart:107-118`
 - [x] Guard: newer / terminal wins
 
 ### §8 File browser (`features/files/`)

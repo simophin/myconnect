@@ -14,6 +14,7 @@
 
 pub mod activity;
 pub mod demo;
+pub mod desktop;
 pub mod error;
 pub mod overlay;
 pub mod pages;
@@ -30,6 +31,7 @@ use std::{
     fmt,
     future::Future,
     net::Ipv4Addr,
+    path::PathBuf,
     pin::Pin,
     rc::Rc,
     sync::{Arc, Mutex, PoisonError},
@@ -50,12 +52,13 @@ use crate::{
     core::{Core, CoreError, PairingSnapshot},
     daemon::RunningService,
 };
+use desktop::open::{self as opening, Open};
 use overlay::{
     dialog::{self as dialogs, Dialog, DialogEvent, Dialogs, Field, Step, Submit},
     incoming,
     toast::{self, Toasts},
 };
-use pages::{add_device, device, devices, pairing, startup};
+use pages::{add_device, device, devices, pairing, startup, transfers};
 use plugin::{Command, ErasedUiPlugin, Outcome, PluginMessage, ShellRequest, UiContext};
 use route::Route;
 use store::Snapshot;
@@ -201,6 +204,14 @@ enum Message {
         accept: bool,
     },
     PairingAnswered(Uuid, Result<PairingSnapshot, String>),
+    /// Stop a transfer.
+    CancelTransfer(Uuid),
+    /// Open a received file with its default app.
+    OpenFile(PathBuf),
+    /// Show a received file in the file manager.
+    RevealFile(PathBuf),
+    /// Opening a file failed: which one, and why.
+    OpenFailed(PathBuf, String),
     Key(KeyCommand),
     DemoTick(u64),
     WindowOpened,
@@ -243,6 +254,8 @@ struct App {
     answering: Option<Uuid>,
     /// Why answering a request failed, shown in its prompt.
     answer_error: Option<(Uuid, String)>,
+    /// Opens received files.
+    opener: Arc<dyn Open>,
 }
 
 /// Whether the daemon runs yet.
@@ -287,6 +300,7 @@ impl App {
             cancelling: None,
             answering: None,
             answer_error: None,
+            opener: Arc::new(opening::System),
         };
         let start = app.start();
         (
@@ -511,6 +525,13 @@ impl App {
                 }
                 Task::none()
             }
+            Message::CancelTransfer(transfer_id) => self.cancel_transfer(transfer_id),
+            Message::OpenFile(path) => self.open(path, false),
+            Message::RevealFile(path) => self.open(path, true),
+            Message::OpenFailed(path, error) => {
+                tracing::warn!(path = %path.display(), %error, "couldn't open a file");
+                self.toast(format!("Couldn’t open {}", path.display()), None)
+            }
             // The pairing prompt can't be dismissed; Escape would only
             // reach a dialog hidden under it.
             Message::Key(KeyCommand::Cancel) if self.incoming_prompt_shows() => Task::none(),
@@ -659,6 +680,43 @@ impl App {
             },
             move |result| Message::PairingAnswered(pairing_id, result),
         )
+    }
+
+    /// Ask a transfer to stop. Its task tears it down and marks it
+    /// cancelled a moment later; the event says so.
+    fn cancel_transfer(&mut self, transfer_id: Uuid) -> Task<Message> {
+        let Some(running) = self.running() else {
+            return Task::none();
+        };
+        match running.ctx.core().cancel_transfer(transfer_id) {
+            Ok(transfer) => {
+                running.ctx.store_mut().apply_transfer(transfer);
+                Task::none()
+            }
+            Err(error) => self.toast(error::describe_error(&error), None),
+        }
+    }
+
+    /// Open `path`, or show it in the file manager (`reveal`), off the UI
+    /// thread: it spawns a process or calls D-Bus.
+    fn open(&self, path: PathBuf, reveal: bool) -> Task<Message> {
+        let opener = self.opener.clone();
+        plugin::on_runtime(&self.options.runtime, async move {
+            let result = tokio::task::spawn_blocking({
+                let path = path.clone();
+                move || {
+                    if reveal {
+                        opener.reveal(&path)
+                    } else {
+                        opener.open(&path)
+                    }
+                }
+            })
+            .await
+            .unwrap_or_else(|error| Err(error.to_string()));
+            result.err().map(|error| Message::OpenFailed(path, error))
+        })
+        .and_then(Task::done)
     }
 
     /// Run a core call on the daemon's runtime, with its error in words.
@@ -843,11 +901,14 @@ impl App {
                     &running.plugins,
                     id,
                     self.unpairing.as_deref() == Some(id.as_str()),
-                    Message::Navigate,
-                    Message::Plugin,
-                    |device| Message::Unpair {
-                        device_id: device.device_id.clone(),
-                        name: device.device_name.clone(),
+                    &device::Actions {
+                        navigate: Message::Navigate,
+                        plugin: Message::Plugin,
+                        unpair: |device| Message::Unpair {
+                            device_id: device.device_id.clone(),
+                            name: device.device_name.clone(),
+                        },
+                        transfer: TRANSFER_ACTIONS,
                     },
                 );
             }
@@ -877,7 +938,14 @@ impl App {
                     },
                 );
             }
-            Route::Transfers => "Transfers",
+            Route::Transfers => {
+                return transfers::view(
+                    running.ctx.store(),
+                    &TRANSFER_ACTIONS,
+                    Message::Back,
+                    Message::Reload,
+                );
+            }
             Route::Settings => "Settings",
         };
         // The other pages the core owns arrive in later steps.
@@ -934,6 +1002,13 @@ impl App {
     }
 }
 
+/// What a transfer row's buttons ask of the shell.
+const TRANSFER_ACTIONS: transfers::Actions<Message> = transfers::Actions {
+    cancel: Message::CancelTransfer,
+    open: Message::OpenFile,
+    reveal: Message::RevealFile,
+};
+
 /// The shortcut a key press means, if any. Escape counts even when a text
 /// field took it, so it closes a dialog from its field.
 fn key_command(event: Event, _status: event::Status, _window: window::Id) -> Option<KeyCommand> {
@@ -970,11 +1045,16 @@ fn shell_task(command: Command<PluginMessage>) -> Task<Message> {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use iced::widget;
     use iced_fonts::lucide;
+    use iced_test::simulator::Simulator;
 
     use super::*;
     use crate::{
-        core::{DeviceSnapshot, LanCommand, PairingDirection, PairingStatus, testing::handle},
+        core::{
+            DeviceSnapshot, LanCommand, PairingDirection, PairingStatus, TransferDirection,
+            testing::handle,
+        },
         ui::plugin::{DeviceAction, UiPlugin},
     };
 
@@ -1440,6 +1520,99 @@ mod tests {
         // Escape doesn't dismiss it.
         settle(&mut app, Message::Key(KeyCommand::Cancel)).await;
         assert!(app.incoming_prompt().is_some());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_transfers_page_shows_progress_and_cancels() {
+        let mut app = running(Vec::new());
+        let core = core(&app);
+        let (peer, _sent) = testing::connect_peer(&core, testing::PEER_ID, &[]);
+        let mut transfer =
+            core.transfers()
+                .begin(&peer, TransferDirection::Incoming, "movie.mkv".into(), 100);
+        transfer.transferring();
+        transfer.progress(50);
+        settle(&mut app, Message::Reload).await;
+        settle(&mut app, Message::Navigate(Route::Transfers)).await;
+
+        let mut ui = Simulator::new(app.view(app.window));
+        assert!(ui.find("From Peer · 50 bytes of 100 bytes").is_ok());
+        ui.click(widget::Id::from("Cancel")).unwrap();
+        let clicked: Vec<_> = ui.into_messages().collect();
+        for message in clicked {
+            settle(&mut app, message).await;
+        }
+        assert!(transfer.cancellation().is_cancelled(), "the core was asked");
+        assert!(app.toasts.is_empty());
+
+        // The transfer's task notices, and ends it.
+        let transfer_id = transfer.id();
+        transfer.cancelled();
+        settle(&mut app, Message::Reload).await;
+        let mut ui = Simulator::new(app.view(app.window));
+        assert!(ui.find("From Peer · Cancelled").is_ok());
+        assert!(ui.find(widget::Id::from("Cancel")).is_err());
+        drop(ui);
+
+        // Too late to cancel: say why.
+        settle(&mut app, Message::CancelTransfer(transfer_id)).await;
+        assert_eq!(
+            app.toasts.items()[0].text,
+            error::describe_code("invalid_transfer_state")
+        );
+    }
+
+    /// Opens nothing: records what it was asked, and fails for
+    /// `missing.txt`.
+    #[derive(Default)]
+    struct FakeOpener {
+        opened: Mutex<Vec<(PathBuf, bool)>>,
+    }
+
+    impl FakeOpener {
+        fn record(&self, path: &std::path::Path, reveal: bool) -> Result<(), String> {
+            if path.ends_with("missing.txt") {
+                return Err("no such file".into());
+            }
+            self.opened.lock().unwrap().push((path.into(), reveal));
+            Ok(())
+        }
+    }
+
+    impl Open for FakeOpener {
+        fn open(&self, path: &std::path::Path) -> Result<(), String> {
+            self.record(path, false)
+        }
+
+        fn reveal(&self, path: &std::path::Path) -> Result<(), String> {
+            self.record(path, true)
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn opening_a_received_file_reports_only_failures() {
+        let mut app = running(Vec::new());
+        let opener = Arc::new(FakeOpener::default());
+        app.opener = opener.clone();
+        let notes = PathBuf::from("/home/me/Downloads/notes.txt");
+
+        settle(&mut app, Message::OpenFile(notes.clone())).await;
+        settle(&mut app, Message::RevealFile(notes.clone())).await;
+        assert!(app.toasts.is_empty());
+        assert_eq!(
+            *opener.opened.lock().unwrap(),
+            [(notes.clone(), false), (notes, true)]
+        );
+
+        settle(
+            &mut app,
+            Message::OpenFile("/home/me/Downloads/missing.txt".into()),
+        )
+        .await;
+        assert_eq!(
+            app.toasts.items()[0].text,
+            "Couldn’t open /home/me/Downloads/missing.txt"
+        );
     }
 
     #[test]
