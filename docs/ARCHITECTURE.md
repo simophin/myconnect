@@ -48,9 +48,9 @@ so packet handling can be exercised without a live connection.
 | Module | File(s) | Responsibility |
 | --- | --- | --- |
 | `protocol` | `src/protocol/{mod,packet,codec,verification}.rs` | Wire packet envelope, identity/pairing body types, bounded newline-delimited JSON codec, the protocol-v8 verification-code function. No I/O. |
-| `config` | `src/config/{mod,identity,settings,token,trust}.rs` | Local device identity (UUID + self-signed cert), the optional API bearer token (never persisted), filesystem-backed `TrustStore` of pinned peer certificates, and `settings.json` (user settings, written atomically). |
+| `config` | `src/config/{mod,identity,settings,token,trust}.rs` | Local device identity (UUID + self-signed cert), the optional API bearer token (never persisted), filesystem-backed `TrustStore` of pinned peer certificates (one `trusted-devices/<id>.json` each, with the name, type and capabilities the peer last reported over an authenticated connection), and `settings.json` (user settings, written atomically). |
 | `transport` | `src/transport/{lan,tls,payload,sftp}.rs` | UDP discovery, TCP control-channel connect/accept, the real rustls TLS handshake and certificate pinning, the auxiliary TLS payload connection used for file transfer, and the SSH/SFTP client connection to a peer's file server (§12). |
-| `device` | `src/device.rs` | `DeviceSnapshot`, `DeviceReachability`, `BatteryStatus`, and the in-memory device registry keyed by device ID. |
+| `device` | `src/device.rs` | `DeviceSnapshot`, `DeviceReachability`, `BatteryStatus`, and the in-memory device registry keyed by device ID. It starts with every paired device from the `TrustStore`, as `unavailable`, so paired devices are listed while offline. |
 | `plugins` | `src/plugins/{mod,ping,clipboard,share,sftp,battery}.rs` | Fixed (non-dynamic) packet-type routing table for the packet families this build understands: ping, clipboard, share, sftp, battery. Advertises capability strings for the identity packet: ping, clipboard and share in both directions; `kdeconnect.sftp.request` outgoing and `kdeconnect.sftp` incoming only, since this build browses peers but serves no files; `kdeconnect.battery` incoming only, since it reads peers' batteries but reports none. |
 | `application` | `src/application.rs`, `src/application/{state,events,service,settings,transfer,files}.rs`, `src/application/service/browse.rs` | Orchestration: connection registry, pairing state machine, transfer state machine, clipboard sync, user settings, browse sessions with peers' files (§12), bounded event bus. Everything HTTP-facing is a snapshot type defined here. `RunningService` starts/stops a whole daemon (LAN + API) for the CLI and embedders. |
 | `clipboard` | `src/clipboard.rs`, `src/clipboard/system.rs` | `ClipboardService` trait, the desktop clipboard (`SystemClipboard`, over `arboard`) and an in-memory implementation (§6). |
@@ -107,6 +107,10 @@ States: `requested → awaiting_confirmation → accepted | rejected | expired |
 - Trust is written to the `TrustStore` only after local user confirmation
   (`POST /pairings/{id}/accept` for incoming, or automatic on receiving the
   peer's accept for outgoing) — never before.
+- A paired peer's trust record also keeps how it last described itself
+  (name, type, capabilities), written at pairing and refreshed whenever it
+  connects, never from a UDP announcement. The daemon lists paired devices
+  from these records at startup, as `unavailable` until they are seen.
 - `DELETE /pairings/{id}` cancels an in-flight pairing or unpairs/forgets an
   already-trusted device, removing its pinned certificate.
 - Unpairing (`DELETE /devices/{id}`) sends `kdeconnect.pair {pair: false}`

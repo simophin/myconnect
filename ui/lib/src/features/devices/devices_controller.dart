@@ -21,11 +21,19 @@ final pairedDevicesProvider = Provider<AsyncValue<List<Device>>>(
       .whenData((devices) => devices.where((d) => d.paired).toList()),
 );
 
-/// Nearby devices that could be paired, for the add-device flow.
+/// Nearby devices that could be paired, for the add-device flow. Devices
+/// seen earlier that are gone now are left out.
 final unpairedDevicesProvider = Provider<AsyncValue<List<Device>>>(
   (ref) => ref
       .watch(devicesProvider)
-      .whenData((devices) => devices.where((d) => !d.paired).toList()),
+      .whenData(
+        (devices) => devices
+            .where(
+              (d) =>
+                  !d.paired && d.reachability != DeviceReachability.unavailable,
+            )
+            .toList(),
+      ),
 );
 
 final deviceProvider = Provider.family<Device?, String>(

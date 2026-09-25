@@ -18,23 +18,32 @@ void main() {
       ..devices = [
         device(id: 'b' * 32, name: 'Tablet'),
         device(id: 'a' * 32, name: 'phone', paired: false),
+        device(
+          id: 'c' * 32,
+          name: 'Gone',
+          paired: false,
+          reachability: DeviceReachability.unavailable,
+        ),
       ];
     container = ProviderContainer.test(overrides: daemon.overrides);
   });
 
-  test('loads a sorted snapshot and splits paired from unpaired', () async {
-    final devices = await container.read(devicesProvider.future);
-    expect(devices.map((d) => d.deviceName), ['phone', 'Tablet']);
-    container.listen(pairedDevicesProvider, (_, _) {});
-    expect(
-      container.read(pairedDevicesProvider).value!.single.deviceName,
-      'Tablet',
-    );
-    expect(
-      container.read(unpairedDevicesProvider).value!.single.deviceName,
-      'phone',
-    );
-  });
+  test(
+    'loads a sorted snapshot and splits paired from reachable unpaired',
+    () async {
+      final devices = await container.read(devicesProvider.future);
+      expect(devices.map((d) => d.deviceName), ['Gone', 'phone', 'Tablet']);
+      container.listen(pairedDevicesProvider, (_, _) {});
+      expect(
+        container.read(pairedDevicesProvider).value!.single.deviceName,
+        'Tablet',
+      );
+      expect(
+        container.read(unpairedDevicesProvider).value!.single.deviceName,
+        'phone',
+      );
+    },
+  );
 
   test('applies device events and removes forgotten devices', () async {
     await container.read(devicesProvider.future);
@@ -48,12 +57,12 @@ void main() {
         ),
       ),
     );
-    await daemon.emit(DeviceChanged(device(id: 'c' * 32, name: 'Laptop')));
+    await daemon.emit(DeviceChanged(device(id: 'd' * 32, name: 'Laptop')));
     expect(
       container.read(deviceProvider('b' * 32))!.reachability,
       DeviceReachability.unavailable,
     );
-    expect(container.read(devicesProvider).value, hasLength(3));
+    expect(container.read(devicesProvider).value, hasLength(4));
 
     await daemon.emit(DeviceForgotten(device(id: 'b' * 32)));
     expect(container.read(deviceProvider('b' * 32)), isNull);
@@ -92,7 +101,7 @@ void main() {
     when(daemon.api.devices).thenAnswer((_) => fetched.future);
 
     await daemon.emit(const EventStreamConnected());
-    await daemon.emit(DeviceChanged(device(id: 'c' * 32, name: 'Laptop')));
+    await daemon.emit(DeviceChanged(device(id: 'd' * 32, name: 'Laptop')));
     await daemon.emit(DeviceForgotten(device(id: 'a' * 32)));
     fetched.complete([
       device(id: 'b' * 32, name: 'Tablet'),

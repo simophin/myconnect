@@ -26,11 +26,11 @@ final _log = Logger('BackgroundHost');
 ///
 /// Closing the window only hides it, unless the user turned off the
 /// `closeToTray` setting. Clicking the tray icon shows it again; the tray
-/// menu lists the paired devices, each with its actions, then Settings and
-/// Quit. Quitting is the one path that stops the daemon. While the window is
-/// hidden or unfocused, incoming pairing requests, received files and pings
-/// raise a notification that brings the window back. A ping over a focused
-/// window shows a snackbar instead.
+/// menu lists the connected paired devices, each with its actions, then
+/// Settings and Quit. Quitting is the one path that stops the daemon. While
+/// the window is hidden or unfocused, incoming pairing requests, received
+/// files and pings raise a notification that brings the window back. A ping
+/// over a focused window shows a snackbar instead.
 ///
 /// Sits above everything else so the tray works even if the daemon failed to
 /// start, and so it lives as long as the `ProviderScope` does.
@@ -118,10 +118,12 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
     }
   }
 
-  /// The tray menu: [devices] (left out while they are unknown), each with
-  /// what can be done to it, then Settings and Quit.
-  List<TrayMenuEntry> _trayMenu(List<Device>? devices) {
+  /// The tray menu: the connected ones of the [paired] devices (left out
+  /// while they are unknown), each with what can be done to it, then
+  /// Settings and Quit. The main window lists the rest.
+  List<TrayMenuEntry> _trayMenu(List<Device>? paired) {
     final shell = ref.read(desktopShellProvider);
+    final devices = paired?.where((device) => device.isConnected).toList();
     return [
       TrayMenuItem(
         'Open MyConnect',
@@ -129,12 +131,13 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
       ),
       const TrayMenuSeparator(),
       if (devices != null) ...[
-        if (devices.isEmpty) const TrayMenuItem('No paired devices'),
+        if (paired!.isEmpty)
+          const TrayMenuItem('No paired devices')
+        else if (devices.isEmpty)
+          const TrayMenuItem('No devices connected'),
         for (final device in devices)
           TrayMenuItem(
             switch (device) {
-              Device(isConnected: false) =>
-                '${device.deviceName} (${reachabilityLabel(device)})',
               Device(battery: BatteryStatus(:final charge)) =>
                 '${device.deviceName} · $charge%',
               _ => device.deviceName,

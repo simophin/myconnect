@@ -146,9 +146,8 @@ void main() {
     expect(daemon.notifications.shown.values, ['Ping!']);
   });
 
-  testWidgets('the tray menu lists paired devices, then Settings and Quit', (
-    tester,
-  ) async {
+  testWidgets('the tray menu lists connected paired devices, then Settings '
+      'and Quit', (tester) async {
     final daemon = TestDaemon()
       ..devices = [
         device(
@@ -168,7 +167,6 @@ void main() {
     expect(shell.trayLabels, [
       'Open MyConnect',
       '-',
-      'Laptop (Not reachable)',
       'Pixel',
       '-',
       'Settings',
@@ -177,11 +175,6 @@ void main() {
     ]);
     expect(shell.trayItem(['Pixel', 'Send files…']).enabled, isTrue);
     expect(shell.trayItem(['Pixel', 'Ping']).enabled, isTrue);
-    expect(
-      shell.trayItem(['Laptop (Not reachable)', 'Send files…']).enabled,
-      isFalse,
-    );
-    expect(shell.trayItem(['Laptop (Not reachable)', 'Ping']).enabled, isFalse);
 
     daemon.events.add(
       DeviceChanged(
@@ -201,6 +194,19 @@ void main() {
     final daemon = await pumpApp(tester, TestDaemon());
 
     expect(daemon.shell.trayItem(['No paired devices']).enabled, isFalse);
+  });
+
+  testWidgets('the tray menu says when no paired device is connected', (
+    tester,
+  ) async {
+    final daemon = TestDaemon()
+      ..devices = [
+        device(name: 'Pixel', reachability: DeviceReachability.unavailable),
+      ];
+    await pumpApp(tester, daemon);
+
+    expect(daemon.shell.trayItem(['No devices connected']).enabled, isFalse);
+    expect(() => daemon.shell.trayItem(['Pixel']), throwsStateError);
   });
 
   testWidgets('the tray opens a device, or settings, in the window', (
@@ -249,10 +255,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(
-      shell.trayItem(['Pixel (Not reachable)', 'Browse files']).enabled,
-      isFalse,
-    );
+    expect(() => shell.trayItem(['Pixel']), throwsStateError);
 
     daemon.events.add(
       DeviceChanged(

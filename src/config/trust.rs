@@ -10,6 +10,7 @@ use uuid::Uuid;
 use x509_parser::parse_x509_certificate;
 
 use super::{create_private_dir, is_valid_device_id, private_file_options};
+use crate::protocol::DeviceType;
 
 /// Persisted certificate pin for a paired peer.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,6 +19,21 @@ pub struct TrustedDevice {
     pub device_id: String,
     pub certificate_der: Vec<u8>,
     pub last_trusted_protocol_version: u8,
+    /// How the peer last described itself over an authenticated connection,
+    /// so it can be listed while it is offline. Records written before this
+    /// was kept have none until the peer next connects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_identity: Option<TrustedIdentity>,
+}
+
+/// The parts of a paired peer's identity worth showing while it is offline.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustedIdentity {
+    pub device_name: String,
+    pub device_type: DeviceType,
+    pub incoming_capabilities: Vec<String>,
+    pub outgoing_capabilities: Vec<String>,
 }
 
 /// Storage abstraction for paired-device certificate pins.
@@ -187,6 +203,12 @@ mod tests {
             device_id: device_id.into(),
             certificate_der: certificate.der().to_vec(),
             last_trusted_protocol_version: 8,
+            last_identity: Some(TrustedIdentity {
+                device_name: "FOSS Phone".into(),
+                device_type: DeviceType::Phone,
+                incoming_capabilities: vec!["kdeconnect.ping".into()],
+                outgoing_capabilities: Vec::new(),
+            }),
         }
     }
 
@@ -203,6 +225,24 @@ mod tests {
         assert!(store.remove(&device.device_id).unwrap());
         assert!(store.get(&device.device_id).unwrap().is_none());
         assert!(!store.remove(&device.device_id).unwrap());
+    }
+
+    #[test]
+    fn records_without_an_identity_still_load() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = FilesystemTrustStore::new(directory.path());
+        let mut device = trusted_device("740bd4b9b4184ee497d6caf1da8151be");
+        device.last_identity = None;
+        store.put(&device).unwrap();
+
+        let raw = fs::read_to_string(
+            directory
+                .path()
+                .join("trusted-devices/740bd4b9b4184ee497d6caf1da8151be.json"),
+        )
+        .unwrap();
+        assert!(!raw.contains("lastIdentity"));
+        assert!(store.get(&device.device_id).unwrap() == Some(device));
     }
 
     #[test]

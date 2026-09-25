@@ -105,6 +105,15 @@ impl DeviceRegistry {
         Ok(snapshot)
     }
 
+    /// Add a paired peer that hasn't been seen yet, e.g. one remembered
+    /// from an earlier run, as unreachable. A peer already known is left
+    /// alone.
+    pub fn restore(&mut self, snapshot: DeviceSnapshot) {
+        self.devices
+            .entry(snapshot.device_id.clone())
+            .or_insert(DeviceRecord { snapshot });
+    }
+
     pub fn mark_connected(
         &mut self,
         device_id: &str,

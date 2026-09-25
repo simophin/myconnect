@@ -12,7 +12,7 @@ use directories::ProjectDirs;
 pub use identity::{IdentityError, LocalIdentity};
 pub use settings::{SettingsError, SettingsFile, StoredSettings};
 pub use token::{ApiToken, ApiTokenError};
-pub use trust::{FilesystemTrustStore, TrustError, TrustStore, TrustedDevice};
+pub use trust::{FilesystemTrustStore, TrustError, TrustStore, TrustedDevice, TrustedIdentity};
 
 /// Return the platform-specific directory used for MyConnect configuration.
 pub fn default_config_dir() -> Option<PathBuf> {
