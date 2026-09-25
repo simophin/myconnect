@@ -178,7 +178,7 @@ mod tests {
         );
         let plugins: Vec<Box<dyn ErasedUiPlugin>> = vec![Box::new(BatteryUi)];
         testing::snapshot("devices-battery", (440.0, 400.0), || {
-            devices::view(&store, &plugins, ())
+            devices::view(&store, &plugins, None, |_| (), ())
         });
     }
 }

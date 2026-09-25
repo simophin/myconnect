@@ -4,7 +4,7 @@
 
 use iced::{
     Alignment, Background, Border, Element, Font, Length, Theme, font,
-    widget::{Space, Text, button, column, container, row, text, tooltip, tooltip::Position},
+    widget::{self, Space, Text, button, column, container, row, text, tooltip, tooltip::Position},
 };
 use iced_fonts::lucide;
 
@@ -57,12 +57,14 @@ pub fn page_header<'a, M: Clone + 'a>(
     header.height(40).into()
 }
 
-/// An icon button with a tooltip, disabled without `on_press`.
+/// An icon button with a tooltip, disabled without `on_press`. Its widget
+/// id is the tooltip, so tests can find it.
 pub fn icon_button<'a, M: Clone + 'a>(
     icon: Icon,
     tip: impl Into<String>,
     on_press: Option<M>,
 ) -> Element<'a, M> {
+    let tip = tip.into();
     let icon: Element<'a, M> = Element::from(icon().size(18));
     let button = button(container(icon).center(20))
         .padding(8)
@@ -86,13 +88,17 @@ pub fn icon_button<'a, M: Clone + 'a>(
             }
         })
         .on_press_maybe(on_press);
-    let tip: Text<'a> = text(tip.into()).size(12);
-    tooltip(
-        button,
-        container(tip).padding([4, 8]).style(container::dark),
-        Position::Bottom,
+    let id = widget::Id::from(tip.clone());
+    let tip: Text<'a> = text(tip).size(12);
+    container(
+        tooltip(
+            button,
+            container(tip).padding([4, 8]).style(container::dark),
+            Position::Bottom,
+        )
+        .gap(4),
     )
-    .gap(4)
+    .id(id)
     .into()
 }
 
@@ -128,12 +134,13 @@ pub fn card_style(theme: &Theme) -> container::Style {
     }
 }
 
-/// A centred icon, title and optional detail, for a page with nothing to
-/// list.
-pub fn empty_state<'a, M: 'a>(
+/// A centred icon, title, optional detail and optional text button (its
+/// label and message), for a page with nothing to list.
+pub fn empty_state<'a, M: Clone + 'a>(
     icon: Icon,
     title: impl text::IntoFragment<'a>,
     detail: Option<&'a str>,
+    action: Option<(&'a str, M)>,
 ) -> Element<'a, M> {
     let mut content = column![
         icon().size(40).style(text::secondary),
@@ -144,9 +151,35 @@ pub fn empty_state<'a, M: 'a>(
     if let Some(detail) = detail {
         content = content.push(text(detail).size(13).style(text::secondary).center());
     }
+    if let Some((label, on_press)) = action {
+        content = content.push(link_button(label, on_press));
+    }
     container(content.max_width(360))
         .center(Length::Fill)
         .padding(24)
+        .into()
+}
+
+/// A button that reads as a link: primary-coloured text, a light
+/// background on hover.
+pub fn link_button<'a, M: Clone + 'a>(label: &'a str, on_press: M) -> Element<'a, M> {
+    button(text(label))
+        .padding([6, 12])
+        .style(|theme: &Theme, status| {
+            let palette = theme.extended_palette();
+            let background = match status {
+                button::Status::Hovered => Some(palette.primary.weak.color.scale_alpha(0.25)),
+                button::Status::Pressed => Some(palette.primary.weak.color.scale_alpha(0.45)),
+                _ => None,
+            };
+            button::Style {
+                background: background.map(Background::Color),
+                text_color: palette.primary.strong.color,
+                border: Border::default().rounded(8),
+                ..button::Style::default()
+            }
+        })
+        .on_press(on_press)
         .into()
 }
 
@@ -328,10 +361,11 @@ mod tests {
             )
         });
         testing::snapshot("empty-state", (440.0, 320.0), || {
-            empty_state::<Message>(
+            empty_state(
                 lucide::monitor_smartphone,
                 "No paired devices yet",
-                Some("Find a device to pair"),
+                Some("Devices you pair with appear here."),
+                Some(("Find a device to pair", Message::Refresh)),
             )
         });
     }

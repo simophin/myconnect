@@ -149,6 +149,8 @@ enum Message {
     Plugin(PluginMessage),
     /// A plugin's request to the shell.
     Shell(ShellRequest<PluginMessage>),
+    /// Go to a page.
+    Navigate(Route),
     /// Go to the page this one was opened from.
     Back,
     /// A toast's button: go to its route.
@@ -327,6 +329,10 @@ impl App {
                 shell_task(plugin.update(&running.ctx, message))
             }
             Message::Shell(request) => self.handle(request),
+            Message::Navigate(route) => {
+                self.route = route;
+                Task::none()
+            }
             Message::Back => {
                 if let Some(parent) = self.route.parent() {
                     self.route = parent;
@@ -472,7 +478,15 @@ impl App {
     fn page<'a>(&'a self, running: &'a Running) -> Element<'a, Message> {
         let title = match &self.route {
             Route::Devices => {
-                return devices::view(running.ctx.store(), &running.plugins, Message::Reload);
+                // Drops arrive with the share step, which highlights the
+                // card under them.
+                return devices::view(
+                    running.ctx.store(),
+                    &running.plugins,
+                    None,
+                    Message::Navigate,
+                    Message::Reload,
+                );
             }
             Route::Plugin {
                 plugin,
@@ -491,7 +505,7 @@ impl App {
         // The other pages the core owns arrive in later steps.
         widgets::page(
             widgets::page_header(title, Some(Message::Back), vec![]),
-            widgets::empty_state(lucide::construction, "Not here yet", None),
+            widgets::empty_state(lucide::construction, "Not here yet", None, None),
         )
     }
 
@@ -515,6 +529,7 @@ impl App {
                         widgets::empty_state(
                             lucide::circle_alert,
                             "This page no longer exists.",
+                            None,
                             None,
                         ),
                     )

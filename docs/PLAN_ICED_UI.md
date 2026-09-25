@@ -6,13 +6,13 @@ early steps build the ground the later ones stand on. Steps marked
 *independent* can run in parallel worktrees once their prerequisites have
 landed.
 
-Status (2026-09-25): decided by the owner. Steps 1 to 4 are done: `gui/`
+Status (2026-09-25): decided by the owner. Steps 1 to 5 are done: `gui/`
 is the thin composition root, the spike's device list lives in `src/ui/`,
 features plug in through the `UiPlugin` seam (battery first), the shell
-has routing, toasts, dialogs, startup screens and error wording, and the
-store caches devices, pairings, transfers and settings for the pages. Next
-are steps 5 to 9. Each finished step says so under its heading, with what differs
-from the plan.
+has routing, toasts, dialogs, startup screens and error wording, the
+store caches devices, pairings, transfers and settings for the pages, and
+the devices page is finished. Next are steps 6 to 9. Each finished step
+says so under its heading, with what differs from the plan.
 
 ## Read first
 
@@ -622,6 +622,28 @@ the event.
 
 ### 5. Devices page, finished
 
+**Done (2026-09-25).** Where it differs from the text below:
+- `devices::view(store, plugins, drop_target, navigate, retry)`: the page
+  makes its messages with the shell's `navigate` (`Message::Navigate(Route)`,
+  new), and `drop_target` names the card to highlight (upload icon, "Drop
+  to send" instead of the status, primary colours). The shell passes `None`
+  until step 11.
+- "Add device" is a primary button beside "This computer: {name}" under
+  the title, not a floating button, so toasts at the bottom never cover it.
+- Cards are buttons with hover and pressed backgrounds and a trailing
+  chevron. Connected devices still come first, then by name. The status
+  label reads "Not reachable" (was "Offline"), as in Flutter.
+- `widgets::empty_state` takes an optional text button, drawn by the new
+  `widgets::link_button`. `widgets::icon_button` gives its button the
+  tooltip as a widget id, so simulator tests click header buttons with
+  `widget::Id::from("Settings")`.
+- Tests: simulator clicks on a card, Settings, Transfers, Add device, "Find
+  a device to pair" and Retry; paired devices only; order; the drop
+  highlight. Snapshots `devices`, `devices-drop`, `devices-loading`,
+  `devices-empty`, `devices-failed`.
+- Checked in the real app with `--demo` under Xvfb: cards open the device,
+  the header buttons open Settings and Transfers, hover shows.
+
 **Build:** everything in Appendix A §2 that the spike lacks:
 - the header actions (Settings, Transfers);
 - "This computer: {name}";
@@ -1036,12 +1058,12 @@ are to the Flutter app under `ui/lib/src/`.
 - [ ] Light and dark themes follow the system
 
 ### §2 Devices (home) (`features/devices/devices_page.dart`)
-- [ ] Title "Devices"; Settings and Transfers buttons with tooltips
-- [ ] "This computer: {name}" once settings are loaded
-- [ ] "Add device" button
-- [ ] Loading; error with Retry; empty: icon, "No paired devices yet", "Find a device to pair"
-- [ ] Paired devices only, sorted by name (case-insensitive)
-- [ ] Card: type icon (primary when connected), name, status label (Connected / Nearby / Not reachable) + status slot; opens the device
+- [x] Title "Devices"; Settings and Transfers buttons with tooltips
+- [x] "This computer: {name}" once settings are loaded
+- [x] "Add device" button
+- [x] Loading; error with Retry; empty: icon, "No paired devices yet", "Find a device to pair"
+- [x] Paired devices only, sorted by name (case-insensitive)
+- [x] Card: type icon (primary when connected), name, status label (Connected / Nearby / Not reachable) + status slot; opens the device
 - [ ] Drop on a card: "Drop to send" highlight when the device accepts files
 
 ### §3 Device detail (`features/devices/device_detail_page.dart`)
