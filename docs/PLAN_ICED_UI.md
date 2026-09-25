@@ -6,13 +6,14 @@ early steps build the ground the later ones stand on. Steps marked
 *independent* can run in parallel worktrees once their prerequisites have
 landed.
 
-Status (2026-09-25): decided by the owner. Steps 1 to 5 are done: `gui/`
+Status (2026-09-25): decided by the owner. Steps 1 to 6 are done: `gui/`
 is the thin composition root, the spike's device list lives in `src/ui/`,
 features plug in through the `UiPlugin` seam (battery first), the shell
 has routing, toasts, dialogs, startup screens and error wording, the
-store caches devices, pairings, transfers and settings for the pages, and
-the devices page is finished. Next are steps 6 to 9. Each finished step
-says so under its heading, with what differs from the plan.
+store caches devices, pairings, transfers and settings for the pages, the
+devices page is finished, and the device page has ping, ring, send
+clipboard, recent transfers and unpair. Next are steps 7 to 9. Each
+finished step says so under its heading, with what differs from the plan.
 
 ## Read first
 
@@ -659,6 +660,52 @@ dark.
 
 ### 6. Device detail, with ping, ring and clipboard
 
+**Done (2026-09-25).** Where it differs from the text below:
+- `pages::device::view(store, plugins, id, unpairing, navigate, plugin,
+  unpair)`. Back goes to the device list. The header card has a large
+  type icon, the name, and `devices::status_row` (reachability plus every
+  plugin's status chip), now shared with the device cards. The actions
+  are tonal buttons in a wrapping row; a disabled one is drawn but can't
+  be pressed.
+- The facts are selectable through `widgets::selectable_text`, a
+  read-only `text_input` drawn as plain text: iced's `text` can't be
+  selected, but a text field without `on_input` still selects and copies.
+- Unpair is shell code: `Message::Unpair` opens the danger confirm
+  ("Unpair {name}?"), `Forget` runs `Core::forget_device` on the daemon's
+  runtime (it writes the trust store) while the button is disabled, and
+  `Forgotten` removes the device from the store and goes home if the
+  window still shows that device's pages (`Route::device`), or toasts the
+  error.
+- Plugin UIs: `PingUi`, `FindMyPhoneUi` and `ClipboardUi` (built from the
+  same `Arc<ClipboardPlugin>` the core runs, in `builtin_with_ui`). Ping
+  and ring queue their packet synchronously in `update`; send clipboard
+  reads the clipboard in `spawn_blocking` on the daemon's runtime. Each
+  message carries the device id and name, so the toast doesn't need the
+  device any more. `ping` and `findmyphone` gained an `ID` constant.
+- Recent transfers use `pages::transfers::transfer_row` (direction icon,
+  name, status in `transfer_tile.dart`'s words, a progress bar while not
+  terminal) and `status_label`. Step 8 adds Cancel, Open file and Open
+  folder to the row, and the page. iced's progress bar has no
+  indeterminate mode: before `transferring` it shows empty; step 8 may
+  animate it.
+- *Send file* and *Browse files* are the share and browse plugins'
+  actions; they appear with steps 11 and 12. Dropping on the page is
+  step 11.
+- Tests: each plugin's gating, toast and error (against a real core with
+  `ui::testing::connect_peer`), the ping notification, the page with a
+  fake plugin (listed/enabled actions, "no longer known", five newest
+  transfers and "See all", Unpair disabled while it runs), and the shell's
+  unpair (cancel keeps the device; confirm forgets it, empties the store
+  and goes home; a failure toasts and stays). Snapshots `device`,
+  `device-offline`, `device-gone`.
+- Checked in the real app against a CLI peer (loopback, Xvfb): Ping
+  toasts "Pinged CLI Peer.", Ring is disabled (a desktop doesn't ring), a
+  ping from the peer toasts "CLI Peer: Hello from the peer" (a desktop
+  notification once step 13 lands), Send clipboard says why when empty
+  and sends otherwise, a file the peer sent is listed under Recent
+  transfers, the Device ID selects, and Unpair returns home and unpairs
+  both sides.
+
 **Build:**
 - **The page** (Appendix A §3): header with icon, name and status (status
   slot included), selectable facts (Device ID, Type, Protocol version),
@@ -1067,17 +1114,17 @@ are to the Flutter app under `ui/lib/src/`.
 - [ ] Drop on a card: "Drop to send" highlight when the device accepts files
 
 ### §3 Device detail (`features/devices/device_detail_page.dart`)
-- [ ] Title = device name; "This device is no longer known." when gone
-- [ ] Header: large icon, name, status (with battery)
-- [ ] Selectable facts: Device ID, Type, Protocol version
+- [x] Title = device name; "This device is no longer known." when gone
+- [x] Header: large icon, name, status (with battery)
+- [x] Selectable facts: Device ID, Type, Protocol version
 - [ ] Send file: enabled when `acceptsFiles`; multi-select picker "Send"; one summary toast for failures
 - [ ] Browse files: enabled when `sharesFiles`
-- [ ] Ping: enabled when `acceptsPings`; toast "Pinged {name}."
-- [ ] Ring: enabled when `canRing`; toast "Asked {name} to ring."
-- [ ] Send clipboard: listed if `supportsClipboard`, enabled if `acceptsClipboard`; toast "Sent the clipboard to {name}."
-- [ ] Errors from any action as a toast
-- [ ] Recent transfers (≤5, newest first, no device name) + "See all"
-- [ ] Unpair: confirm "Unpair {name}?" + body text; goes home; toast on error
+- [x] Ping: enabled when `acceptsPings`; toast "Pinged {name}."
+- [x] Ring: enabled when `canRing`; toast "Asked {name} to ring."
+- [x] Send clipboard: listed if `supportsClipboard`, enabled if `acceptsClipboard`; toast "Sent the clipboard to {name}."
+- [x] Errors from any action as a toast
+- [x] Recent transfers (≤5, newest first, no device name) + "See all"
+- [x] Unpair: confirm "Unpair {name}?" + body text; goes home; toast on error
 - [ ] Drop anywhere on the page sends to this device
 
 ### §4 Add device (`features/devices/add_device_page.dart`)

@@ -4,7 +4,10 @@
 
 use iced::{
     Alignment, Background, Border, Element, Font, Length, Theme, font,
-    widget::{self, Space, Text, button, column, container, row, text, tooltip, tooltip::Position},
+    widget::{
+        self, Space, Text, button, column, container, row, text, text_input, tooltip,
+        tooltip::Position,
+    },
 };
 use iced_fonts::lucide;
 
@@ -246,6 +249,26 @@ pub fn verification_code<'a, M: 'a>(code: &'a str) -> Element<'a, M> {
         }
     })
     .into()
+}
+
+/// Text that can be selected and copied, but not edited: a read-only text
+/// field drawn as plain text. iced's text can't be selected.
+pub fn selectable_text<'a, M: Clone + 'a>(value: &str) -> Element<'a, M> {
+    text_input("", value)
+        .padding(0)
+        .size(14)
+        .style(|theme: &Theme, _status| {
+            let palette = theme.extended_palette();
+            text_input::Style {
+                background: Background::Color(iced::Color::TRANSPARENT),
+                border: Border::default(),
+                icon: palette.background.base.text,
+                placeholder: palette.background.strong.color,
+                value: palette.background.base.text,
+                selection: palette.primary.weak.color,
+            }
+        })
+        .into()
 }
 
 /// A gap of `size` pixels in a row or column.

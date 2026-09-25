@@ -48,7 +48,7 @@ use overlay::{
     dialog::{Dialog, DialogEvent, Dialogs, Field, Step, Submit},
     toast::{self, Toasts},
 };
-use pages::{devices, startup};
+use pages::{device, devices, startup};
 use plugin::{Command, ErasedUiPlugin, Outcome, PluginMessage, ShellRequest, UiContext};
 use route::Route;
 use store::Snapshot;
@@ -153,6 +153,20 @@ enum Message {
     Navigate(Route),
     /// Go to the page this one was opened from.
     Back,
+    /// Ask whether to unpair a device.
+    Unpair {
+        device_id: String,
+        name: String,
+    },
+    /// Unpair a device: confirmed.
+    Forget {
+        device_id: String,
+    },
+    /// Unpairing finished, or why it didn't.
+    Forgotten {
+        device_id: String,
+        result: Result<(), String>,
+    },
     /// A toast's button: go to its route.
     ToastAction(u64, Route),
     DismissToast(u64),
@@ -187,6 +201,8 @@ struct App {
     route: Route,
     toasts: Toasts,
     dialogs: Dialogs<Message>,
+    /// The device being unpaired, if any: its Unpair button is disabled.
+    unpairing: Option<String>,
 }
 
 /// Whether the daemon runs yet.
@@ -224,6 +240,7 @@ impl App {
             route: Route::Devices,
             toasts: Toasts::default(),
             dialogs: Dialogs::default(),
+            unpairing: None,
         };
         let start = app.start();
         (
@@ -339,6 +356,37 @@ impl App {
                 }
                 Task::none()
             }
+            Message::Unpair { device_id, name } => self.dialogs.open(
+                Dialog::confirm(
+                    format!("Unpair {name}?"),
+                    "The device will need to be paired again before it can exchange \
+                     anything with this computer.",
+                    "Unpair",
+                    Submit::Close(Arc::new(move |_| Message::Forget {
+                        device_id: device_id.clone(),
+                    })),
+                )
+                .danger(),
+            ),
+            Message::Forget { device_id } => self.forget(device_id),
+            Message::Forgotten { device_id, result } => {
+                if self.unpairing.as_deref() == Some(device_id.as_str()) {
+                    self.unpairing = None;
+                }
+                match result {
+                    Ok(()) => {
+                        if let Some(running) = self.running() {
+                            running.ctx.store_mut().remove_device(&device_id);
+                        }
+                        // Leave the device's pages; elsewhere, stay put.
+                        if self.route.device() == Some(device_id.as_str()) {
+                            self.route = Route::Devices;
+                        }
+                        Task::none()
+                    }
+                    Err(error) => self.toast(error, None),
+                }
+            }
             Message::ToastAction(id, route) => {
                 self.toasts.dismiss(id);
                 self.route = route;
@@ -385,6 +433,26 @@ impl App {
             },
             Message::Window(..) => Task::none(),
         }
+    }
+
+    /// Unpair `device_id`, off the UI thread: it writes the trust store.
+    fn forget(&mut self, device_id: String) -> Task<Message> {
+        let Some(running) = self.running() else {
+            return Task::none();
+        };
+        let core = running.ctx.core().clone();
+        self.unpairing = Some(device_id.clone());
+        plugin::on_runtime(&self.options.runtime, {
+            let device_id = device_id.clone();
+            async move {
+                core.forget_device(&device_id)
+                    .map_err(|error| error::describe_error(&error))
+            }
+        })
+        .map(move |result| Message::Forgotten {
+            device_id: device_id.clone(),
+            result,
+        })
     }
 
     fn dialog(&mut self, event: DialogEvent) -> Task<Message> {
@@ -493,10 +561,20 @@ impl App {
                 device,
                 page,
             } => return self.plugin_page(running, plugin, device, page),
-            Route::Device(id) => running
-                .ctx
-                .device(id)
-                .map_or("Device", |device| device.device_name.as_str()),
+            Route::Device(id) => {
+                return device::view(
+                    running.ctx.store(),
+                    &running.plugins,
+                    id,
+                    self.unpairing.as_deref() == Some(id.as_str()),
+                    Message::Navigate,
+                    Message::Plugin,
+                    |device| Message::Unpair {
+                        device_id: device.device_id.clone(),
+                        name: device.device_name.clone(),
+                    },
+                );
+            }
             Route::AddDevice => "Add device",
             Route::Pairing(_) => "Pairing",
             Route::Transfers => "Transfers",
@@ -759,6 +837,61 @@ mod tests {
         settle(&mut app, Message::Dialog(DialogEvent::Submit)).await;
         assert!(app.dialogs.current().is_none());
         assert_eq!(confirmed.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unpairing_asks_then_forgets_the_device_and_goes_home() {
+        let mut app = running(Vec::new());
+        let Phase::Running(running) = &app.phase else {
+            unreachable!()
+        };
+        let core = running.ctx.core().clone();
+        let (peer, _sent) = testing::connect_peer(&core, testing::PEER_ID, &[]);
+        settle(&mut app, Message::Reload).await;
+        app.route = Route::Device(peer.device_id.clone());
+        let unpair = || Message::Unpair {
+            device_id: peer.device_id.clone(),
+            name: peer.device_name.clone(),
+        };
+
+        // Cancelling keeps the device.
+        settle(&mut app, unpair()).await;
+        assert_eq!(app.dialogs.current().unwrap().title, "Unpair Peer?");
+        settle(&mut app, Message::Key(KeyCommand::Cancel)).await;
+        assert!(core.device(&peer.device_id).is_some());
+
+        settle(&mut app, unpair()).await;
+        settle(&mut app, Message::Dialog(DialogEvent::Submit)).await;
+        assert!(app.dialogs.current().is_none());
+        assert!(core.device(&peer.device_id).is_none(), "the core forgot it");
+        let Phase::Running(running) = &app.phase else {
+            unreachable!()
+        };
+        assert!(
+            running.ctx.device(&peer.device_id).is_none(),
+            "gone from the store without waiting for the event"
+        );
+        assert_eq!(app.route, Route::Devices);
+        assert!(app.unpairing.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_unpair_says_why_and_stays() {
+        let mut app = running(Vec::new());
+        app.route = Route::Device("gone".into());
+        settle(
+            &mut app,
+            Message::Forget {
+                device_id: "gone".into(),
+            },
+        )
+        .await;
+        assert_eq!(app.route, Route::Device("gone".into()));
+        assert_eq!(
+            app.toasts.items()[0].text,
+            "That device is no longer known."
+        );
+        assert!(app.unpairing.is_none());
     }
 
     #[test]

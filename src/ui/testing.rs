@@ -6,8 +6,8 @@ use iced::{Element, Settings, Size, Task, Theme, futures::StreamExt};
 use iced_test::simulator::Simulator;
 
 use crate::{
-    core::{DeviceReachability, DeviceSnapshot, SettingsSnapshot},
-    protocol::DeviceType,
+    core::{Core, DeviceReachability, DeviceSnapshot, SettingsSnapshot, testing::make_identity},
+    protocol::{DeviceType, Packet},
     ui::store::{Snapshot, Store},
 };
 
@@ -26,6 +26,34 @@ pub fn device(name: &str) -> DeviceSnapshot {
         last_seen_at: 0,
         plugins: Default::default(),
     }
+}
+
+/// A valid device id for [`connect_peer`].
+pub const PEER_ID: &str = "740bd4b9b4184ee497d6caf1da8151be";
+
+/// A peer named "Peer" that `core` trusts and is connected to, receiving
+/// `incoming_capabilities`. What the core sends it arrives on the returned
+/// receiver; the connection lasts as long as the receiver.
+pub fn connect_peer(
+    core: &Core,
+    device_id: &str,
+    incoming_capabilities: &[&str],
+) -> (DeviceSnapshot, tokio::sync::mpsc::Receiver<Packet>) {
+    let capabilities = incoming_capabilities.iter().map(|c| (*c).into()).collect();
+    core.discover_device(&make_identity(device_id, capabilities), true, 1)
+        .expect("discovered");
+    let (packets, received) = tokio::sync::mpsc::channel(8);
+    let device = core
+        .register_connection(
+            device_id,
+            vec![1, 2, 3],
+            8,
+            packets,
+            tokio_util::sync::CancellationToken::new(),
+            1,
+        )
+        .expect("connected");
+    (device, received)
 }
 
 /// A store holding `devices`, on a computer named `local_name`, with no

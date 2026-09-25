@@ -43,6 +43,16 @@ impl Route {
     }
 }
 
+impl Route {
+    /// The device this page is about, if any.
+    pub fn device(&self) -> Option<&str> {
+        match self {
+            Self::Device(device) | Self::Plugin { device, .. } => Some(device),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -153,28 +153,7 @@ fn device_card<'a, Message: Clone + 'a>(
                 })
         ]
     } else {
-        let mut status_row = row![
-            status_dot(device.reachability),
-            text(reachability_label(device.reachability))
-                .size(13)
-                .style(text::secondary)
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center);
-        for status in plugins
-            .iter()
-            .filter_map(|plugin| plugin.device_status(device))
-        {
-            status_row = status_row.push(Space::new().width(6)).push(
-                row![
-                    (status.icon)().size(14).style(text::secondary),
-                    text(status.label).size(13).style(text::secondary),
-                ]
-                .spacing(4)
-                .align_y(Alignment::Center),
-            );
-        }
-        status_row
+        status_row(device, plugins)
     };
 
     let content = row![
@@ -192,6 +171,36 @@ fn device_card<'a, Message: Clone + 'a>(
         .style(move |theme: &Theme, status| card_style(theme, status, dropping))
         .on_press(open)
         .into()
+}
+
+/// How reachable `device` is, with a coloured dot, then each plugin's
+/// status (battery).
+pub fn status_row<'a, Message: 'a>(
+    device: &DeviceSnapshot,
+    plugins: &[Box<dyn ErasedUiPlugin>],
+) -> iced::widget::Row<'a, Message> {
+    let mut status_row = row![
+        status_dot(device.reachability),
+        text(reachability_label(device.reachability))
+            .size(13)
+            .style(text::secondary)
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+    for status in plugins
+        .iter()
+        .filter_map(|plugin| plugin.device_status(device))
+    {
+        status_row = status_row.push(Space::new().width(6)).push(
+            row![
+                (status.icon)().size(14).style(text::secondary),
+                text(status.label).size(13).style(text::secondary),
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center),
+        );
+    }
+    status_row
 }
 
 /// A card that reacts to the pointer, and stands out while it is where
@@ -237,7 +246,8 @@ fn status_dot<'a, Message: 'a>(reachability: DeviceReachability) -> Element<'a, 
         .into()
 }
 
-fn device_icon<'a>(device_type: DeviceType) -> iced::widget::Text<'a> {
+/// The icon for a kind of device.
+pub fn device_icon<'a>(device_type: DeviceType) -> iced::widget::Text<'a> {
     match device_type {
         DeviceType::Desktop => lucide::monitor(),
         DeviceType::Laptop => lucide::laptop(),
@@ -247,7 +257,7 @@ fn device_icon<'a>(device_type: DeviceType) -> iced::widget::Text<'a> {
     }
 }
 
-fn is_connected(device: &DeviceSnapshot) -> bool {
+pub fn is_connected(device: &DeviceSnapshot) -> bool {
     device.reachability == DeviceReachability::Connected
 }
 
