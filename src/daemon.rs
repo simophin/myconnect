@@ -200,6 +200,12 @@ impl RunningService {
         self.server.local_addr()
     }
 
+    /// The running core, for a frontend in the same process that reads
+    /// snapshots and subscribes to events directly instead of over HTTP.
+    pub fn core(&self) -> &Core {
+        &self.core
+    }
+
     /// Stop the control API and LAN transport, give in-flight transfers a
     /// bounded window to clean up their partial files, then stop the
     /// plugins.
