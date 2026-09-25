@@ -1,7 +1,7 @@
 //! The daemon's features.
 //!
 //! A feature implements [`crate::application::Plugin`] and is listed in
-//! [`builtin`]; so far ping and find my phone do. The others are still routed by
+//! [`builtin`]; so far ping, find my phone and battery do. The others are still routed by
 //! the fixed table below ([`dispatch_incoming`], [`legacy_capabilities`])
 //! while they move over (see `docs/research/feature-modules.md`). The set
 //! is fixed at compile time; nothing is loaded at runtime.
@@ -27,6 +27,7 @@ pub fn builtin() -> Vec<Arc<dyn Plugin>> {
     vec![
         Arc::new(ping::PingPlugin),
         Arc::new(findmyphone::FindMyPhonePlugin),
+        Arc::new(battery::BatteryPlugin::default()),
     ]
 }
 
@@ -58,9 +59,8 @@ pub fn capabilities() -> PluginCapabilities {
     }
 }
 
-/// The packet types of the features not yet moved to a plugin. Browsing
-/// and battery reports are one-way: this build asks peers to serve files
-/// and reads their battery, but serves no files and reports no battery.
+/// The packet types of the features not yet moved to a plugin. Browsing is
+/// one-way: this build asks peers to serve files, but serves none.
 fn legacy_capabilities() -> PluginCapabilities {
     PluginCapabilities {
         incoming: vec![
@@ -68,7 +68,6 @@ fn legacy_capabilities() -> PluginCapabilities {
             clipboard::CONNECT_PACKET_TYPE.to_owned(),
             share::PACKET_TYPE.to_owned(),
             sftp::PACKET_TYPE.to_owned(),
-            battery::PACKET_TYPE.to_owned(),
         ],
         outgoing: vec![
             clipboard::PACKET_TYPE.to_owned(),
@@ -87,7 +86,6 @@ pub enum IncomingPluginPacket {
     ShareRequest(share::ShareRequestBody),
     ShareRequestUpdate(share::ShareRequestUpdateBody),
     Sftp(sftp::SftpBody),
-    Battery(battery::BatteryBody),
 }
 
 #[derive(Debug, Error)]
@@ -115,7 +113,6 @@ pub fn dispatch_incoming(packet: &Packet) -> Result<IncomingPluginPacket, Plugin
             Ok(IncomingPluginPacket::ShareRequestUpdate(packet.body_as()?))
         }
         sftp::PACKET_TYPE => Ok(IncomingPluginPacket::Sftp(packet.body_as()?)),
-        battery::PACKET_TYPE => Ok(IncomingPluginPacket::Battery(packet.body_as()?)),
         other => Err(PluginDispatchError::Unrecognized(other.to_owned())),
     }
 }

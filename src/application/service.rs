@@ -389,6 +389,7 @@ impl ApplicationHandle {
                 .map_err(|_| ApplicationError::StateUnavailable)?;
             (previous, snapshot)
         };
+        let snapshot = self.with_plugin_state(snapshot);
         let event = if previous.is_none() {
             super::EventData::DeviceDiscovered(snapshot.clone())
         } else {
@@ -410,6 +411,7 @@ impl ApplicationHandle {
             .devices
             .mark_connected(device_id, observed_at)
             .map_err(|_| ApplicationError::StateUnavailable)?;
+        let snapshot = self.with_plugin_state(snapshot);
         self.events
             .publish(super::EventData::DeviceConnected(snapshot.clone()))?;
         Ok(snapshot)
@@ -426,6 +428,7 @@ impl ApplicationHandle {
             .devices
             .mark_disconnected(device_id)
             .map_err(|_| ApplicationError::StateUnavailable)?;
+        let snapshot = self.with_plugin_state(snapshot);
         self.events
             .publish(super::EventData::DeviceDisconnected(snapshot.clone()))?;
         Ok(snapshot)
@@ -504,6 +507,7 @@ impl ApplicationHandle {
         }
         self.close_browse_session(device_id);
         if had_connection {
+            self.plugins.disconnected(&self.plugin_context(), device_id);
             let _ = self.mark_device_disconnected(device_id);
         }
         if let Some(snapshot) = failed_pairing {
@@ -567,18 +571,21 @@ impl ApplicationHandle {
         self.trust_store
             .remove(device_id)
             .map_err(ApplicationError::Trust)?;
+        let ctx = self.plugin_context();
         if let Some(cancellation) = cancellation {
             cancellation.cancel();
+            self.plugins.disconnected(&ctx, device_id);
         }
+        self.plugins.unpaired(&ctx, device_id);
         self.close_browse_session(device_id);
         if let Some(snapshot) = failed_pairing {
             let _ = self
                 .events
                 .publish(super::EventData::PairingUpdated(snapshot));
         }
-        let _ = self
-            .events
-            .publish(super::EventData::DeviceForgotten(forgotten));
+        let _ = self.events.publish(super::EventData::DeviceForgotten(
+            self.with_plugin_state(forgotten),
+        ));
         Ok(())
     }
 
@@ -843,9 +850,6 @@ impl ApplicationHandle {
             Ok(plugins::IncomingPluginPacket::Sftp(body)) => {
                 self.handle_sftp_reply(device_id, body)
             }
-            Ok(plugins::IncomingPluginPacket::Battery(body)) => {
-                self.handle_battery(device_id, &body)
-            }
             Err(_) => {}
         }
     }
@@ -1021,30 +1025,6 @@ impl ApplicationHandle {
                 }
             }
         })
-    }
-
-    /// Record a paired peer's battery report, publishing `device.updated`
-    /// when it changes what the device snapshot shows.
-    fn handle_battery(&self, device_id: &str, body: &plugins::battery::BatteryBody) {
-        let battery = body.status();
-        let Ok(mut state) = self.state.write() else {
-            return;
-        };
-        if state
-            .devices
-            .get(device_id)
-            .is_none_or(|device| device.battery == battery)
-        {
-            return;
-        }
-        let Ok(snapshot) = state.devices.set_battery(device_id, battery) else {
-            return;
-        };
-        drop(state);
-        tracing::debug!(device_id, ?battery, "battery changed");
-        let _ = self
-            .events
-            .publish(super::EventData::DeviceUpdated(snapshot));
     }
 
     /// Apply a `kdeconnect.clipboard` or `kdeconnect.clipboard.connect` body
@@ -1252,6 +1232,7 @@ impl ApplicationHandle {
         if let Ok(mut state) = self.state.write() {
             let _ = state.devices.set_paired(device_id, false);
         }
+        self.plugins.unpaired(&self.plugin_context(), device_id);
         self.close_browse_session(device_id);
         self.publish_device_update(device_id);
     }
@@ -1514,14 +1495,25 @@ impl ApplicationHandle {
         }
     }
 
-    fn publish_device_update(&self, device_id: &str) {
-        if let Ok(state) = self.state.read()
-            && let Some(snapshot) = state.devices.get(device_id)
-        {
-            let _ = self
-                .events
-                .publish(super::EventData::DeviceUpdated(snapshot));
+    /// Publish `device.updated` with the device's current snapshot.
+    pub(super) fn publish_device_update(&self, device_id: &str) {
+        let snapshot = self
+            .state
+            .read()
+            .ok()
+            .and_then(|state| state.devices.get(device_id));
+        if let Some(snapshot) = snapshot {
+            let _ = self.events.publish(super::EventData::DeviceUpdated(
+                self.with_plugin_state(snapshot),
+            ));
         }
+    }
+
+    /// `snapshot` as clients see it, with what each plugin adds. Call it
+    /// without holding the state lock: it calls into plugins.
+    fn with_plugin_state(&self, mut snapshot: DeviceSnapshot) -> DeviceSnapshot {
+        snapshot.plugins = self.plugins.device_state(&snapshot.device_id);
+        snapshot
     }
 
     // --- File transfer ---------------------------------------------------
@@ -2125,11 +2117,32 @@ impl ApplicationService for ApplicationHandle {
             _ => {}
         }
 
+        // Plugins add to device snapshots, so those are read out before
+        // their state is asked for, never while holding the lock.
+        match query {
+            Query::Devices => {
+                let devices = self.read_state()?.devices.snapshot();
+                return Ok(QueryResult::Devices(
+                    devices
+                        .into_iter()
+                        .map(|device| self.with_plugin_state(device))
+                        .collect(),
+                ));
+            }
+            Query::Device { device_id } => {
+                let device = self.read_state()?.devices.get(&device_id);
+                return Ok(QueryResult::Device(
+                    device.map(|device| self.with_plugin_state(device)),
+                ));
+            }
+            _ => {}
+        }
+
         let state = self.read_state()?;
         Ok(match query {
-            Query::Status | Query::Settings => unreachable!("handled before locking state"),
-            Query::Devices => QueryResult::Devices(state.devices.snapshot()),
-            Query::Device { device_id } => QueryResult::Device(state.devices.get(&device_id)),
+            Query::Status | Query::Settings | Query::Devices | Query::Device { .. } => {
+                unreachable!("handled before locking state")
+            }
             Query::Pairings => QueryResult::Pairings(
                 state
                     .pairings
@@ -2327,7 +2340,7 @@ fn paired_device_snapshot(device: TrustedDevice) -> DeviceSnapshot {
         paired: true,
         pairing: false,
         last_seen_at: 0,
-        battery: None,
+        plugins: Default::default(),
     }
 }
 
@@ -2527,7 +2540,7 @@ mod tests {
         assert_eq!(names, ["Pixel", undescribed]);
         assert!(devices.iter().all(|d| d.paired
             && d.reachability == DeviceReachability::Unavailable
-            && d.battery.is_none()));
+            && d.plugins.is_empty()));
         assert_eq!(devices[0].incoming_capabilities, ["kdeconnect.ping"]);
 
         let mut identity = make_identity(undescribed, vec!["kdeconnect.share.request".into()]);
@@ -2567,63 +2580,6 @@ mod tests {
         };
         assert_eq!(device.device_name, "Laptop");
         assert_eq!(device.reachability, DeviceReachability::Unavailable);
-    }
-
-    #[test]
-    fn battery_reports_from_paired_devices_update_the_device_once_per_change() {
-        let (handle, _commands) = handle();
-        let paired_id = "740bd4b9b4184ee497d6caf1da8151be";
-        let unpaired_id = "850bd4b9b4184ee497d6caf1da8151be";
-        handle
-            .discover_device(&make_identity(paired_id, Vec::new()), true, 1)
-            .unwrap();
-        handle
-            .discover_device(&make_identity(unpaired_id, Vec::new()), false, 1)
-            .unwrap();
-        let mut events = handle.subscribe();
-
-        let report = |charge: i64, charging: bool| {
-            Packet::from_body(
-                2_u64,
-                plugins::battery::PACKET_TYPE,
-                &serde_json::json!({
-                    "currentCharge": charge,
-                    "isCharging": charging,
-                    "thresholdEvent": 0,
-                }),
-            )
-            .unwrap()
-        };
-        let mut updated = || match events.try_recv().unwrap().event {
-            super::super::EventData::DeviceUpdated(device) => device,
-            other => panic!("unexpected event {other:?}"),
-        };
-        let battery = |device_id: &str| match handle
-            .query(Query::Device {
-                device_id: device_id.into(),
-            })
-            .unwrap()
-        {
-            QueryResult::Device(Some(device)) => device.battery,
-            other => panic!("unexpected result {other:?}"),
-        };
-
-        handle.handle_peer_packet(unpaired_id, report(40, false));
-        assert_eq!(battery(unpaired_id), None);
-
-        handle.handle_peer_packet(paired_id, report(82, true));
-        let expected = Some(crate::device::BatteryStatus {
-            charge: 82,
-            charging: true,
-        });
-        assert_eq!(updated().battery, expected);
-        assert_eq!(battery(paired_id), expected);
-
-        // A repeat changes nothing, so it publishes nothing.
-        handle.handle_peer_packet(paired_id, report(82, true));
-        handle.handle_peer_packet(paired_id, report(-1, false));
-        assert_eq!(updated().battery, None);
-        assert!(events.try_recv().is_err());
     }
 
     fn unpair_packet() -> Packet {

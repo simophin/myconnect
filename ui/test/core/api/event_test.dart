@@ -40,15 +40,33 @@ void main() {
     );
   });
 
-  test('decodes a device battery, or its absence', () {
+  test('decodes a device battery from its plugins, or its absence', () {
+    expect(Device.fromJson(deviceJson()).plugins, isEmpty);
     expect(Device.fromJson(deviceJson()).battery, isNull);
-    expect(Device.fromJson({...deviceJson(), 'battery': null}).battery, isNull);
+    expect(
+      Device.fromJson({...deviceJson(), 'plugins': <String, Object?>{}})
+          .battery,
+      isNull,
+    );
     expect(
       Device.fromJson({
         ...deviceJson(),
-        'battery': {'charge': 82, 'charging': true},
+        'plugins': {
+          'battery': {'charge': 82, 'charging': true},
+          'other': 'ignored',
+        },
       }).battery,
       const BatteryStatus(charge: 82, charging: true),
+    );
+    // A shape this UI doesn't know is ignored, not fatal.
+    expect(
+      Device.fromJson({
+        ...deviceJson(),
+        'plugins': {
+          'battery': {'level': 'high'},
+        },
+      }).battery,
+      isNull,
     );
   });
 

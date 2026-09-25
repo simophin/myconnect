@@ -9,7 +9,10 @@
 //! Features not yet moved to a plugin are still routed by the fixed table in
 //! [`crate::plugins`]. See `docs/research/feature-modules.md`.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 use axum::Router;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -43,6 +46,24 @@ pub trait Plugin: Send + Sync + 'static {
     fn routes(self: Arc<Self>, _ctx: PluginContext) -> Router {
         Router::new()
     }
+
+    /// What this plugin adds to a device's snapshot, under its
+    /// [`Self::id`] in `plugins`; `None` to add nothing. The core asks each
+    /// time it hands out a snapshot, never while holding its own lock. A
+    /// plugin whose answer changes calls [`PluginContext::device_changed`].
+    fn device_state(&self, _device_id: &str) -> Option<Value> {
+        None
+    }
+
+    /// The device's connection closed, or the device was forgotten while
+    /// connected. Called before the core publishes the device's new state,
+    /// so state cleared here needs no [`PluginContext::device_changed`].
+    fn disconnected(&self, _ctx: &PluginContext, _device_id: &str) {}
+
+    /// The device is no longer paired: it unpaired us, or it was forgotten.
+    /// Called before the core publishes the device's new state, as for
+    /// [`Self::disconnected`].
+    fn unpaired(&self, _ctx: &PluginContext, _device_id: &str) {}
 }
 
 /// What the core offers a plugin. Cheap to clone.
@@ -60,6 +81,12 @@ impl PluginContext {
     /// advertised the packet's type in its incoming capabilities.
     pub fn send(&self, device_id: &str, packet: Packet) -> Result<(), ApplicationError> {
         self.core.send_to_capable(device_id, packet)
+    }
+
+    /// Tell clients that what a plugin adds to a device's snapshot
+    /// ([`Plugin::device_state`]) changed: publishes `device.updated`.
+    pub fn device_changed(&self, device_id: &str) {
+        self.core.publish_device_update(device_id);
     }
 
     /// Publish a plugin event to `/events` subscribers.
@@ -115,11 +142,17 @@ pub struct PluginRegistry {
 impl PluginRegistry {
     /// # Panics
     ///
-    /// If two plugins claim the same incoming packet type: a build error
-    /// that every test would hit.
+    /// If two plugins share an id or claim the same incoming packet type: a
+    /// build error that every test would hit.
     pub fn new(plugins: Vec<Arc<dyn Plugin>>) -> Self {
         let mut by_packet_type = HashMap::new();
         for (index, plugin) in plugins.iter().enumerate() {
+            if plugins[..index]
+                .iter()
+                .any(|other| other.id() == plugin.id())
+            {
+                panic!("two plugins are called {:?}", plugin.id());
+            }
             for packet_type in plugin.incoming() {
                 if let Some(other) = by_packet_type.insert(*packet_type, index) {
                     panic!(
@@ -155,6 +188,29 @@ impl PluginRegistry {
             .iter()
             .flat_map(|plugin| plugin.outgoing())
             .copied()
+    }
+
+    /// What every plugin adds to a device's snapshot, keyed by plugin id.
+    pub fn device_state(&self, device_id: &str) -> BTreeMap<String, Value> {
+        self.plugins
+            .iter()
+            .filter_map(|plugin| {
+                let state = plugin.device_state(device_id)?;
+                Some((plugin.id().to_owned(), state))
+            })
+            .collect()
+    }
+
+    pub fn disconnected(&self, ctx: &PluginContext, device_id: &str) {
+        for plugin in &self.plugins {
+            plugin.disconnected(ctx, device_id);
+        }
+    }
+
+    pub fn unpaired(&self, ctx: &PluginContext, device_id: &str) {
+        for plugin in &self.plugins {
+            plugin.unpaired(ctx, device_id);
+        }
     }
 
     /// Every plugin's routes, merged.
@@ -228,6 +284,88 @@ mod tests {
             registry.incoming().collect::<Vec<_>>(),
             ["x.one", "x.two", "x.three"]
         );
+    }
+
+    /// A plugin that only sends `x.wave`, as a feature would through its
+    /// context.
+    struct Waver;
+
+    impl Waver {
+        const PACKET_TYPE: &'static str = "x.wave";
+
+        fn wave(ctx: &PluginContext, device_id: &str) -> Result<(), ApplicationError> {
+            ctx.send(
+                device_id,
+                Packet::from_body(1_u64, Self::PACKET_TYPE, &serde_json::json!({})).unwrap(),
+            )
+        }
+    }
+
+    impl Plugin for Waver {
+        fn id(&self) -> &'static str {
+            "wave"
+        }
+        fn outgoing(&self) -> &'static [&'static str] {
+            &[Self::PACKET_TYPE]
+        }
+    }
+
+    #[test]
+    fn plugins_send_only_to_paired_connected_devices_that_accept_the_packet_type() {
+        use tokio::sync::mpsc;
+        use tokio_util::sync::CancellationToken;
+
+        use crate::application::testing::{handle, make_identity};
+
+        let (handle, _commands) = handle();
+        let ctx = handle.plugin_context();
+        let device_id = "740bd4b9b4184ee497d6caf1da8151be";
+        assert_eq!(Waver.outgoing(), [Waver::PACKET_TYPE]);
+        assert!(matches!(
+            Waver::wave(&ctx, device_id),
+            Err(ApplicationError::UnknownDevice)
+        ));
+
+        let accepting = make_identity(device_id, vec![Waver::PACKET_TYPE.into()]);
+        handle.discover_device(&accepting, false, 1).unwrap();
+        assert!(matches!(
+            Waver::wave(&ctx, device_id),
+            Err(ApplicationError::NotPaired)
+        ));
+
+        handle.discover_device(&accepting, true, 2).unwrap();
+        assert!(matches!(
+            Waver::wave(&ctx, device_id),
+            Err(ApplicationError::DeviceNotConnected)
+        ));
+
+        // Paired and connected, but the peer never advertised the packet
+        // type: refused with a typed error, not dropped silently.
+        let other = make_identity(device_id, vec!["x.other".into()]);
+        handle.discover_device(&other, true, 3).unwrap();
+        let (tx, mut rx) = mpsc::channel(4);
+        handle
+            .register_connection(device_id, vec![1, 2, 3], 8, tx, CancellationToken::new(), 3)
+            .unwrap();
+        assert!(matches!(
+            Waver::wave(&ctx, device_id),
+            Err(ApplicationError::UnsupportedByPeer)
+        ));
+        assert!(rx.try_recv().is_err());
+
+        // It re-announces (e.g. on reconnect) accepting it.
+        handle.discover_device(&accepting, true, 4).unwrap();
+        Waver::wave(&ctx, device_id).unwrap();
+        assert_eq!(rx.try_recv().unwrap().packet_type, Waver::PACKET_TYPE);
+    }
+
+    #[test]
+    #[should_panic(expected = "two plugins are called \"a\"")]
+    fn two_plugins_cannot_share_an_id() {
+        PluginRegistry::new(vec![
+            Arc::new(Claims("a", &["x.one"])),
+            Arc::new(Claims("a", &["x.two"])),
+        ]);
     }
 
     #[test]

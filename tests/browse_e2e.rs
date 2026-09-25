@@ -26,8 +26,8 @@ use myconnect::{
     client::{ApiClient, ClientError},
     clipboard::InMemoryClipboard,
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
-    device::{BatteryStatus, DeviceReachability},
-    plugins,
+    device::DeviceReachability,
+    plugins::{self, battery::BatteryStatus},
     protocol::DeviceType,
     transport::{
         lan::{LanConfig, LanService, LocalDeviceInfo, TCP_PORT_RANGE},
@@ -638,7 +638,7 @@ async fn the_phones_battery_is_shown_while_it_is_connected() {
     let (desktop, phone_id, client) = (&harness.desktop, &harness.phone_id, &harness.client);
     // Reported on its own once paired, as Android does.
     wait_for_device(desktop, phone_id, |device| {
-        device.battery
+        BatteryStatus::of(device)
             == Some(BatteryStatus {
                 charge: PHONE_BATTERY as u8,
                 charging: false,
@@ -653,13 +653,13 @@ async fn the_phones_battery_is_shown_while_it_is_connected() {
             .unwrap()
             .into_iter()
             .find(|device| &device.device_id == phone_id)
+            .map(|device| BatteryStatus::of(&device))
             .unwrap()
-            .battery
     };
 
     harness.phone.report_battery(74, true).await;
     wait_for_device(desktop, phone_id, |device| {
-        device.battery.is_some_and(|battery| battery.charging)
+        BatteryStatus::of(device).is_some_and(|battery| battery.charging)
     })
     .await;
     assert_eq!(
@@ -687,8 +687,7 @@ async fn the_phones_battery_is_shown_while_it_is_connected() {
         device
             .iter()
             .find(|device| device.device_id == phone_id)
-            .unwrap()
-            .battery,
+            .and_then(BatteryStatus::of),
         None
     );
 }
