@@ -72,7 +72,9 @@ pub(crate) fn handle_with_trust(
         1,
         1,
         identity,
-        TransferConfig::new(directory.path().join("downloads")),
+        // Payload listeners stay off the network.
+        TransferConfig::new(directory.path().join("downloads"))
+            .with_payload_bind_ip(std::net::Ipv4Addr::LOCALHOST),
     )
     .unwrap()
 }

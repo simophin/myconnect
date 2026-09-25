@@ -223,17 +223,21 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Send a file to a paired, connected device. The response comes once
+    /// the whole file has been handed to the daemon, not when the device
+    /// has it; follow the transfer to see it finish.
     pub async fn send_file(
         &self,
         device_id: &str,
         path: &Path,
     ) -> Result<TransferSnapshot, ClientError> {
         let (file_name, part) = file_part(path).await?;
-        let form = Form::new()
-            .text("deviceId", device_id.to_owned())
-            .part("file", part.file_name(file_name));
+        let form = Form::new().part("file", part.file_name(file_name));
         let response = self
-            .authorized(self.http.post(self.url("api/v1/transfers")?))
+            .authorized(
+                self.http
+                    .post(self.url(&format!("api/v1/devices/{device_id}/share"))?),
+            )
             .multipart(form)
             .send()
             .await

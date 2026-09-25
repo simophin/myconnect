@@ -198,14 +198,11 @@ class MyConnectApi {
   /// peer, so this completes at the end of the upload; follow progress
   /// through `transfer.*` events meanwhile.
   Future<Transfer> sendFile(String deviceId, String path) async {
-    // The daemon reads `deviceId` before the file.
-    final form = FormData()
-      ..fields.add(MapEntry('deviceId', deviceId))
-      ..files.add(MapEntry('file', await _filePart(path)));
+    final form = FormData()..files.add(MapEntry('file', await _filePart(path)));
     return Transfer.fromJson(
       await _send(
         () => _dio.post<_Json>(
-          'transfers',
+          'devices/${Uri.encodeComponent(deviceId)}/share',
           data: form,
           // The daemon fails an upload that stalls, but a large one may
           // legitimately take far longer than the default deadline.

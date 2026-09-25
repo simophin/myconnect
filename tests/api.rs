@@ -51,7 +51,9 @@ impl TestServer {
             4,
             4,
             identity,
-            TransferConfig::new(directory.path().join("downloads")),
+            // Payload listeners stay off the network.
+            TransferConfig::new(directory.path().join("downloads"))
+                .with_payload_bind_ip(std::net::Ipv4Addr::LOCALHOST),
         )
         .unwrap();
         let mut devices = DeviceRegistry::new();
@@ -616,7 +618,7 @@ fn kde_connect_ports_are_rejected() {
 }
 
 #[tokio::test]
-async fn transfer_upload_is_streamed_queryable_and_cancellable() {
+async fn sharing_a_file_streams_it_as_a_queryable_cancellable_transfer() {
     let server = TestServer::start().await;
     let device_id = "cccccccccccccccccccccccccccccccc";
     let _packets = server.connect_and_pair(device_id);
@@ -624,10 +626,6 @@ async fn transfer_upload_is_streamed_queryable_and_cancellable() {
     let boundary = "myconnect-test-boundary";
     let file_bytes = b"hello from the transfer test";
     let mut multipart_body = Vec::new();
-    multipart_body.extend_from_slice(
-        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"deviceId\"\r\n\r\n{device_id}\r\n")
-            .as_bytes(),
-    );
     multipart_body.extend_from_slice(
         format!(
             "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"hello.txt\"\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
@@ -642,7 +640,7 @@ async fn transfer_upload_is_streamed_queryable_and_cancellable() {
         .await
         .unwrap();
     let http_request = format!(
-        "POST /api/v1/transfers HTTP/1.1\r\nHost: localhost\r\n{}Content-Type: multipart/form-data; boundary={boundary}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        "POST /api/v1/devices/{device_id}/share HTTP/1.1\r\nHost: localhost\r\n{}Content-Type: multipart/form-data; boundary={boundary}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
         server.authorization(),
         multipart_body.len(),
     );
@@ -706,6 +704,13 @@ async fn transfer_upload_is_streamed_queryable_and_cancellable() {
     let cancelled_json: serde_json::Value = serde_json::from_str(body(&cancelled)).unwrap();
     assert_eq!(cancelled_json["id"], transfer_id);
 
+    // Files are sent through the share route only; `/transfers` lists them.
+    let old_route = request(&server, "POST", "/api/v1/transfers", true).await;
+    assert!(
+        old_route.starts_with("HTTP/1.1 405 Method Not Allowed"),
+        "unexpected response: {old_route}"
+    );
+
     server.server.shutdown().await.unwrap();
     server
         .application
@@ -714,14 +719,11 @@ async fn transfer_upload_is_streamed_queryable_and_cancellable() {
 }
 
 /// Upload a four-piece file, writing the pieces `gap` apart, or stop after
-/// the `deviceId` part if `stall` is set. Returns the response.
+/// the file part's headers if `stall` is set. Returns the response.
 async fn slow_upload(server: &TestServer, device_id: &str, gap: Duration, stall: bool) -> String {
     let boundary = "myconnect-test-boundary";
     let pieces = ["slow", " up", "lo", "ad"];
     let file_len: usize = pieces.iter().map(|piece| piece.len()).sum();
-    let device_part = format!(
-        "--{boundary}\r\nContent-Disposition: form-data; name=\"deviceId\"\r\n\r\n{device_id}\r\n"
-    );
     let file_head = format!(
         "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"slow.txt\"\r\nContent-Length: {file_len}\r\n\r\n"
     );
@@ -730,13 +732,12 @@ async fn slow_upload(server: &TestServer, device_id: &str, gap: Duration, stall:
         .await
         .unwrap();
     let head = format!(
-        "POST /api/v1/transfers HTTP/1.1\r\nHost: localhost\r\n{}Content-Type: multipart/form-data; boundary={boundary}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{device_part}",
+        "POST /api/v1/devices/{device_id}/share HTTP/1.1\r\nHost: localhost\r\n{}Content-Type: multipart/form-data; boundary={boundary}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{file_head}",
         server.authorization(),
-        device_part.len() + file_head.len() + file_len + trailer.len(),
+        file_head.len() + file_len + trailer.len(),
     );
     stream.write_all(head.as_bytes()).await.unwrap();
     if !stall {
-        stream.write_all(file_head.as_bytes()).await.unwrap();
         for piece in pieces {
             tokio::time::sleep(gap).await;
             stream.write_all(piece.as_bytes()).await.unwrap();
@@ -752,7 +753,7 @@ async fn slow_upload(server: &TestServer, device_id: &str, gap: Duration, stall:
 }
 
 #[tokio::test]
-async fn transfer_upload_may_outlast_the_request_deadline_but_not_stall() {
+async fn sharing_a_file_may_outlast_the_request_deadline_but_not_stall() {
     let server = TestServer::start_with(None, Duration::from_millis(400)).await;
     let device_id = "cccccccccccccccccccccccccccccccc";
     let _packets = server.connect_and_pair(device_id);
@@ -779,7 +780,53 @@ async fn transfer_upload_may_outlast_the_request_deadline_but_not_stall() {
 }
 
 #[tokio::test]
-async fn transfer_upload_to_unpaired_device_is_rejected() {
+async fn streaming_routes_take_bodies_over_the_default_limit() {
+    let server = TestServer::start_with(None, Duration::from_millis(500)).await;
+    let device_id = "cccccccccccccccccccccccccccccccc";
+    let _packets = server.connect_and_pair(device_id);
+
+    // Four times the default 64 KiB limit. The peer never dials in, so the
+    // upload may stall once the transfer's small buffer is full; what
+    // matters is that the body reached the handler rather than being
+    // refused up front.
+    let boundary = "myconnect-test-boundary";
+    let file_bytes = vec![7_u8; 256 * 1024];
+    let mut multipart_body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"big.bin\"\r\nContent-Length: {}\r\n\r\n",
+        file_bytes.len()
+    )
+    .into_bytes();
+    multipart_body.extend_from_slice(&file_bytes);
+    multipart_body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let mut stream = TcpStream::connect(server.server.local_addr())
+        .await
+        .unwrap();
+    let head = format!(
+        "POST /api/v1/devices/{device_id}/share HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary={boundary}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        multipart_body.len(),
+    );
+    stream.write_all(head.as_bytes()).await.unwrap();
+    // The server may stop reading once it has answered.
+    let _ = stream.write_all(&multipart_body).await;
+    let mut response = Vec::new();
+    let _ = timeout(Duration::from_secs(5), stream.read_to_end(&mut response)).await;
+    let response = String::from_utf8_lossy(&response);
+    assert!(
+        !response.starts_with("HTTP/1.1 413"),
+        "unexpected response: {response}"
+    );
+    let transfers = request(&server, "GET", "/api/v1/transfers", false).await;
+    assert!(body(&transfers).contains("big.bin"), "{transfers}");
+
+    server.server.shutdown().await.unwrap();
+    server
+        .application
+        .shutdown_transfers(Duration::from_secs(1))
+        .await;
+}
+
+#[tokio::test]
+async fn sharing_a_file_with_an_unpaired_device_is_rejected() {
     let server = TestServer::start().await;
     // `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb` is discovered but neither paired
     // nor connected in `TestServer::start`.
@@ -787,10 +834,6 @@ async fn transfer_upload_to_unpaired_device_is_rejected() {
     let boundary = "myconnect-test-boundary";
     let file_bytes = b"should not be sent";
     let mut multipart_body = Vec::new();
-    multipart_body.extend_from_slice(
-        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"deviceId\"\r\n\r\n{device_id}\r\n")
-            .as_bytes(),
-    );
     multipart_body.extend_from_slice(
         format!(
             "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"secret.txt\"\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
@@ -805,7 +848,7 @@ async fn transfer_upload_to_unpaired_device_is_rejected() {
         .await
         .unwrap();
     let http_request = format!(
-        "POST /api/v1/transfers HTTP/1.1\r\nHost: localhost\r\n{}Content-Type: multipart/form-data; boundary={boundary}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        "POST /api/v1/devices/{device_id}/share HTTP/1.1\r\nHost: localhost\r\n{}Content-Type: multipart/form-data; boundary={boundary}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
         server.authorization(),
         multipart_body.len(),
     );

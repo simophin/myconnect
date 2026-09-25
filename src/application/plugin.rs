@@ -19,7 +19,7 @@ use axum::Router;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
-use super::{ApplicationError, ApplicationHandle, EventData};
+use super::{ApplicationError, ApplicationHandle, EventData, PayloadPeer, Transfers};
 use crate::{device::DeviceSnapshot, protocol::Packet};
 
 /// A feature of the daemon, plugged into the core.
@@ -45,6 +45,16 @@ pub trait Plugin: Any + Send + Sync {
     /// HTTP routes under `/api/v1`, with their state already applied. They
     /// get the standard body limit, request deadline and authentication.
     fn routes(self: Arc<Self>, _ctx: PluginContext) -> Router {
+        Router::new()
+    }
+
+    /// HTTP routes under `/api/v1` that take a large, streamed request body
+    /// (an upload), with their state already applied. They get the
+    /// transfer-sized body limit instead of the standard one and no overall
+    /// deadline; a handler bounds each step of the upload with the
+    /// [`crate::api::UploadIdleTimeout`] in its request's extensions.
+    /// Authentication applies as for [`Self::routes`].
+    fn streaming_routes(self: Arc<Self>, _ctx: PluginContext) -> Router {
         Router::new()
     }
 
@@ -115,6 +125,25 @@ impl PluginContext {
             .plugin_settings(T::ID)
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or_default()
+    }
+
+    /// The device as clients see it, if it is known. Calls into every
+    /// plugin's [`Plugin::device_state`], so don't hold a lock of your own
+    /// while calling it.
+    pub fn device(&self, device_id: &str) -> Option<DeviceSnapshot> {
+        self.core.device(device_id)
+    }
+
+    /// The transfers service: every feature that moves a file records it
+    /// there, so it is listed, reports progress and can be cancelled.
+    pub fn transfers(&self) -> &Transfers {
+        self.core.transfers()
+    }
+
+    /// What it takes to open payload connections with a paired, connected
+    /// device, for moving a file's bytes beside the control connection.
+    pub fn payload_peer(&self, device_id: &str) -> Result<PayloadPeer, ApplicationError> {
+        self.core.payload_peer(device_id)
     }
 
     /// Tell clients that what a plugin adds to a device's snapshot
@@ -320,6 +349,13 @@ impl PluginRegistry {
     pub fn routes(&self, ctx: &PluginContext) -> Router {
         self.plugins.iter().fold(Router::new(), |router, plugin| {
             router.merge(plugin.clone().routes(ctx.clone()))
+        })
+    }
+
+    /// Every plugin's streaming routes, merged.
+    pub fn streaming_routes(&self, ctx: &PluginContext) -> Router {
+        self.plugins.iter().fold(Router::new(), |router, plugin| {
+            router.merge(plugin.clone().streaming_routes(ctx.clone()))
         })
     }
 }

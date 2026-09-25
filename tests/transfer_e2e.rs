@@ -25,7 +25,7 @@ use myconnect::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     device::DeviceReachability,
     plugins,
-    plugins::clipboard::InMemoryClipboard,
+    plugins::{clipboard::InMemoryClipboard, share},
     protocol::DeviceType,
     transport::{
         lan::{LanConfig, LanService, LocalDeviceInfo, TCP_PORT_RANGE},
@@ -286,10 +286,13 @@ async fn connected_and_paired_with(
 }
 
 async fn run_successful_transfer(harness: &Harness, file_name: &str, data: Vec<u8>) -> PathBuf {
-    let (started, sender) = harness
-        .a
-        .begin_outgoing_transfer(&harness.b_id, file_name.to_owned(), data.len() as u64)
-        .unwrap();
+    let (started, sender) = share::send_file(
+        &harness.a.plugin_context(),
+        &harness.b_id,
+        file_name.to_owned(),
+        data.len() as u64,
+    )
+    .unwrap();
     assert_eq!(started.status, TransferStatus::Queued);
     assert_eq!(started.direction, TransferDirection::Outgoing);
 
@@ -380,7 +383,12 @@ async fn unpaired_device_cannot_initiate_a_transfer() {
     .unwrap();
 
     assert!(matches!(
-        a_application.begin_outgoing_transfer("missing-device", "f.bin".into(), 10),
+        share::send_file(
+            &a_application.plugin_context(),
+            "missing-device",
+            "f.bin".into(),
+            10
+        ),
         Err(ApplicationError::UnknownDevice)
     ));
 }
@@ -392,10 +400,13 @@ async fn declared_size_mismatch_fails_the_outgoing_transfer() {
     // The declared size is 100 bytes but only 10 are ever sent before the
     // sender stops (simulating a client that aborts mid-upload); the
     // transfer must fail rather than complete or hang.
-    let (started, sender) = harness
-        .a
-        .begin_outgoing_transfer(&harness.b_id, "short.bin".into(), 100)
-        .unwrap();
+    let (started, sender) = share::send_file(
+        &harness.a.plugin_context(),
+        &harness.b_id,
+        "short.bin".into(),
+        100,
+    )
+    .unwrap();
     send_in_chunks(sender, vec![1_u8; 10], 4096).await;
 
     let failed = wait_for_transfer_status(&harness.a, started.id, TransferStatus::Failed).await;
@@ -416,10 +427,13 @@ async fn oversized_payload_is_rejected_by_the_receiver_without_dialing() {
     )
     .await;
 
-    let (started, sender) = harness
-        .a
-        .begin_outgoing_transfer(&harness.b_id, "too_big.bin".into(), 1024)
-        .unwrap();
+    let (started, sender) = share::send_file(
+        &harness.a.plugin_context(),
+        &harness.b_id,
+        "too_big.bin".into(),
+        1024,
+    )
+    .unwrap();
     send_in_chunks(sender, vec![9_u8; 1024], 4096).await;
 
     // The sender does not know the peer's limit in advance, so its own
@@ -461,11 +475,11 @@ async fn path_traversal_filename_is_rejected_without_touching_the_filesystem() {
     // the pairing unit tests use, avoiding the need to fabricate a second
     // malicious TLS client for what is fundamentally an application-layer
     // check). `sanitize_file_name` (unit tested in
-    // `application::transfer::tests`) also proves that a traversal attempt
+    // `application::transfers::tests`) also proves that a traversal attempt
     // with a real basename, such as `../../etc/passwd`, is normalized down
     // to just `passwd` rather than rejected outright, so it can never escape
     // the download directory either way.
-    let packet = plugins::share::build_request_packet(1_u64, "..".into(), None, 10, 65000).unwrap();
+    let packet = share::build_request_packet(1_u64, "..".into(), None, 10, 65000).unwrap();
     harness.b.handle_peer_packet(&harness.a_id, packet);
 
     // No network activity is expected at all: the rejection happens
@@ -498,8 +512,7 @@ async fn unreachable_payload_port_fails_the_incoming_transfer() {
     // Advertise a payload port nothing is listening on; the receiver must
     // fail the transfer once its short connect timeout elapses rather than
     // hang indefinitely.
-    let packet =
-        plugins::share::build_request_packet(1_u64, "unreachable.bin".into(), None, 4, 1).unwrap();
+    let packet = share::build_request_packet(1_u64, "unreachable.bin".into(), None, 4, 1).unwrap();
     harness.b.handle_peer_packet(&harness.a_id, packet);
 
     let transfers = tokio::time::timeout(Duration::from_secs(2), async {
@@ -530,10 +543,13 @@ async fn unreachable_payload_port_fails_the_incoming_transfer() {
 async fn cancelling_an_outgoing_transfer_stops_it_and_cleans_up() {
     let harness = connected_and_paired("Sender", "Receiver").await;
 
-    let (started, sender) = harness
-        .a
-        .begin_outgoing_transfer(&harness.b_id, "cancel-me.bin".into(), 10_000_000)
-        .unwrap();
+    let (started, sender) = share::send_file(
+        &harness.a.plugin_context(),
+        &harness.b_id,
+        "cancel-me.bin".into(),
+        10_000_000,
+    )
+    .unwrap();
     // Keep sending in the background so the transfer is actually mid-flight
     // when cancellation arrives.
     let sender_task = tokio::spawn(send_in_chunks(sender, vec![7_u8; 10_000_000], 4096));
