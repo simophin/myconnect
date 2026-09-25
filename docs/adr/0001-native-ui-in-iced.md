@@ -82,6 +82,7 @@ first needs one adds it to the `gui` feature.
 | UI toolkit | `iced` 0.14 | Pure Rust, Elm-style update/view that suits a snapshot-and-events store, multi-window `daemon` programs (a window can close while the app lives in the tray), and wgpu with a tiny-skia software fallback. Pinned; upgrading is its own change. |
 | Icons | `iced_fonts` 0.3 (Lucide) | The Lucide icon font with typed helpers, the version matching iced 0.14. |
 | Headless UI tests | `iced_test` 0.14 | iced's own simulator: finds and clicks widgets, and renders snapshots to PNG with no display. |
+| Running tasks in tests | `iced_runtime` 0.14 (dev) | Already in iced's tree; its `task::into_stream` lets a unit test see what a `Task` produces, which `iced` doesn't re-export. |
 | Arguments | `clap` | Already the CLI's parser; `env` reads each flag's environment variable. |
 | File and folder dialogs | `rfd` (step 9) | The standard native dialog crate: GTK or the XDG portal on Linux, AppKit, Win32. |
 | Notifications | `notify-rust` (step 13) | freedesktop notifications over D-Bus, macOS and Windows toasts. |

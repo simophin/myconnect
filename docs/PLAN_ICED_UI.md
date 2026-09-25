@@ -6,9 +6,10 @@ early steps build the ground the later ones stand on. Steps marked
 *independent* can run in parallel worktrees once their prerequisites have
 landed.
 
-Status (2026-09-25): decided by the owner. Step 1 is done: `gui/` is the
-thin composition root and the spike's device list lives in `src/ui/`. Next
-is step 2. Each finished step says so under its heading, with what differs
+Status (2026-09-25): decided by the owner. Steps 1 and 2 are done: `gui/`
+is the thin composition root, the spike's device list lives in `src/ui/`,
+and features plug in through the `UiPlugin` seam, with battery as the
+first. Next is step 3. Each finished step says so under its heading, with what differs
 from the plan.
 
 ## Read first
@@ -399,6 +400,45 @@ before then.
   a second runtime.
 
 ### 2. The UI plugin seam, with battery as the pilot
+
+**Done (2026-09-25).** Where it differs from the text below and the seam
+above:
+- `UiPlugin::Message` must also be `Sync`: `PluginMessage` holds it in an
+  `Arc`. `ErasedUiPlugin::update` asserts the message's plugin id before it
+  downcasts.
+- There are no `PluginPage` and `SettingsSection` types: `view_page` and
+  `view_settings` return elements. `DropTarget` is `{ label, on_drop }`.
+  Callbacks in `ShellRequest` and `DropTarget` are `Arc<dyn Fn>`
+  (`Callback`), so they map through the erasure; `Prompt`'s `validate` is
+  a `Validator` returning the error text, if any.
+- `ui/route.rs` has the whole `Route` enum. Step 3 adds parents and the
+  header. Until then `view` draws only the devices page and plugin pages;
+  the other routes fall back to the devices page.
+- The shell handles `Toast` (stacked at the bottom, gone after 4 s, the
+  action button navigates; step 3 finishes them) and `Navigate`. `Notify`
+  is a toast until step 13, `ShowWindow` focuses the window, and
+  `PickFiles`, `Confirm` and `Prompt` log a warning until their steps.
+- `UiContext::device` and `transfers` read the core until the store
+  (step 4). Window focus is tracked from `window::events()`.
+- Timers (toasts, `--demo`) run on the daemon's runtime, because iced has
+  no timer without its `tokio` feature. A tokio future such as `sleep`
+  needs the runtime when it is *made*, not only when polled, so
+  `UiContext::spawn` takes an `async move` block. The real app caught this
+  (`#[tokio::test]` hides it); `timers_work_off_the_daemon_runtime` now
+  covers it.
+- New slot `demo_packets(device, tick)`: `--demo` devices advertise every
+  capability this build has, and each plugin makes up what its feature
+  reports (battery: the phone drains, the tablet charges). That keeps
+  `src/ui/demo.rs` free of feature names too.
+- `builtin_with_ui` lists the core plugins itself, one line each, and a
+  test checks it runs the same plugins as `builtin()` in the same order,
+  with the UI halves in that order too.
+- `ui::testing` gained `device(name)` and `outputs(task)`, which runs a
+  `Task` and returns what it produced (through `iced_runtime`, a new
+  dev-dependency).
+- Snapshots: `devices` (a fake status plugin), `devices-battery` and
+  `toasts`. Checked in the real app with `--demo`: the phone's battery
+  drains through the slot.
 
 **Why:** every feature step after this plugs in through the seam, so it
 must exist and be proven on the smallest feature first. That is how the

@@ -2,8 +2,45 @@
 
 use std::{fs, path::Path};
 
-use iced::{Element, Settings, Size, Theme};
+use iced::{Element, Settings, Size, Task, Theme, futures::StreamExt};
 use iced_test::simulator::Simulator;
+
+use crate::{
+    core::{DeviceReachability, DeviceSnapshot},
+    protocol::DeviceType,
+};
+
+/// A paired, connected phone named `name`, with no capabilities.
+pub fn device(name: &str) -> DeviceSnapshot {
+    DeviceSnapshot {
+        device_id: format!("{:0<32}", name.replace(' ', "")),
+        device_name: name.into(),
+        device_type: DeviceType::Phone,
+        protocol_version: 8,
+        incoming_capabilities: vec![],
+        outgoing_capabilities: vec![],
+        reachability: DeviceReachability::Connected,
+        paired: true,
+        pairing: false,
+        last_seen_at: 0,
+        plugins: Default::default(),
+    }
+}
+
+/// Run `task` to the end and return what it produced. Only for tasks that
+/// just produce values: window and widget actions are dropped.
+pub async fn outputs<T: 'static>(task: Task<T>) -> Vec<T> {
+    let Some(stream) = iced_runtime::task::into_stream(task) else {
+        return Vec::new();
+    };
+    stream
+        .filter_map(async |action| match action {
+            iced_runtime::Action::Output(output) => Some(output),
+            _ => None,
+        })
+        .collect()
+        .await
+}
 
 /// Render `view` headlessly, in light and dark, to
 /// `$SNAPSHOT_DIR/<name>-<light|dark>-<backend>.png`, to look at the UI

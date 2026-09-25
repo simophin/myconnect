@@ -9,7 +9,7 @@ use iced_fonts::lucide;
 use crate::{
     core::{DeviceReachability, DeviceSnapshot, EventData},
     protocol::DeviceType,
-    ui::sync::Update,
+    ui::{plugin::ErasedUiPlugin, sync::Update},
 };
 
 /// The home screen: this computer's paired devices.
@@ -24,6 +24,15 @@ impl DeviceList {
         Self {
             devices: None,
             local_name,
+        }
+    }
+
+    /// The page once `devices` have loaded, to test it.
+    #[cfg(test)]
+    pub(crate) fn loaded(local_name: &str, devices: Vec<DeviceSnapshot>) -> Self {
+        Self {
+            devices: Some(devices),
+            local_name: local_name.into(),
         }
     }
 
@@ -60,7 +69,19 @@ impl DeviceList {
         }
     }
 
-    pub fn view<'a, Message: 'a>(&'a self) -> Element<'a, Message> {
+    /// A known device, by id.
+    pub fn device(&self, device_id: &str) -> Option<&DeviceSnapshot> {
+        self.devices
+            .as_ref()?
+            .iter()
+            .find(|device| device.device_id == device_id)
+    }
+
+    /// The page, with each device's status from `plugins`.
+    pub fn view<'a, Message: 'a>(
+        &'a self,
+        plugins: &'a [Box<dyn ErasedUiPlugin>],
+    ) -> Element<'a, Message> {
         let header = column![
             text("Devices").size(26).font(Font {
                 weight: font::Weight::Semibold,
@@ -88,7 +109,10 @@ impl DeviceList {
                 } else {
                     // Connected first, then by name.
                     paired.sort_by_key(|d| (!is_connected(d), d.device_name.to_lowercase()));
-                    scrollable(column(paired.into_iter().map(device_card)).spacing(8))
+                    let cards = paired
+                        .into_iter()
+                        .map(|device| device_card(device, plugins));
+                    scrollable(column(cards).spacing(8))
                         .spacing(6)
                         .height(Length::Fill)
                         .into()
@@ -104,7 +128,10 @@ impl DeviceList {
     }
 }
 
-fn device_card<'a, Message: 'a>(device: &'a DeviceSnapshot) -> Element<'a, Message> {
+fn device_card<'a, Message: 'a>(
+    device: &'a DeviceSnapshot,
+    plugins: &'a [Box<dyn ErasedUiPlugin>],
+) -> Element<'a, Message> {
     let connected = is_connected(device);
 
     let badge = container(device_icon(device.device_type).size(20))
@@ -124,7 +151,7 @@ fn device_card<'a, Message: 'a>(device: &'a DeviceSnapshot) -> Element<'a, Messa
             }
         });
 
-    let mut status = row![
+    let mut status_row = row![
         status_dot(device.reachability),
         text(reachability_label(device.reachability))
             .size(13)
@@ -132,22 +159,14 @@ fn device_card<'a, Message: 'a>(device: &'a DeviceSnapshot) -> Element<'a, Messa
     ]
     .spacing(6)
     .align_y(Alignment::Center);
-    if let Some(battery) = Battery::of(device) {
-        let icon = if battery.charging {
-            lucide::battery_charging()
-        } else if battery.charge <= 15 {
-            lucide::battery_low()
-        } else if battery.charge <= 60 {
-            lucide::battery_medium()
-        } else {
-            lucide::battery_full()
-        };
-        status = status.push(Space::new().width(6)).push(
+    for status in plugins
+        .iter()
+        .filter_map(|plugin| plugin.device_status(device))
+    {
+        status_row = status_row.push(Space::new().width(6)).push(
             row![
-                icon.size(14).style(text::secondary),
-                text(format!("{}%", battery.charge))
-                    .size(13)
-                    .style(text::secondary),
+                (status.icon)().size(14).style(text::secondary),
+                text(status.label).size(13).style(text::secondary),
             ]
             .spacing(4)
             .align_y(Alignment::Center),
@@ -156,7 +175,7 @@ fn device_card<'a, Message: 'a>(device: &'a DeviceSnapshot) -> Element<'a, Messa
 
     let card = row![
         badge,
-        column![text(&device.device_name).size(15), status].spacing(3),
+        column![text(&device.device_name).size(15), status_row].spacing(3),
         space::horizontal(),
     ]
     .spacing(14)
@@ -235,74 +254,72 @@ fn reachability_label(reachability: DeviceReachability) -> &'static str {
     }
 }
 
-/// The battery plugin's state for a device, if it reported one.
-struct Battery {
-    charge: i64,
-    charging: bool,
-}
-
-impl Battery {
-    fn of(device: &DeviceSnapshot) -> Option<Self> {
-        let state = device.plugins.get("battery")?;
-        Some(Self {
-            charge: state.get("charge")?.as_i64()?,
-            charging: state.get("charging")?.as_bool()?,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
+    use iced_fonts::lucide;
     use serde_json::json;
 
     use super::*;
-    use crate::ui::testing;
+    use crate::ui::{
+        plugin::{Command, DeviceStatus, UiContext, UiPlugin},
+        testing,
+    };
+
+    /// A feature that shows a device's signal, if it reports one, as a
+    /// stand-in for any plugin's status.
+    struct Signal;
+
+    impl UiPlugin for Signal {
+        type Message = ();
+
+        fn id(&self) -> &'static str {
+            "signal"
+        }
+
+        fn device_status(&self, device: &DeviceSnapshot) -> Option<DeviceStatus> {
+            let bars = device.plugins.get("signal")?.as_u64()?;
+            Some(DeviceStatus {
+                icon: lucide::signal,
+                label: format!("{bars} bars"),
+            })
+        }
+
+        fn update(&mut self, _ctx: &UiContext, _message: ()) -> Command<()> {
+            Command::none()
+        }
+    }
 
     fn device(
         name: &str,
         device_type: DeviceType,
         reachability: DeviceReachability,
-        battery: Option<(i64, bool)>,
+        signal: Option<u64>,
     ) -> DeviceSnapshot {
-        let mut plugins = BTreeMap::new();
-        if let Some((charge, charging)) = battery {
-            plugins.insert(
-                "battery".into(),
-                json!({"charge": charge, "charging": charging}),
-            );
+        let mut device = testing::device(name);
+        device.device_type = device_type;
+        device.reachability = reachability;
+        if let Some(bars) = signal {
+            device.plugins.insert("signal".into(), json!(bars));
         }
-        DeviceSnapshot {
-            device_id: format!("{name:0<32}"),
-            device_name: name.into(),
-            device_type,
-            protocol_version: 8,
-            incoming_capabilities: vec![],
-            outgoing_capabilities: vec![],
-            reachability,
-            paired: true,
-            pairing: false,
-            last_seen_at: 0,
-            plugins,
-        }
+        device
     }
 
     #[test]
     fn snapshot_device_list() {
-        let list = DeviceList {
-            devices: Some(vec![
+        let list = DeviceList::loaded(
+            "Demo desktop",
+            vec![
                 device(
                     "Pixel 8a",
                     DeviceType::Phone,
                     DeviceReachability::Connected,
-                    Some((82, false)),
+                    Some(4),
                 ),
                 device(
                     "Galaxy Tab S9",
                     DeviceType::Tablet,
                     DeviceReachability::Connected,
-                    Some((45, true)),
+                    Some(2),
                 ),
                 device(
                     "Work laptop",
@@ -316,9 +333,9 @@ mod tests {
                     DeviceReachability::Unavailable,
                     None,
                 ),
-            ]),
-            local_name: "Demo desktop".into(),
-        };
-        testing::snapshot("devices", (440.0, 620.0), || list.view::<()>());
+            ],
+        );
+        let plugins: Vec<Box<dyn ErasedUiPlugin>> = vec![Box::new(Signal)];
+        testing::snapshot("devices", (440.0, 620.0), || list.view::<()>(&plugins));
     }
 }

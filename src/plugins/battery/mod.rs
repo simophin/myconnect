@@ -12,6 +12,8 @@
 //! disconnects or is unpaired.
 
 pub mod packet;
+#[cfg(feature = "gui")]
+pub mod ui;
 
 use std::{
     collections::HashMap,

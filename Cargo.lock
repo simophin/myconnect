@@ -3031,6 +3031,7 @@ dependencies = [
  "gethostname",
  "iced",
  "iced_fonts",
+ "iced_runtime",
  "iced_test",
  "rcgen",
  "reqwest",
