@@ -21,6 +21,10 @@ const browseCapability = 'kdeconnect.sftp.request';
 /// The capability a peer lists when it accepts pings.
 const pingCapability = 'kdeconnect.ping';
 
+/// The capability a peer lists when it can be asked to ring so it can be
+/// found (KDE Connect for Android does).
+const ringCapability = 'kdeconnect.findmyphone.request';
+
 /// The capability a peer lists when it accepts clipboard text.
 const clipboardCapability = 'kdeconnect.clipboard';
 
@@ -71,6 +75,10 @@ abstract class Device with _$Device {
   /// Whether a ping sent now would be accepted.
   bool get acceptsPings =>
       isConnected && incomingCapabilities.contains(pingCapability);
+
+  /// Whether a request to ring sent now would be accepted.
+  bool get canRing =>
+      isConnected && incomingCapabilities.contains(ringCapability);
 
   /// Whether the device takes clipboard text at all, connected or not.
   bool get supportsClipboard =>

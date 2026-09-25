@@ -8,6 +8,7 @@
 
 pub mod battery;
 pub mod clipboard;
+pub mod findmyphone;
 pub mod ping;
 pub mod sftp;
 pub mod share;
@@ -54,9 +55,10 @@ pub fn capabilities() -> PluginCapabilities {
     }
 }
 
-/// The packet types of the features not yet moved to a plugin. Browsing
-/// and battery reports are one-way: this build asks peers to serve files
-/// and reads their battery, but serves no files and reports no battery.
+/// The packet types of the features not yet moved to a plugin. Browsing,
+/// battery reports and ringing are one-way: this build asks peers to serve
+/// files and to ring, and reads their battery, but serves no files, doesn't
+/// ring and reports no battery.
 fn legacy_capabilities() -> PluginCapabilities {
     PluginCapabilities {
         incoming: vec![
@@ -71,6 +73,7 @@ fn legacy_capabilities() -> PluginCapabilities {
             clipboard::CONNECT_PACKET_TYPE.to_owned(),
             share::PACKET_TYPE.to_owned(),
             sftp::REQUEST_PACKET_TYPE.to_owned(),
+            findmyphone::REQUEST_PACKET_TYPE.to_owned(),
         ],
     }
 }
@@ -121,7 +124,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn advertises_ping_clipboard_and_share_both_directions_and_browsing_and_battery_one_way() {
+    fn advertises_ping_clipboard_and_share_both_directions_and_the_rest_one_way() {
         let capabilities = capabilities();
         let bidirectional = [
             ping::PACKET_TYPE,
@@ -139,7 +142,11 @@ mod tests {
         );
         assert_eq!(
             capabilities.outgoing,
-            [&bidirectional[..], &[sftp::REQUEST_PACKET_TYPE]].concat()
+            [
+                &bidirectional[..],
+                &[sftp::REQUEST_PACKET_TYPE, findmyphone::REQUEST_PACKET_TYPE]
+            ]
+            .concat()
         );
     }
 

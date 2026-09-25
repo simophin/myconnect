@@ -123,6 +123,7 @@ impl TestServer {
             incoming_capabilities: vec![
                 "kdeconnect.share.request".into(),
                 "kdeconnect.ping".into(),
+                "kdeconnect.findmyphone.request".into(),
             ],
             outgoing_capabilities: vec!["kdeconnect.share.request".into()],
             protocol_version: 8,
@@ -546,6 +547,41 @@ async fn ping_is_queued_to_a_paired_device_with_an_optional_message() {
         &server,
         "POST",
         "/api/v1/devices/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/ping",
+        true,
+    )
+    .await;
+    assert!(unpaired.starts_with("HTTP/1.1 409 Conflict"));
+    assert!(body(&unpaired).contains("device_not_paired"));
+
+    server.server.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ring_asks_a_paired_device_to_ring() {
+    let server = TestServer::start().await;
+    let device_id = "cccccccccccccccccccccccccccccccc";
+    let mut packets = server.connect_and_pair(device_id);
+
+    let response = request(
+        &server,
+        "POST",
+        &format!("/api/v1/devices/{device_id}/ring"),
+        true,
+    )
+    .await;
+    assert!(
+        response.starts_with("HTTP/1.1 202 Accepted"),
+        "unexpected response: {response}"
+    );
+    let sent = packets.try_recv().unwrap();
+    assert_eq!(sent.packet_type, "kdeconnect.findmyphone.request");
+    assert!(sent.body.is_empty());
+
+    // The peer discovered at startup is not paired.
+    let unpaired = request(
+        &server,
+        "POST",
+        "/api/v1/devices/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/ring",
         true,
     )
     .await;

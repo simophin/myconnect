@@ -212,7 +212,11 @@ fn identity_packet(device_id: &str, extra: Map<String, Value>) -> Vec<u8> {
         device_id: device_id.into(),
         device_name: PHONE_NAME.into(),
         device_type: DeviceType::Phone,
-        incoming_capabilities: vec![REQUEST_PACKET_TYPE.into(), "kdeconnect.ping".into()],
+        incoming_capabilities: vec![
+            REQUEST_PACKET_TYPE.into(),
+            "kdeconnect.ping".into(),
+            "kdeconnect.findmyphone.request".into(),
+        ],
         outgoing_capabilities: vec![
             SFTP_PACKET_TYPE.into(),
             "kdeconnect.ping".into(),

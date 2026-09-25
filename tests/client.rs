@@ -66,6 +66,7 @@ impl MockServer {
             .route("/api/v1/devices", get(devices))
             .route("/api/v1/devices/{device_id}", delete(unpair))
             .route("/api/v1/devices/{device_id}/ping", post(ping))
+            .route("/api/v1/devices/{device_id}/ring", post(ring))
             .route("/api/v1/pairings", post(start_pairing))
             .route(
                 "/api/v1/pairings/{pairing_id}",
@@ -193,6 +194,17 @@ async fn ping(Path(device_id): Path<String>, Json(request): Json<Ping>) -> Respo
         return (
             StatusCode::CONFLICT,
             Json(json!({"code": "unsupported_by_peer"})),
+        )
+            .into_response();
+    }
+    StatusCode::ACCEPTED.into_response()
+}
+
+async fn ring(Path(device_id): Path<String>) -> Response {
+    if device_id != device().device_id {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"code": "device_not_found"})),
         )
             .into_response();
     }
@@ -350,6 +362,7 @@ async fn every_client_operation_uses_the_expected_http_contract() {
         .ping(&device().device_id, Some("hello"))
         .await
         .unwrap();
+    client.ring(&device().device_id).await.unwrap();
 
     let directory = TempDir::new().unwrap();
     let file = directory.path().join("payload.txt");

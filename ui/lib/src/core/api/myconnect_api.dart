@@ -70,6 +70,11 @@ class MyConnectApi {
     () => _dio.post<void>('devices/${Uri.encodeComponent(deviceId)}/ping'),
   );
 
+  /// Ask a paired, connected device to ring so it can be found.
+  Future<void> ring(String deviceId) => _send(
+    () => _dio.post<void>('devices/${Uri.encodeComponent(deviceId)}/ring'),
+  );
+
   /// Send this computer's clipboard text to a paired, connected device, for
   /// when automatic sync missed it.
   Future<void> sendClipboard(String deviceId) => _send(

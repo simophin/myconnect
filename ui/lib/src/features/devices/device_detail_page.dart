@@ -75,6 +75,20 @@ class _DeviceDetailsState extends ConsumerState<_DeviceDetails> {
     }
   }
 
+  Future<void> _ring() async {
+    // The device can drop, and unmount this page, before the call returns.
+    final messenger = ScaffoldMessenger.of(context);
+    final device = widget.device;
+    try {
+      await (await ref.read(apiProvider.future)).ring(device.deviceId);
+      messenger.showSnackBar(
+        SnackBar(content: Text('Asked ${device.deviceName} to ring.')),
+      );
+    } on Object catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(describeError(error))));
+    }
+  }
+
   Future<void> _sendClipboard() async {
     // The device can drop, and unmount this page, before the call returns.
     final messenger = ScaffoldMessenger.of(context);
@@ -169,6 +183,11 @@ class _DeviceDetailsState extends ConsumerState<_DeviceDetails> {
               onPressed: canPing ? _ping : null,
               icon: const Icon(Icons.notifications_active_outlined),
               label: const Text('Ping'),
+            ),
+            FilledButton.tonalIcon(
+              onPressed: device.canRing ? _ring : null,
+              icon: const Icon(Icons.ring_volume_outlined),
+              label: const Text('Ring'),
             ),
             if (device.supportsClipboard)
               FilledButton.tonalIcon(

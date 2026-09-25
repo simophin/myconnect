@@ -152,7 +152,11 @@ void main() {
       ..devices = [
         device(
           name: 'Pixel',
-          incomingCapabilities: [shareCapability, pingCapability],
+          incomingCapabilities: [
+            shareCapability,
+            pingCapability,
+            ringCapability,
+          ],
         ),
         device(
           id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
@@ -186,8 +190,11 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    expect(shell.trayItem(['Pixel', 'Ring']).enabled, isTrue);
     expect(shell.trayItem(['Laptop', 'Ping']).enabled, isTrue);
     expect(shell.trayItem(['Laptop', 'Send files…']).enabled, isFalse);
+    // Laptop never said it can ring, so it gets no Ring item.
+    expect(() => shell.trayItem(['Laptop', 'Ring']), throwsStateError);
   });
 
   testWidgets('the tray menu says when nothing is paired', (tester) async {
@@ -330,6 +337,32 @@ void main() {
       const ApiException(code: 'device_not_connected', statusCode: 409),
     );
     daemon.shell.selectTrayItem(['Pixel', 'Ping']);
+    await tester.pumpAndSettle();
+    expect(daemon.notifications.shown.values, [
+      'The device is not connected right now.',
+    ]);
+  });
+
+  testWidgets('ringing from the tray reports only a failure', (tester) async {
+    final daemon = TestDaemon()
+      ..devices = [
+        device(name: 'Pixel', incomingCapabilities: [ringCapability]),
+      ];
+    when(() => daemon.api.ring(any())).thenAnswer((_) async {});
+    await pumpApp(tester, daemon);
+    daemon.shell.onCloseRequested!();
+    await tester.pumpAndSettle();
+
+    daemon.shell.selectTrayItem(['Pixel', 'Ring']);
+    await tester.pumpAndSettle();
+    verify(() => daemon.api.ring('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')).called(1);
+    expect(daemon.shell.visible, isFalse);
+    expect(daemon.notifications.shown, isEmpty);
+
+    when(() => daemon.api.ring(any())).thenThrow(
+      const ApiException(code: 'device_not_connected', statusCode: 409),
+    );
+    daemon.shell.selectTrayItem(['Pixel', 'Ring']);
     await tester.pumpAndSettle();
     expect(daemon.notifications.shown.values, [
       'The device is not connected right now.',

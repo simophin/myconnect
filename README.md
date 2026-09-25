@@ -44,6 +44,7 @@ The CLI interface is command based, allowing users to interact with MyConnect th
 - `myconnect unpair <device-id>` - Remove trust and forget a device.
 - `myconnect ping <device-id> [message]` - Ping a paired device, optionally
   with a message. Receiving pings is not supported yet.
+- `myconnect ring <device-id>` - Make a paired device ring so you can find it.
 - `myconnect send <device-id> <file> [--watch]` - Stream a file to a device.
 - `myconnect clipboard get|set <text>|watch|send <device-id>` - Control text synchronization, or send the clipboard to one device now.
 
@@ -69,7 +70,7 @@ src/
 ├── config/          # persistent identity, optional API token, peer trust
 ├── transport/        # UDP discovery, TCP/TLS, auxiliary payload connections
 ├── device.rs         # device registry and snapshots
-├── plugins/           # fixed packet routing: ping, clipboard, share
+├── plugins/           # fixed packet routing: ping, clipboard, share, sftp, battery, findmyphone
 ├── application(.rs/*) # orchestration: pairing/transfer state machines, event bus
 ├── clipboard.rs        # clipboard service trait + in-memory implementation
 ├── api.rs               # local HTTP control plane (optional token auth)

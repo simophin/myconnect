@@ -61,8 +61,8 @@ work: pairing, unpairing, clipboard, file transfer both ways, and browsing
 the phone's files. Nothing has been checked against KDE Connect on a
 desktop yet. Paired devices are listed even while offline (the daemon
 restores them from their trust records). The tray menu lists each connected
-paired device (send files, ping, send clipboard, browse files, show
-details), with its
+paired device (send files, ping, ring, send clipboard, browse files,
+show details), with its
 battery; the device list and details
 page show the battery too (`kdeconnect.battery`, read-only); on Linux it needs a patched `cnativeapi`, vendored in
 `ui/third_party/`. Releases (`.github/workflows/build.yml`) build the
@@ -96,6 +96,10 @@ macOS app has only an ad-hoc signature. A Flutter build hook
   Connect desktops don't either).
 
 **Smaller follow-ups.**
+
+- Ringing a device (`kdeconnect.findmyphone.request`: `myconnect ring`,
+  the details page and the tray) was checked against the fake phone only,
+  not a real one. This machine doesn't ring when a peer asks it to.
 
 - Battery reports were checked against the fake phone only, not a real
   one. A low-battery notification (`thresholdEvent: 1`) isn't shown, and
