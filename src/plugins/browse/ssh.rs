@@ -20,7 +20,7 @@ use thiserror::Error;
 use tokio::net::TcpStream;
 use x509_parser::{parse_x509_certificate, public_key::PublicKey};
 
-use crate::application::{PayloadPeer, SshAuthError};
+use crate::core::{PayloadPeer, SshAuthError};
 
 /// Where and as whom to connect, from a peer's `kdeconnect.sftp` offer.
 pub struct SftpEndpoint {

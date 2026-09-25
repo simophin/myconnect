@@ -17,11 +17,11 @@ use uuid::Uuid;
 
 use crate::{
     api::DEFAULT_API_PORT,
-    application::{
-        ApplicationEvent, EventData, PairingSnapshot, PluginEventKind, SettingsPatch,
-        SettingsSnapshot, TransferSnapshot, TransferStatus,
-    },
     config::ApiToken,
+    core::{
+        CoreEvent, EventData, PairingSnapshot, PluginEventKind, SettingsPatch, SettingsSnapshot,
+        TransferSnapshot, TransferStatus,
+    },
     device::DeviceSnapshot,
     plugins::{
         browse::{DirectoryListing, FileEntry},
@@ -32,8 +32,7 @@ use crate::{
 pub const API_URL_ENV: &str = "MYCONNECT_API_URL";
 pub const API_TOKEN_ENV: &str = "MYCONNECT_API_TOKEN";
 
-pub type EventStream =
-    Pin<Box<dyn Stream<Item = Result<ApplicationEvent, ClientError>> + Send + 'static>>;
+pub type EventStream = Pin<Box<dyn Stream<Item = Result<CoreEvent, ClientError>> + Send + 'static>>;
 pub type ByteStream =
     Pin<Box<dyn Stream<Item = Result<bytes::Bytes, ClientError>> + Send + 'static>>;
 
@@ -629,17 +628,17 @@ async fn file_part(path: &Path) -> Result<(String, Part), ClientError> {
 
 pub enum DeviceWatchUpdate {
     Snapshot(Vec<DeviceSnapshot>),
-    Event(ApplicationEvent),
+    Event(CoreEvent),
 }
 
 pub enum ClipboardWatchUpdate {
     Snapshot(ClipboardSnapshot),
-    Event(ApplicationEvent),
+    Event(CoreEvent),
 }
 
 pub enum TransferWatchUpdate {
     Snapshot(TransferSnapshot),
-    Event(ApplicationEvent),
+    Event(CoreEvent),
 }
 
 fn is_device_event(event: &EventData) -> bool {
@@ -686,7 +685,7 @@ fn find_sse_frame(bytes: &[u8]) -> Option<(usize, usize)> {
     }
 }
 
-fn decode_sse_frame(frame: &[u8]) -> Result<Option<ApplicationEvent>, ClientError> {
+fn decode_sse_frame(frame: &[u8]) -> Result<Option<CoreEvent>, ClientError> {
     let mut data = Vec::new();
     for line in frame.split(|byte| *byte == b'\n') {
         let line = line.strip_suffix(b"\r").unwrap_or(line);

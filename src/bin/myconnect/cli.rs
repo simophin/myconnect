@@ -7,14 +7,14 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use myconnect::{
     api::DEFAULT_API_PORT,
-    application::{
-        ApplicationEvent, EventData, PairingSnapshot, RunRequest, SettingsPatch, SettingsSnapshot,
-        TransferSnapshot,
-    },
     client::{
         API_TOKEN_ENV, ApiClient, ClipboardWatchUpdate, DeviceWatchUpdate, TransferWatchUpdate,
     },
     config::ApiToken,
+    core::{
+        CoreEvent, EventData, PairingSnapshot, RunRequest, SettingsPatch, SettingsSnapshot,
+        TransferSnapshot,
+    },
     device::DeviceSnapshot,
     plugins::{
         battery::BatteryStatus,
@@ -231,7 +231,7 @@ impl Cli {
             if let Some(port) = api_port {
                 request.api_port = port;
             }
-            return myconnect::application::run_service(request).await;
+            return myconnect::core::run_service(request).await;
         }
 
         let base_url_override = (api_host.is_some() || api_port.is_some()).then(|| {
@@ -498,7 +498,7 @@ fn unpaired(devices: Vec<DeviceSnapshot>) -> Vec<DeviceSnapshot> {
         .collect()
 }
 
-fn event_device_unpaired(event: &ApplicationEvent) -> bool {
+fn event_device_unpaired(event: &CoreEvent) -> bool {
     match &event.event {
         EventData::DeviceDiscovered(device)
         | EventData::DeviceConnected(device)
@@ -640,7 +640,7 @@ fn print_settings(settings: &SettingsSnapshot, json_output: bool) {
     }
 }
 
-fn print_event(event: &ApplicationEvent, json_output: bool) {
+fn print_event(event: &CoreEvent, json_output: bool) {
     if json_output {
         println!(
             "{}",

@@ -34,7 +34,7 @@ pub struct DeviceSnapshot {
     /// What plugins add to the device, keyed by plugin id, e.g.
     /// `{"battery": {"charge": 82, "charging": true}}`. A plugin with
     /// nothing to add has no key. The registry keeps this empty; the core
-    /// fills it from [`crate::application::Plugin::device_state`] when it
+    /// fills it from [`crate::core::Plugin::device_state`] when it
     /// hands a snapshot out.
     #[serde(default)]
     pub plugins: BTreeMap<String, Value>,

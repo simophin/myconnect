@@ -47,9 +47,9 @@ use files::{
 use session::{RemoteSession, Sessions};
 
 use crate::{
-    application::{
-        ApplicationError, OperationErrorCode, Plugin, PluginContext, TransferDirection,
-        TransferHandle, TransferSnapshot, sanitize_file_name, upload_channel,
+    core::{
+        CoreError, OperationErrorCode, Plugin, PluginContext, TransferDirection, TransferHandle,
+        TransferSnapshot, sanitize_file_name, upload_channel,
     },
     device::DeviceSnapshot,
     protocol::Packet,
@@ -112,7 +112,7 @@ impl Plugin for BrowsePlugin {
 #[derive(Debug, Error)]
 pub enum BrowseError {
     #[error(transparent)]
-    Core(#[from] ApplicationError),
+    Core(#[from] CoreError),
     #[error("remote path must be absolute, without `.` or `..` segments")]
     InvalidPath,
     #[error("the device isn't sharing its files")]
@@ -232,17 +232,15 @@ impl BrowsePlugin {
     ) -> Result<TransferSnapshot, BrowseError> {
         let path = normalize_path(path)?;
         let (_, name) = split_remote_path(&path).ok_or(BrowseError::IsADirectory)?;
-        let file_name = sanitize_file_name(name).map_err(|_| ApplicationError::InvalidFileName)?;
+        let file_name = sanitize_file_name(name).map_err(|_| CoreError::InvalidFileName)?;
         let session = self.sessions.get(ctx, device_id).await?;
         let total = self.file_size(device_id, &session, &path).await?;
         let transfers = ctx.transfers();
         let limit = transfers.max_bytes();
         if total > limit {
-            return Err(ApplicationError::TransferTooLarge { limit }.into());
+            return Err(CoreError::TransferTooLarge { limit }.into());
         }
-        let device = ctx
-            .device(device_id)
-            .ok_or(ApplicationError::UnknownDevice)?;
+        let device = ctx.device(device_id).ok_or(CoreError::UnknownDevice)?;
         let transfer = transfers.begin(
             &device,
             TransferDirection::Incoming,
@@ -269,14 +267,12 @@ impl BrowsePlugin {
         declared_size: u64,
     ) -> Result<(TransferSnapshot, mpsc::Sender<Bytes>), BrowseError> {
         let directory = normalize_path(directory)?;
-        validate_remote_name(file_name).map_err(|_| ApplicationError::InvalidFileName)?;
+        validate_remote_name(file_name).map_err(|_| CoreError::InvalidFileName)?;
         let limit = ctx.transfers().max_bytes();
         if declared_size > limit {
-            return Err(ApplicationError::TransferTooLarge { limit }.into());
+            return Err(CoreError::TransferTooLarge { limit }.into());
         }
-        let device = ctx
-            .device(device_id)
-            .ok_or(ApplicationError::UnknownDevice)?;
+        let device = ctx.device(device_id).ok_or(CoreError::UnknownDevice)?;
         let session = self.sessions.get(ctx, device_id).await?;
         let metadata = session
             .sftp()
@@ -606,8 +602,8 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::application::{
-        ApplicationHandle,
+    use crate::core::{
+        Core,
         testing::{handle, make_identity},
     };
 
@@ -615,7 +611,7 @@ mod tests {
 
     /// A paired, connected device advertising `capabilities`; its packets
     /// arrive on the returned receiver.
-    fn phone(handle: &ApplicationHandle, capabilities: &[&str]) -> mpsc::Receiver<Packet> {
+    fn phone(handle: &Core, capabilities: &[&str]) -> mpsc::Receiver<Packet> {
         let identity = make_identity(
             PHONE,
             capabilities.iter().map(|value| value.to_string()).collect(),
@@ -635,12 +631,12 @@ mod tests {
         let plugin = handle.plugin::<BrowsePlugin>().unwrap();
         assert!(matches!(
             plugin.list_files(&ctx, PHONE, None).await,
-            Err(BrowseError::Core(ApplicationError::UnknownDevice))
+            Err(BrowseError::Core(CoreError::UnknownDevice))
         ));
         let mut packets = phone(&handle, &["kdeconnect.ping"]);
         assert!(matches!(
             plugin.list_files(&ctx, PHONE, None).await,
-            Err(BrowseError::Core(ApplicationError::UnsupportedByPeer))
+            Err(BrowseError::Core(CoreError::UnsupportedByPeer))
         ));
         assert!(packets.try_recv().is_err());
     }
@@ -692,7 +688,7 @@ mod tests {
 
         assert!(matches!(
             listing.await.unwrap(),
-            Err(BrowseError::Core(ApplicationError::DeviceNotConnected))
+            Err(BrowseError::Core(CoreError::DeviceNotConnected))
         ));
     }
 }

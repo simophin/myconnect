@@ -9,11 +9,11 @@ use std::{
 };
 
 use myconnect::{
-    application::{
-        ApplicationHandle, ApplicationService, Command, EventData, LocalDeviceSnapshot,
-        PairingDirection, PairingStatus, Query, QueryResult,
-    },
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
+    core::{
+        ApplicationService, Command, Core, EventData, LocalDeviceSnapshot, PairingDirection,
+        PairingStatus, Query, QueryResult,
+    },
     device::DeviceReachability,
     plugins::clipboard::InMemoryClipboard,
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
@@ -30,7 +30,7 @@ use tokio_util::sync::CancellationToken;
 struct Peer {
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
-    application: ApplicationHandle,
+    application: Core,
     commands: mpsc::Receiver<Command>,
     _directory: tempfile::TempDir,
 }
@@ -41,7 +41,7 @@ fn peer(name: &str) -> Peer {
     let trust_store: Arc<dyn TrustStore + Send + Sync> =
         Arc::new(FilesystemTrustStore::new(directory.path()));
     let public_key_der = subject_public_key_info(identity.certificate_der()).unwrap();
-    let (application, commands) = ApplicationHandle::new(
+    let (application, commands) = Core::new(
         LocalDeviceSnapshot {
             device_id: identity.device_id().to_owned(),
             device_name: name.to_owned(),
@@ -53,7 +53,7 @@ fn peer(name: &str) -> Peer {
         32,
         128,
         identity.clone(),
-        myconnect::application::TransferConfig::new(directory.path().join("downloads")),
+        myconnect::core::TransferConfig::new(directory.path().join("downloads")),
     )
     .unwrap();
     Peer {
@@ -93,11 +93,7 @@ fn test_config(bind: SocketAddr, target: SocketAddr) -> LanConfig {
         )
 }
 
-async fn wait_for_reachability(
-    application: &ApplicationHandle,
-    device_id: &str,
-    expected: DeviceReachability,
-) {
+async fn wait_for_reachability(application: &Core, device_id: &str, expected: DeviceReachability) {
     timeout(Duration::from_secs(3), async {
         loop {
             if let QueryResult::Device(Some(device)) = application
@@ -116,7 +112,7 @@ async fn wait_for_reachability(
     .unwrap();
 }
 
-async fn wait_for_paired(application: &ApplicationHandle, device_id: &str, expected: bool) {
+async fn wait_for_paired(application: &Core, device_id: &str, expected: bool) {
     timeout(Duration::from_secs(3), async {
         loop {
             if let QueryResult::Device(Some(device)) = application
@@ -281,7 +277,7 @@ fn peer_reusing(
 ) -> Peer {
     let directory = tempfile::tempdir().unwrap();
     let public_key_der = subject_public_key_info(identity.certificate_der()).unwrap();
-    let (application, commands) = ApplicationHandle::new(
+    let (application, commands) = Core::new(
         LocalDeviceSnapshot {
             device_id: identity.device_id().to_owned(),
             device_name: "Restarted".to_owned(),
@@ -293,7 +289,7 @@ fn peer_reusing(
         32,
         128,
         identity.clone(),
-        myconnect::application::TransferConfig::new(directory.path().join("downloads")),
+        myconnect::core::TransferConfig::new(directory.path().join("downloads")),
     )
     .unwrap();
     Peer {
@@ -373,7 +369,7 @@ async fn attempt_identity_mismatch(
 }
 
 struct Victim {
-    application: ApplicationHandle,
+    application: Core,
     device_id: String,
     _identity: Arc<LocalIdentity>,
     _trust_store: Arc<dyn TrustStore + Send + Sync>,

@@ -9,7 +9,7 @@ use axum::{
 use serde::Deserialize;
 
 use super::{ClipboardPlugin, ClipboardSnapshot, ClipboardSyncError};
-use crate::{api::ApiProblem, application::PluginContext};
+use crate::{api::ApiProblem, core::PluginContext};
 
 #[derive(Clone)]
 struct ClipboardState {

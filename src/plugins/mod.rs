@@ -1,6 +1,6 @@
 //! The daemon's features.
 //!
-//! Each feature implements [`crate::application::Plugin`] and is listed in
+//! Each feature implements [`crate::core::Plugin`] and is listed in
 //! [`builtin`]: ping, find my phone, battery, clipboard, share and browse.
 //! The set is fixed at compile time; nothing is loaded at runtime. See
 //! `docs/research/feature-modules.md`.
@@ -14,7 +14,7 @@ pub mod share;
 
 use std::sync::Arc;
 
-use crate::application::{Plugin, PluginRegistry};
+use crate::core::{Plugin, PluginRegistry};
 
 /// Every plugin in this build. `clipboard` is the clipboard that clipboard
 /// sync reads and writes: the desktop's, or an in-memory one.

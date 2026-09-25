@@ -43,8 +43,8 @@ pub use packet::{
 };
 
 use crate::{
-    application::{
-        ApplicationError, Plugin, PluginContext, PluginEventKind, PluginSettings, SettingsPatch,
+    core::{
+        CoreError, Plugin, PluginContext, PluginEventKind, PluginSettings, SettingsPatch,
         SettingsSection, SettingsSnapshot,
     },
     device::DeviceSnapshot,
@@ -126,7 +126,7 @@ pub enum ClipboardSyncError {
     #[error("the clipboard has no text to send")]
     Empty,
     #[error(transparent)]
-    Core(#[from] ApplicationError),
+    Core(#[from] CoreError),
 }
 
 pub struct ClipboardPlugin {
@@ -208,7 +208,7 @@ impl ClipboardPlugin {
                 limit: MAX_CLIPBOARD_TEXT_BYTES,
             });
         }
-        let packet = build_packet(unix_millis(), text).map_err(|_| ApplicationError::Internal)?;
+        let packet = build_packet(unix_millis(), text).map_err(|_| CoreError::Internal)?;
         Ok(ctx.send(device_id, packet)?)
     }
 
@@ -421,8 +421,8 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::application::{
-        ApplicationHandle, ApplicationService, EventData,
+    use crate::core::{
+        ApplicationService, Core, EventData,
         testing::{handle, make_identity},
     };
 
@@ -430,14 +430,14 @@ mod tests {
     const OTHER_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     /// A core with the clipboard plugin, and the plugin's context.
-    fn clipboard() -> (ApplicationHandle, Arc<ClipboardPlugin>, PluginContext) {
+    fn clipboard() -> (Core, Arc<ClipboardPlugin>, PluginContext) {
         let (handle, _commands) = handle();
         let plugin = handle.plugin::<ClipboardPlugin>().unwrap();
         let ctx = handle.plugin_context();
         (handle, plugin, ctx)
     }
 
-    fn connect_paired_peer(handle: &ApplicationHandle, device_id: &str) -> mpsc::Receiver<Packet> {
+    fn connect_paired_peer(handle: &Core, device_id: &str) -> mpsc::Receiver<Packet> {
         let identity = make_identity(
             device_id,
             vec![PACKET_TYPE.into(), CONNECT_PACKET_TYPE.into()],
@@ -450,7 +450,7 @@ mod tests {
         rx
     }
 
-    fn set_sync_enabled(handle: &ApplicationHandle, enabled: bool) {
+    fn set_sync_enabled(handle: &Core, enabled: bool) {
         handle
             .update_settings(ClipboardSettings::sync_enabled_patch(enabled))
             .unwrap();
@@ -611,13 +611,11 @@ mod tests {
 
         assert!(matches!(
             plugin.send_to(&ctx, DEVICE_ID),
-            Err(ClipboardSyncError::Core(
-                ApplicationError::UnsupportedByPeer
-            ))
+            Err(ClipboardSyncError::Core(CoreError::UnsupportedByPeer))
         ));
         assert!(matches!(
             plugin.send_to(&ctx, "cccccccccccccccccccccccccccccccc"),
-            Err(ClipboardSyncError::Core(ApplicationError::UnknownDevice))
+            Err(ClipboardSyncError::Core(CoreError::UnknownDevice))
         ));
     }
 
@@ -658,7 +656,7 @@ mod tests {
                 ID,
                 serde_json::Map::from_iter([("syncEnabled".into(), "no".into())]),
             )),
-            Err(ApplicationError::InvalidSettings)
+            Err(CoreError::InvalidSettings)
         ));
     }
 
@@ -723,9 +721,8 @@ mod tests {
             changes: watch::Sender::new(None),
             released: Default::default(),
         });
-        let (handle, _commands) = crate::application::testing::handle_with_plugins(
-            crate::plugins::builtin(backend.clone()),
-        );
+        let (handle, _commands) =
+            crate::core::testing::handle_with_plugins(crate::plugins::builtin(backend.clone()));
         let mut rx = connect_paired_peer(&handle, DEVICE_ID);
 
         handle.start_plugins();

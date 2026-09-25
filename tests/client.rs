@@ -20,14 +20,14 @@ use axum::{
 };
 use futures_util::StreamExt;
 use myconnect::{
-    application::{
-        ApplicationEvent, EventData, PairingDirection, PairingSnapshot, PairingStatus, PluginEvent,
-        TransferDirection, TransferSnapshot, TransferStatus,
-    },
     client::{
         ApiClient, ClientError, ClipboardWatchUpdate, DeviceWatchUpdate, TransferWatchUpdate,
     },
     config::ApiToken,
+    core::{
+        CoreEvent, EventData, PairingDirection, PairingSnapshot, PairingStatus, PluginEvent,
+        TransferDirection, TransferSnapshot, TransferStatus,
+    },
     device::{DeviceReachability, DeviceSnapshot},
     plugins::clipboard::ClipboardSnapshot,
     protocol::DeviceType,
@@ -316,7 +316,7 @@ async fn set_clipboard(Json(request): Json<SetClipboard>) -> Response {
 }
 
 async fn events() -> Response {
-    let event = ApplicationEvent {
+    let event = CoreEvent {
         sequence: 1,
         timestamp: 12,
         event: EventData::Plugin(

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 pub use packet::{PACKET_TYPE, PingBody, build_packet};
 
 use crate::{
-    application::{ApplicationError, Plugin, PluginContext, PluginEventKind},
+    core::{CoreError, Plugin, PluginContext, PluginEventKind},
     device::DeviceSnapshot,
     protocol::Packet,
 };
@@ -68,8 +68,8 @@ pub fn send_ping(
     ctx: &PluginContext,
     device_id: &str,
     message: Option<String>,
-) -> Result<(), ApplicationError> {
-    let packet = build_packet(unix_millis(), message).map_err(|_| ApplicationError::Internal)?;
+) -> Result<(), CoreError> {
+    let packet = build_packet(unix_millis(), message).map_err(|_| CoreError::Internal)?;
     ctx.send(device_id, packet)
 }
 
@@ -103,7 +103,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::application::{
+    use crate::core::{
         EventData,
         testing::{handle, make_identity},
     };
@@ -124,14 +124,14 @@ mod tests {
         // a silent no-op.
         assert!(matches!(
             send_ping(&handle.plugin_context(), DEVICE_ID, None),
-            Err(ApplicationError::NotPaired)
+            Err(CoreError::NotPaired)
         ));
     }
 
     #[test]
     fn paired_devices_that_accept_pings_can_be_pinged() {
         // Refusals for other devices are the core's, tested in
-        // `application::plugin`.
+        // `core::plugin`.
         let (handle, _commands) = handle();
         let identity = make_identity(DEVICE_ID, vec![PACKET_TYPE.into()]);
         handle.discover_device(&identity, true, 1).unwrap();

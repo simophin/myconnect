@@ -3,12 +3,11 @@
 use std::{sync::Arc, time::Duration};
 
 use myconnect::{
-    application::{
-        ApplicationError, ApplicationEvent, ApplicationHandle, ApplicationService, Command,
-        EventData, LocalDeviceSnapshot, PairingDirection, PairingStatus, Query, QueryResult,
-        TransferConfig,
-    },
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
+    core::{
+        ApplicationService, Command, Core, CoreError, CoreEvent, EventData, LocalDeviceSnapshot,
+        PairingDirection, PairingStatus, Query, QueryResult, TransferConfig,
+    },
     plugins::clipboard::InMemoryClipboard,
     protocol::{DeviceType, IdentityBody, Packet, PairingBody},
     transport::tls::subject_public_key_info,
@@ -20,12 +19,12 @@ use tokio_util::sync::CancellationToken;
 /// An application instance with a fake, in-process "connection" to a peer:
 /// enough to exercise pairing logic without opening real sockets.
 struct Harness {
-    application: ApplicationHandle,
+    application: Core,
     peer_id: String,
     peer_certificate_der: Vec<u8>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     packets: mpsc::Receiver<Packet>,
-    events: broadcast::Receiver<ApplicationEvent>,
+    events: broadcast::Receiver<CoreEvent>,
     _commands: mpsc::Receiver<Command>,
     _directory: tempfile::TempDir,
 }
@@ -37,7 +36,7 @@ fn harness() -> Harness {
     let local_identity =
         Arc::new(LocalIdentity::load_or_create(directory.path().join("local")).unwrap());
     let local_public_key = subject_public_key_info(local_identity.certificate_der()).unwrap();
-    let (application, commands) = ApplicationHandle::new(
+    let (application, commands) = Core::new(
         LocalDeviceSnapshot {
             device_id: local_identity.device_id().to_owned(),
             device_name: "Local".into(),
@@ -100,7 +99,7 @@ fn harness() -> Harness {
     }
 }
 
-async fn next_pairing_event(events: &mut broadcast::Receiver<ApplicationEvent>) -> EventData {
+async fn next_pairing_event(events: &mut broadcast::Receiver<CoreEvent>) -> EventData {
     tokio::time::timeout(Duration::from_secs(1), events.recv())
         .await
         .expect("an event is published")
@@ -113,7 +112,7 @@ async fn outgoing_pairing_requires_a_connected_and_unpaired_device() {
     let harness = harness();
     assert!(matches!(
         harness.application.start_outgoing_pairing("missing-device"),
-        Err(ApplicationError::UnknownDevice)
+        Err(CoreError::UnknownDevice)
     ));
 }
 
@@ -147,7 +146,7 @@ async fn accept_is_rejected_for_the_wrong_direction() {
     // received, not one we ourselves sent; the wrong flow must fail closed.
     assert!(matches!(
         harness.application.accept_pairing(pairing.id),
-        Err(ApplicationError::InvalidPairingDirection)
+        Err(CoreError::InvalidPairingDirection)
     ));
 }
 
@@ -490,7 +489,7 @@ async fn forgetting_a_device_removes_trust_and_reports_unknown_afterwards() {
     ));
     assert!(matches!(
         harness.application.forget_device(&harness.peer_id),
-        Err(ApplicationError::UnknownDevice)
+        Err(CoreError::UnknownDevice)
     ));
 }
 

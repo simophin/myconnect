@@ -8,7 +8,7 @@ use axum::{
 use super::send_file;
 use crate::{
     api::{ApiProblem, UploadIdleTimeout, declared_size, forward_upload, next_field, skip_field},
-    application::{PluginContext, TransferSnapshot},
+    core::{PluginContext, TransferSnapshot},
 };
 
 pub(super) fn streaming_routes(ctx: PluginContext) -> Router {

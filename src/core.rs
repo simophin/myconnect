@@ -38,13 +38,13 @@ mod transfers;
 
 use settings::Settings;
 
-pub use events::{ApplicationEvent, EventBus, EventBusError, EventData};
+pub use events::{CoreEvent, EventBus, EventBusError, EventData};
 pub use payload::{AcceptedPayload, DialedPayload, PayloadListener, PayloadPeer, SshAuthError};
 pub use plugin::{
     Plugin, PluginContext, PluginEvent, PluginEventKind, PluginRegistry, PluginSettings,
     SettingsSection,
 };
-pub use service::{ApplicationError, ApplicationHandle, ApplicationService};
+pub use service::{ApplicationService, Core, CoreError};
 pub use settings::{SettingsDefaults, SettingsPatch, SettingsSnapshot};
 pub use state::{
     Command, LocalDeviceSnapshot, OperationErrorCode, Pairing, PairingDirection, PairingSnapshot,
@@ -107,12 +107,12 @@ impl Default for RunRequest {
     }
 }
 
-/// A started daemon: LAN transport, application core, and control API.
+/// A started daemon: LAN transport, core, and control API.
 ///
 /// The CLI runs one until Ctrl-C; an embedding frontend (see the `ffi` crate)
 /// starts one, reads [`RunningService::api_addr`], and shuts it down on exit.
 pub struct RunningService {
-    application: ApplicationHandle,
+    application: Core,
     lan: LanService,
     server: ApiServer,
 }
@@ -167,7 +167,7 @@ impl RunningService {
             Some(clipboard) => Arc::new(clipboard),
             None => InMemoryClipboard::shared(),
         };
-        let (application, commands) = ApplicationHandle::new(
+        let (application, commands) = Core::new(
             LocalDeviceSnapshot {
                 device_id: identity.device_id().to_owned(),
                 device_name: device_name.clone(),

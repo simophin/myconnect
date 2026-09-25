@@ -19,12 +19,12 @@ use std::{
 use futures_util::StreamExt;
 use myconnect::{
     api::{ApiServer, ApiServerConfig},
-    application::{
-        ApplicationHandle, ApplicationService, LocalDeviceSnapshot, Query, QueryResult,
-        TransferConfig, TransferDirection, TransferSnapshot, TransferStatus,
-    },
     client::{ApiClient, ClientError},
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
+    core::{
+        ApplicationService, Core, LocalDeviceSnapshot, Query, QueryResult, TransferConfig,
+        TransferDirection, TransferSnapshot, TransferStatus,
+    },
     device::DeviceReachability,
     plugins::clipboard::InMemoryClipboard,
     plugins::{
@@ -46,7 +46,7 @@ const INTERNAL: &str = "/storage/emulated/0";
 const SD_CARD: &str = "/storage/sdcard";
 
 struct Harness {
-    desktop: ApplicationHandle,
+    desktop: Core,
     phone: FakePhone,
     phone_id: String,
     client: ApiClient,
@@ -101,7 +101,7 @@ fn test_config(bind: SocketAddr, target: SocketAddr) -> LanConfig {
 }
 
 async fn wait_for_device(
-    application: &ApplicationHandle,
+    application: &Core,
     device_id: &str,
     accept: impl Fn(&myconnect::device::DeviceSnapshot) -> bool,
 ) {
@@ -145,7 +145,7 @@ async fn harness(reply: BrowseReply, wrong_host_key: bool) -> Harness {
     let desktop_id = identity.device_id().to_owned();
     let trust_store: Arc<dyn TrustStore + Send + Sync> =
         Arc::new(FilesystemTrustStore::new(desktop_dir.path()));
-    let (desktop, commands) = ApplicationHandle::new(
+    let (desktop, commands) = Core::new(
         LocalDeviceSnapshot {
             device_id: desktop_id.clone(),
             device_name: "Desktop".into(),

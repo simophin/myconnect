@@ -41,12 +41,12 @@ pub(crate) use upload::{
 };
 
 use crate::{
-    application::{
-        ApplicationError, ApplicationEvent, ApplicationService, Command,
-        DEFAULT_MAX_TRANSFER_BYTES, PairingSnapshot, Query, QueryResult, SettingsPatch,
-        SettingsSnapshot, StatusSnapshot, TransferSnapshot,
-    },
     config::ApiToken,
+    core::{
+        ApplicationService, Command, CoreError, CoreEvent, DEFAULT_MAX_TRANSFER_BYTES,
+        PairingSnapshot, Query, QueryResult, SettingsPatch, SettingsSnapshot, StatusSnapshot,
+        TransferSnapshot,
+    },
     device::DeviceSnapshot,
 };
 
@@ -579,7 +579,7 @@ async fn get_events(
     )
 }
 
-fn sse_event(event: &ApplicationEvent) -> Option<Event> {
+fn sse_event(event: &CoreEvent) -> Option<Event> {
     let data = serde_json::to_string(event).ok()?;
     Some(
         Event::default()
@@ -605,55 +605,55 @@ async fn not_found() -> ApiProblem {
     ApiProblem::not_found("not_found")
 }
 
-fn map_error(error: ApplicationError) -> ApiProblem {
+fn map_error(error: CoreError) -> ApiProblem {
     match error {
-        ApplicationError::CommandQueueFull => ApiProblem::new(
+        CoreError::CommandQueueFull => ApiProblem::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "Service unavailable",
             "command_queue_full",
         ),
-        ApplicationError::CommandQueueClosed => ApiProblem::new(
+        CoreError::CommandQueueClosed => ApiProblem::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "Service unavailable",
             "application_unavailable",
         ),
-        ApplicationError::UnknownDevice => ApiProblem::not_found("device_not_found"),
-        ApplicationError::InvalidDiscoveryAddress => ApiProblem::bad_request("invalid_address"),
-        ApplicationError::UnknownPairing => ApiProblem::not_found("pairing_not_found"),
-        ApplicationError::AlreadyPaired => {
+        CoreError::UnknownDevice => ApiProblem::not_found("device_not_found"),
+        CoreError::InvalidDiscoveryAddress => ApiProblem::bad_request("invalid_address"),
+        CoreError::UnknownPairing => ApiProblem::not_found("pairing_not_found"),
+        CoreError::AlreadyPaired => {
             ApiProblem::new(StatusCode::CONFLICT, "Conflict", "already_paired")
         }
-        ApplicationError::PairingInProgress => {
+        CoreError::PairingInProgress => {
             ApiProblem::new(StatusCode::CONFLICT, "Conflict", "pairing_in_progress")
         }
-        ApplicationError::DeviceNotConnected => {
+        CoreError::DeviceNotConnected => {
             ApiProblem::new(StatusCode::CONFLICT, "Conflict", "device_not_connected")
         }
-        ApplicationError::InvalidPairingDirection => ApiProblem::new(
+        CoreError::InvalidPairingDirection => ApiProblem::new(
             StatusCode::CONFLICT,
             "Conflict",
             "invalid_pairing_direction",
         ),
-        ApplicationError::InvalidPairingState | ApplicationError::InvalidTransition(_) => {
+        CoreError::InvalidPairingState | CoreError::InvalidTransition(_) => {
             ApiProblem::new(StatusCode::CONFLICT, "Conflict", "invalid_pairing_state")
         }
-        ApplicationError::NotPaired => {
+        CoreError::NotPaired => {
             ApiProblem::new(StatusCode::CONFLICT, "Conflict", "device_not_paired")
         }
-        ApplicationError::UnsupportedByPeer => {
+        CoreError::UnsupportedByPeer => {
             ApiProblem::new(StatusCode::CONFLICT, "Conflict", "unsupported_by_peer")
         }
-        ApplicationError::InvalidFileName => ApiProblem::bad_request("invalid_file_name"),
-        ApplicationError::TransferTooLarge { .. } => ApiProblem::new(
+        CoreError::InvalidFileName => ApiProblem::bad_request("invalid_file_name"),
+        CoreError::TransferTooLarge { .. } => ApiProblem::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "Payload too large",
             "transfer_too_large",
         ),
-        ApplicationError::UnknownTransfer => ApiProblem::not_found("transfer_not_found"),
-        ApplicationError::InvalidDeviceName => ApiProblem::bad_request("invalid_device_name"),
-        ApplicationError::InvalidDownloadDir => ApiProblem::bad_request("invalid_download_dir"),
-        ApplicationError::InvalidSettings => ApiProblem::bad_request("invalid_settings"),
-        ApplicationError::InvalidTransferState => {
+        CoreError::UnknownTransfer => ApiProblem::not_found("transfer_not_found"),
+        CoreError::InvalidDeviceName => ApiProblem::bad_request("invalid_device_name"),
+        CoreError::InvalidDownloadDir => ApiProblem::bad_request("invalid_download_dir"),
+        CoreError::InvalidSettings => ApiProblem::bad_request("invalid_settings"),
+        CoreError::InvalidTransferState => {
             ApiProblem::new(StatusCode::CONFLICT, "Conflict", "invalid_transfer_state")
         }
         _ => ApiProblem::internal(),
@@ -680,8 +680,8 @@ pub(crate) struct ApiProblem {
     body: ProblemBody,
 }
 
-impl From<ApplicationError> for ApiProblem {
-    fn from(error: ApplicationError) -> Self {
+impl From<CoreError> for ApiProblem {
+    fn from(error: CoreError) -> Self {
         map_error(error)
     }
 }

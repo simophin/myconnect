@@ -4,9 +4,9 @@
 //! future GUI can share the same behavior.
 
 pub mod api;
-pub mod application;
 pub mod client;
 pub mod config;
+pub mod core;
 pub mod device;
 pub mod plugins;
 pub mod protocol;

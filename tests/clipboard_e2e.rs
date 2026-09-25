@@ -10,8 +10,8 @@ use std::{
 };
 
 use myconnect::{
-    application::{ApplicationHandle, ApplicationService, Command, LocalDeviceSnapshot},
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
+    core::{ApplicationService, Command, Core, LocalDeviceSnapshot},
     device::DeviceReachability,
     plugins,
     plugins::clipboard::{
@@ -29,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 struct Peer {
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
-    application: ApplicationHandle,
+    application: Core,
     commands: mpsc::Receiver<Command>,
     _directory: tempfile::TempDir,
 }
@@ -40,7 +40,7 @@ fn peer(name: &str) -> Peer {
     let trust_store: Arc<dyn TrustStore + Send + Sync> =
         Arc::new(FilesystemTrustStore::new(directory.path()));
     let public_key_der = subject_public_key_info(identity.certificate_der()).unwrap();
-    let (application, commands) = ApplicationHandle::new(
+    let (application, commands) = Core::new(
         LocalDeviceSnapshot {
             device_id: identity.device_id().to_owned(),
             device_name: name.to_owned(),
@@ -52,7 +52,7 @@ fn peer(name: &str) -> Peer {
         32,
         128,
         identity.clone(),
-        myconnect::application::TransferConfig::new(directory.path().join("downloads")),
+        myconnect::core::TransferConfig::new(directory.path().join("downloads")),
     )
     .unwrap();
     Peer {
@@ -95,15 +95,11 @@ fn test_config(bind: SocketAddr, target: SocketAddr) -> LanConfig {
         )
 }
 
-async fn wait_for_reachability(
-    application: &ApplicationHandle,
-    device_id: &str,
-    expected: DeviceReachability,
-) {
+async fn wait_for_reachability(application: &Core, device_id: &str, expected: DeviceReachability) {
     timeout(Duration::from_secs(3), async {
         loop {
-            if let myconnect::application::QueryResult::Device(Some(device)) = application
-                .query(myconnect::application::Query::Device {
+            if let myconnect::core::QueryResult::Device(Some(device)) = application
+                .query(myconnect::core::Query::Device {
                     device_id: device_id.into(),
                 })
                 .unwrap()
@@ -118,11 +114,11 @@ async fn wait_for_reachability(
     .unwrap();
 }
 
-async fn wait_for_paired(application: &ApplicationHandle, device_id: &str, expected: bool) {
+async fn wait_for_paired(application: &Core, device_id: &str, expected: bool) {
     timeout(Duration::from_secs(3), async {
         loop {
-            if let myconnect::application::QueryResult::Device(Some(device)) = application
-                .query(myconnect::application::Query::Device {
+            if let myconnect::core::QueryResult::Device(Some(device)) = application
+                .query(myconnect::core::Query::Device {
                     device_id: device_id.into(),
                 })
                 .unwrap()
@@ -137,18 +133,15 @@ async fn wait_for_paired(application: &ApplicationHandle, device_id: &str, expec
     .unwrap();
 }
 
-fn clipboard(application: &ApplicationHandle) -> Arc<ClipboardPlugin> {
+fn clipboard(application: &Core) -> Arc<ClipboardPlugin> {
     application.plugin::<ClipboardPlugin>().unwrap()
 }
 
-fn set_clipboard(
-    application: &ApplicationHandle,
-    text: &str,
-) -> Result<ClipboardSnapshot, ClipboardSyncError> {
+fn set_clipboard(application: &Core, text: &str) -> Result<ClipboardSnapshot, ClipboardSyncError> {
     clipboard(application).set_text(&application.plugin_context(), text.into())
 }
 
-async fn wait_for_clipboard_text(application: &ApplicationHandle, expected_text: &str) {
+async fn wait_for_clipboard_text(application: &Core, expected_text: &str) {
     timeout(Duration::from_secs(3), async {
         loop {
             if clipboard(application).snapshot().text == expected_text {
@@ -166,13 +159,13 @@ async fn wait_for_clipboard_text(application: &ApplicationHandle, expected_text:
 /// from periodic discovery announcements, which must not be mistaken for a
 /// clipboard feedback loop.
 fn count_clipboard_events(
-    events: &mut tokio::sync::broadcast::Receiver<myconnect::application::ApplicationEvent>,
+    events: &mut tokio::sync::broadcast::Receiver<myconnect::core::CoreEvent>,
 ) -> usize {
     let mut count = 0;
     while let Ok(event) = events.try_recv() {
         if matches!(
             event.event,
-            myconnect::application::EventData::Plugin(ref event)
+            myconnect::core::EventData::Plugin(ref event)
                 if event.decode::<ClipboardSnapshot>().is_some()
         ) {
             count += 1;
@@ -181,13 +174,13 @@ fn count_clipboard_events(
     count
 }
 
-async fn pair(a: &ApplicationHandle, b: &ApplicationHandle, a_id: &str, b_id: &str) {
+async fn pair(a: &Core, b: &Core, a_id: &str, b_id: &str) {
     let pairing = a.start_outgoing_pairing(b_id).unwrap();
     let mut b_events = b.subscribe();
     let incoming = timeout(Duration::from_secs(2), async {
         loop {
             let event = b_events.recv().await.unwrap();
-            if let myconnect::application::EventData::PairingRequested(snapshot) = event.event {
+            if let myconnect::core::EventData::PairingRequested(snapshot) = event.event {
                 return snapshot;
             }
         }

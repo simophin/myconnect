@@ -24,7 +24,7 @@ use serde_json::Value;
 pub use packet::{BatteryBody, PACKET_TYPE};
 
 use crate::{
-    application::{Plugin, PluginContext},
+    core::{Plugin, PluginContext},
     device::DeviceSnapshot,
     protocol::Packet,
 };
@@ -124,8 +124,8 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::application::{
-        ApplicationHandle, ApplicationService, EventData, Query, QueryResult,
+    use crate::core::{
+        ApplicationService, Core, EventData, Query, QueryResult,
         testing::{handle, make_identity},
     };
 
@@ -140,7 +140,7 @@ mod tests {
         .unwrap()
     }
 
-    fn battery(handle: &ApplicationHandle, device_id: &str) -> Option<BatteryStatus> {
+    fn battery(handle: &Core, device_id: &str) -> Option<BatteryStatus> {
         match handle
             .query(Query::Device {
                 device_id: device_id.into(),
@@ -154,8 +154,8 @@ mod tests {
 
     /// A paired device, connected, with events subscribed after it was.
     fn connected() -> (
-        ApplicationHandle,
-        tokio::sync::broadcast::Receiver<crate::application::ApplicationEvent>,
+        Core,
+        tokio::sync::broadcast::Receiver<crate::core::CoreEvent>,
     ) {
         let (handle, _commands) = handle();
         handle
@@ -170,7 +170,7 @@ mod tests {
     }
 
     fn device_event(
-        events: &mut tokio::sync::broadcast::Receiver<crate::application::ApplicationEvent>,
+        events: &mut tokio::sync::broadcast::Receiver<crate::core::CoreEvent>,
     ) -> EventData {
         events.try_recv().unwrap().event
     }

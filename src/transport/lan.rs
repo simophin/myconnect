@@ -23,8 +23,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::{
-    application::{ApplicationHandle, Command},
     config::{LocalIdentity, TrustStore},
+    core::{Command, Core},
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
     transport::tls::{self, PeerPin, TlsMaterial},
 };
@@ -171,7 +171,7 @@ impl LanService {
     pub async fn start(
         config: LanConfig,
         local: LocalDeviceInfo,
-        application: ApplicationHandle,
+        application: Core,
         commands: mpsc::Receiver<Command>,
         identity: Arc<LocalIdentity>,
         trust_store: Arc<dyn TrustStore + Send + Sync>,
@@ -258,7 +258,7 @@ impl Drop for LanService {
 async fn run(
     config: LanConfig,
     mut local: LocalDeviceInfo,
-    application: ApplicationHandle,
+    application: Core,
     mut commands: mpsc::Receiver<Command>,
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
@@ -389,7 +389,7 @@ fn spawn_outgoing(
     reservation: Reservation,
     permit: OwnedSemaphorePermit,
     local: LocalDeviceInfo,
-    application: ApplicationHandle,
+    application: Core,
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     announcement: Arc<Vec<u8>>,
@@ -430,7 +430,7 @@ fn spawn_incoming(
     stream: TcpStream,
     permit: OwnedSemaphorePermit,
     local: LocalDeviceInfo,
-    application: ApplicationHandle,
+    application: Core,
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     announcement: Arc<Vec<u8>>,
@@ -478,7 +478,7 @@ async fn handle_connection(
     discovered: Option<IdentityBody>,
     reservation: Reservation,
     local: LocalDeviceInfo,
-    application: ApplicationHandle,
+    application: Core,
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     announcement: Arc<Vec<u8>>,

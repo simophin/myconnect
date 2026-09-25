@@ -6,7 +6,7 @@ use axum::{
 };
 
 use super::ring_device;
-use crate::{api::ApiProblem, application::PluginContext};
+use crate::{api::ApiProblem, core::PluginContext};
 
 pub(super) fn routes(ctx: PluginContext) -> Router {
     Router::new()

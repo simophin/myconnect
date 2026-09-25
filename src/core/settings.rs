@@ -11,7 +11,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
-use super::{ApplicationError, plugin::SettingsSection};
+use super::{CoreError, plugin::SettingsSection};
 use crate::{
     config::{SettingsFile, StoredSettings},
     protocol::is_valid_device_name,
@@ -165,10 +165,7 @@ impl Settings {
 
     /// Validate and apply `patch`, persisting the result before it takes
     /// effect. On any error nothing changes.
-    pub(crate) fn update(
-        &mut self,
-        patch: SettingsPatch,
-    ) -> Result<SettingsSnapshot, ApplicationError> {
+    pub(crate) fn update(&mut self, patch: SettingsPatch) -> Result<SettingsSnapshot, CoreError> {
         let mut stored = self.stored.clone();
         let mut overrides = self.overrides.clone();
 
@@ -178,7 +175,7 @@ impl Settings {
                 .as_deref()
                 .is_some_and(|name| !is_valid_device_name(name))
             {
-                return Err(ApplicationError::InvalidDeviceName);
+                return Err(CoreError::InvalidDeviceName);
             }
             stored.device_name = value;
             overrides.device_name = None;
@@ -188,7 +185,7 @@ impl Settings {
                 // Create it now, so an unusable directory is reported here
                 // rather than as a failed transfer later.
                 if !directory.is_absolute() || std::fs::create_dir_all(directory).is_err() {
-                    return Err(ApplicationError::InvalidDownloadDir);
+                    return Err(CoreError::InvalidDownloadDir);
                 }
             }
             stored.download_dir = value;
@@ -203,7 +200,7 @@ impl Settings {
                 .sections
                 .iter()
                 .find(|section| section.id == id)
-                .ok_or(ApplicationError::InvalidSettings)?;
+                .ok_or(CoreError::InvalidSettings)?;
             let mut fields = stored.plugins.remove(&id).unwrap_or_default();
             match change {
                 Value::Null => fields.clear(),
@@ -216,10 +213,10 @@ impl Settings {
                         }
                     }
                 }
-                _ => return Err(ApplicationError::InvalidSettings),
+                _ => return Err(CoreError::InvalidSettings),
             }
             if section.resolve(&fields).is_none() {
-                return Err(ApplicationError::InvalidSettings);
+                return Err(CoreError::InvalidSettings);
             }
             if !fields.is_empty() {
                 stored.plugins.insert(id, fields);
@@ -229,7 +226,7 @@ impl Settings {
         if stored != self.stored
             && let Some(file) = &self.file
         {
-            file.save(&stored).map_err(ApplicationError::Settings)?;
+            file.save(&stored).map_err(CoreError::Settings)?;
         }
         self.stored = stored;
         self.overrides = overrides;

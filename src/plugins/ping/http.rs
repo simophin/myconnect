@@ -7,7 +7,7 @@ use axum::{
 use serde::Deserialize;
 
 use super::send_ping;
-use crate::{api::ApiProblem, application::PluginContext};
+use crate::{api::ApiProblem, core::PluginContext};
 
 pub(super) fn routes(ctx: PluginContext) -> Router {
     Router::new()

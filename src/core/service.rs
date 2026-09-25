@@ -15,9 +15,9 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::{
-    ApplicationEvent, Command, EventBus, EventBusError, LocalDeviceSnapshot, OperationErrorCode,
-    Pairing, PairingDirection, PairingSnapshot, PairingStatus, PairingTransitionError, Query,
-    QueryResult, StatusSnapshot, TransferSnapshot,
+    Command, CoreEvent, EventBus, EventBusError, LocalDeviceSnapshot, OperationErrorCode, Pairing,
+    PairingDirection, PairingSnapshot, PairingStatus, PairingTransitionError, Query, QueryResult,
+    StatusSnapshot, TransferSnapshot,
     payload::PayloadPeer,
     plugin::{Plugin, PluginContext, PluginRegistry},
     settings::{Settings, SettingsDefaults, SettingsPatch, SettingsSnapshot},
@@ -42,20 +42,20 @@ pub const PAIRING_TIMEOUT: Duration = Duration::from_secs(30);
 pub const PAIRING_TIMESTAMP_TOLERANCE_SECS: u64 = 1800;
 /// Core interface consumed by the local API and future frontends.
 pub trait ApplicationService: Send + Sync {
-    fn query(&self, query: Query) -> Result<QueryResult, ApplicationError>;
-    fn command(&self, command: Command) -> Result<(), ApplicationError>;
-    fn subscribe(&self) -> broadcast::Receiver<ApplicationEvent>;
-    fn start_outgoing_pairing(&self, device_id: &str) -> Result<PairingSnapshot, ApplicationError>;
-    fn accept_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, ApplicationError>;
-    fn cancel_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, ApplicationError>;
-    fn forget_device(&self, device_id: &str) -> Result<(), ApplicationError>;
-    fn announce_to(&self, address: Ipv4Addr) -> Result<(), ApplicationError>;
+    fn query(&self, query: Query) -> Result<QueryResult, CoreError>;
+    fn command(&self, command: Command) -> Result<(), CoreError>;
+    fn subscribe(&self) -> broadcast::Receiver<CoreEvent>;
+    fn start_outgoing_pairing(&self, device_id: &str) -> Result<PairingSnapshot, CoreError>;
+    fn accept_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, CoreError>;
+    fn cancel_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, CoreError>;
+    fn forget_device(&self, device_id: &str) -> Result<(), CoreError>;
+    fn announce_to(&self, address: Ipv4Addr) -> Result<(), CoreError>;
     /// The HTTP routes of every plugin, merged.
     fn plugin_routes(&self) -> axum::Router;
     /// The streaming (upload) routes of every plugin, merged.
     fn plugin_streaming_routes(&self) -> axum::Router;
-    fn update_settings(&self, patch: SettingsPatch) -> Result<SettingsSnapshot, ApplicationError>;
-    fn cancel_transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, ApplicationError>;
+    fn update_settings(&self, patch: SettingsPatch) -> Result<SettingsSnapshot, CoreError>;
+    fn cancel_transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, CoreError>;
 }
 
 /// A live, TLS-authenticated control-channel connection to a peer, as
@@ -84,16 +84,17 @@ struct PairingRuntime {
     timer: Option<JoinHandle<()>>,
 }
 
-struct ApplicationState {
+struct CoreState {
     devices: DeviceRegistry,
     connections: HashMap<String, Connection>,
     pairings: BTreeMap<Uuid, PairingRuntime>,
     pairing_by_device: HashMap<String, Uuid>,
 }
 
-/// Cloneable application facade backed by bounded commands and snapshots.
+/// The core: devices, connections, pairing, transfers, settings and events,
+/// and the plugins built on them. Cheap to clone.
 #[derive(Clone)]
-pub struct ApplicationHandle {
+pub struct Core {
     started_at: Instant,
     local_device_id: Arc<str>,
     /// Locked before, never while holding, `state`.
@@ -105,14 +106,14 @@ pub struct ApplicationHandle {
     local_public_key_der: Arc<Vec<u8>>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     identity: Arc<LocalIdentity>,
-    state: Arc<RwLock<ApplicationState>>,
+    state: Arc<RwLock<CoreState>>,
     commands: mpsc::Sender<Command>,
     events: EventBus,
     transfers: Transfers,
     plugins: Arc<PluginRegistry>,
 }
 
-impl ApplicationHandle {
+impl Core {
     /// A core running `plugins`, normally [`plugins::builtin`].
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -125,9 +126,9 @@ impl ApplicationHandle {
         event_capacity: usize,
         identity: Arc<LocalIdentity>,
         transfer_config: TransferConfig,
-    ) -> Result<(Self, mpsc::Receiver<Command>), ApplicationError> {
+    ) -> Result<(Self, mpsc::Receiver<Command>), CoreError> {
         if command_capacity == 0 {
-            return Err(ApplicationError::InvalidCommandCapacity);
+            return Err(CoreError::InvalidCommandCapacity);
         }
         let (commands, receiver) = mpsc::channel(command_capacity);
         let events = EventBus::new(event_capacity)?;
@@ -150,7 +151,7 @@ impl ApplicationHandle {
                 local_public_key_der: Arc::new(local_public_key_der),
                 trust_store,
                 identity,
-                state: Arc::new(RwLock::new(ApplicationState {
+                state: Arc::new(RwLock::new(CoreState {
                     devices,
                     connections: HashMap::new(),
                     pairings: BTreeMap::new(),
@@ -176,10 +177,10 @@ impl ApplicationHandle {
         self.plugins.get::<T>()
     }
 
-    pub fn replace_devices(&self, devices: DeviceRegistry) -> Result<(), ApplicationError> {
+    pub fn replace_devices(&self, devices: DeviceRegistry) -> Result<(), CoreError> {
         self.state
             .write()
-            .map_err(|_| ApplicationError::StateUnavailable)?
+            .map_err(|_| CoreError::StateUnavailable)?
             .devices = devices;
         Ok(())
     }
@@ -200,19 +201,19 @@ impl ApplicationHandle {
     }
 
     /// Payload-connection access to a paired, connected device.
-    pub(super) fn payload_peer(&self, device_id: &str) -> Result<PayloadPeer, ApplicationError> {
+    pub(super) fn payload_peer(&self, device_id: &str) -> Result<PayloadPeer, CoreError> {
         let state = self.read_state()?;
         let device = state
             .devices
             .get(device_id)
-            .ok_or(ApplicationError::UnknownDevice)?;
+            .ok_or(CoreError::UnknownDevice)?;
         if !device.paired {
-            return Err(ApplicationError::NotPaired);
+            return Err(CoreError::NotPaired);
         }
         let connection = state
             .connections
             .get(device_id)
-            .ok_or(ApplicationError::DeviceNotConnected)?;
+            .ok_or(CoreError::DeviceNotConnected)?;
         let config = self.transfers.config();
         Ok(PayloadPeer::new(
             device_id.to_owned(),
@@ -249,11 +250,11 @@ impl ApplicationHandle {
         self.apply_settings(&current.snapshot());
     }
 
-    pub fn settings(&self) -> Result<SettingsSnapshot, ApplicationError> {
+    pub fn settings(&self) -> Result<SettingsSnapshot, CoreError> {
         Ok(self
             .settings
             .lock()
-            .map_err(|_| ApplicationError::StateUnavailable)?
+            .map_err(|_| CoreError::StateUnavailable)?
             .snapshot())
     }
 
@@ -265,16 +266,13 @@ impl ApplicationHandle {
     /// Validate, persist, and apply a settings change, then publish
     /// `settings.changed` if anything changed. A new device name is
     /// re-announced to the network by the LAN transport.
-    pub fn update_settings(
-        &self,
-        patch: SettingsPatch,
-    ) -> Result<SettingsSnapshot, ApplicationError> {
+    pub fn update_settings(&self, patch: SettingsPatch) -> Result<SettingsSnapshot, CoreError> {
         // Holding the lock across the file write keeps concurrent updates
         // from saving out of order.
         let mut settings = self
             .settings
             .lock()
-            .map_err(|_| ApplicationError::StateUnavailable)?;
+            .map_err(|_| CoreError::StateUnavailable)?;
         let before = settings.snapshot();
         let after = settings.update(patch)?;
         if after != before {
@@ -302,17 +300,17 @@ impl ApplicationHandle {
         identity: &IdentityBody,
         paired: bool,
         observed_at: u64,
-    ) -> Result<DeviceSnapshot, ApplicationError> {
+    ) -> Result<DeviceSnapshot, CoreError> {
         let (previous, snapshot) = {
             let mut state = self
                 .state
                 .write()
-                .map_err(|_| ApplicationError::StateUnavailable)?;
+                .map_err(|_| CoreError::StateUnavailable)?;
             let previous = state.devices.get(&identity.device_id);
             let snapshot = state
                 .devices
                 .discover(identity, paired, observed_at)
-                .map_err(|_| ApplicationError::StateUnavailable)?;
+                .map_err(|_| CoreError::StateUnavailable)?;
             (previous, snapshot)
         };
         let snapshot = self.with_plugin_state(snapshot);
@@ -329,31 +327,28 @@ impl ApplicationHandle {
         &self,
         device_id: &str,
         observed_at: u64,
-    ) -> Result<DeviceSnapshot, ApplicationError> {
+    ) -> Result<DeviceSnapshot, CoreError> {
         let snapshot = self
             .state
             .write()
-            .map_err(|_| ApplicationError::StateUnavailable)?
+            .map_err(|_| CoreError::StateUnavailable)?
             .devices
             .mark_connected(device_id, observed_at)
-            .map_err(|_| ApplicationError::StateUnavailable)?;
+            .map_err(|_| CoreError::StateUnavailable)?;
         let snapshot = self.with_plugin_state(snapshot);
         self.events
             .publish(super::EventData::DeviceConnected(snapshot.clone()))?;
         Ok(snapshot)
     }
 
-    pub fn mark_device_disconnected(
-        &self,
-        device_id: &str,
-    ) -> Result<DeviceSnapshot, ApplicationError> {
+    pub fn mark_device_disconnected(&self, device_id: &str) -> Result<DeviceSnapshot, CoreError> {
         let snapshot = self
             .state
             .write()
-            .map_err(|_| ApplicationError::StateUnavailable)?
+            .map_err(|_| CoreError::StateUnavailable)?
             .devices
             .mark_disconnected(device_id)
-            .map_err(|_| ApplicationError::StateUnavailable)?;
+            .map_err(|_| CoreError::StateUnavailable)?;
         let snapshot = self.with_plugin_state(snapshot);
         self.events
             .publish(super::EventData::DeviceDisconnected(snapshot.clone()))?;
@@ -373,12 +368,12 @@ impl ApplicationHandle {
         packets: mpsc::Sender<Packet>,
         cancellation: CancellationToken,
         observed_at: u64,
-    ) -> Result<DeviceSnapshot, ApplicationError> {
+    ) -> Result<DeviceSnapshot, CoreError> {
         {
             let mut state = self
                 .state
                 .write()
-                .map_err(|_| ApplicationError::StateUnavailable)?;
+                .map_err(|_| CoreError::StateUnavailable)?;
             state.connections.insert(
                 device_id.to_owned(),
                 Connection {
@@ -455,12 +450,12 @@ impl ApplicationHandle {
     }
 
     /// Remove trust, disconnect, and forget a device entirely.
-    pub fn forget_device(&self, device_id: &str) -> Result<(), ApplicationError> {
+    pub fn forget_device(&self, device_id: &str) -> Result<(), CoreError> {
         let (forgotten, cancellation, failed_pairing) = {
             let mut state = self
                 .state
                 .write()
-                .map_err(|_| ApplicationError::StateUnavailable)?;
+                .map_err(|_| CoreError::StateUnavailable)?;
             let connection = state.connections.get(device_id);
             let cancellation = connection.map(|c| c.cancellation.clone());
             // Tell the peer before the connection closes, so it drops its
@@ -483,11 +478,11 @@ impl ApplicationHandle {
             (forgotten, cancellation, failed_pairing)
         };
         let Some(forgotten) = forgotten else {
-            return Err(ApplicationError::UnknownDevice);
+            return Err(CoreError::UnknownDevice);
         };
         self.trust_store
             .remove(device_id)
-            .map_err(ApplicationError::Trust)?;
+            .map_err(CoreError::Trust)?;
         let ctx = self.plugin_context();
         if let Some(cancellation) = cancellation {
             cancellation.cancel();
@@ -506,34 +501,31 @@ impl ApplicationHandle {
     }
 
     /// Start an outgoing pairing session with a connected device.
-    pub fn start_outgoing_pairing(
-        &self,
-        device_id: &str,
-    ) -> Result<PairingSnapshot, ApplicationError> {
+    pub fn start_outgoing_pairing(&self, device_id: &str) -> Result<PairingSnapshot, CoreError> {
         let timestamp = unix_seconds();
         let now = unix_millis();
         let (pairing_id, sender, packet) = {
             let mut state = self
                 .state
                 .write()
-                .map_err(|_| ApplicationError::StateUnavailable)?;
+                .map_err(|_| CoreError::StateUnavailable)?;
             let device = state
                 .devices
                 .get(device_id)
-                .ok_or(ApplicationError::UnknownDevice)?;
+                .ok_or(CoreError::UnknownDevice)?;
             if device.paired {
-                return Err(ApplicationError::AlreadyPaired);
+                return Err(CoreError::AlreadyPaired);
             }
             if state.pairing_by_device.contains_key(device_id) {
-                return Err(ApplicationError::PairingInProgress);
+                return Err(CoreError::PairingInProgress);
             }
             let connection = state
                 .connections
                 .get(device_id)
                 .cloned()
-                .ok_or(ApplicationError::DeviceNotConnected)?;
+                .ok_or(CoreError::DeviceNotConnected)?;
             let peer_spki = subject_public_key_info(&connection.certificate_der)
-                .map_err(|_| ApplicationError::InvalidPeerCertificate)?;
+                .map_err(|_| CoreError::InvalidPeerCertificate)?;
             let code = verification_code(&self.local_public_key_der, &peer_spki, timestamp);
 
             let pairing_id = Uuid::new_v4();
@@ -556,7 +548,7 @@ impl ApplicationHandle {
             state
                 .devices
                 .set_pairing(device_id, true)
-                .map_err(|_| ApplicationError::StateUnavailable)?;
+                .map_err(|_| CoreError::StateUnavailable)?;
             state
                 .pairing_by_device
                 .insert(device_id.to_owned(), pairing_id);
@@ -566,7 +558,7 @@ impl ApplicationHandle {
                 extra: Default::default(),
             };
             let packet = Packet::from_body(now, "kdeconnect.pair", &body)
-                .map_err(|_| ApplicationError::Internal)?;
+                .map_err(|_| CoreError::Internal)?;
             state.pairings.insert(
                 pairing_id,
                 PairingRuntime {
@@ -591,28 +583,25 @@ impl ApplicationHandle {
     /// Confirm a locally displayed verification code for an incoming
     /// pairing request. Trust is pinned before the pairing is marked
     /// accepted, and never before this explicit local confirmation.
-    pub fn accept_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, ApplicationError> {
+    pub fn accept_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, CoreError> {
         let (device_id, connection) = {
-            let state = self
-                .state
-                .read()
-                .map_err(|_| ApplicationError::StateUnavailable)?;
+            let state = self.state.read().map_err(|_| CoreError::StateUnavailable)?;
             let runtime = state
                 .pairings
                 .get(&pairing_id)
-                .ok_or(ApplicationError::UnknownPairing)?;
+                .ok_or(CoreError::UnknownPairing)?;
             let snapshot = runtime.pairing.snapshot();
             if snapshot.direction != PairingDirection::Incoming {
-                return Err(ApplicationError::InvalidPairingDirection);
+                return Err(CoreError::InvalidPairingDirection);
             }
             if snapshot.status != PairingStatus::AwaitingConfirmation {
-                return Err(ApplicationError::InvalidPairingState);
+                return Err(CoreError::InvalidPairingState);
             }
             let connection = state
                 .connections
                 .get(&snapshot.device_id)
                 .cloned()
-                .ok_or(ApplicationError::DeviceNotConnected)?;
+                .ok_or(CoreError::DeviceNotConnected)?;
             (snapshot.device_id, connection)
         };
 
@@ -623,21 +612,21 @@ impl ApplicationHandle {
                 last_trusted_protocol_version: connection.protocol_version,
                 last_identity: self.known_identity(&device_id),
             })
-            .map_err(ApplicationError::Trust)?;
+            .map_err(CoreError::Trust)?;
 
         let snapshot = {
             let mut state = self
                 .state
                 .write()
-                .map_err(|_| ApplicationError::StateUnavailable)?;
+                .map_err(|_| CoreError::StateUnavailable)?;
             let runtime = state
                 .pairings
                 .get_mut(&pairing_id)
-                .ok_or(ApplicationError::UnknownPairing)?;
+                .ok_or(CoreError::UnknownPairing)?;
             let snapshot = runtime
                 .pairing
                 .transition(PairingStatus::Accepted, None)
-                .map_err(ApplicationError::InvalidTransition)?;
+                .map_err(CoreError::InvalidTransition)?;
             if let Some(timer) = runtime.timer.take() {
                 timer.abort();
             }
@@ -663,28 +652,28 @@ impl ApplicationHandle {
     }
 
     /// Reject an incoming pairing or cancel an outgoing one.
-    pub fn cancel_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, ApplicationError> {
+    pub fn cancel_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, CoreError> {
         let (_device_id, sender, snapshot) = {
             let mut state = self
                 .state
                 .write()
-                .map_err(|_| ApplicationError::StateUnavailable)?;
+                .map_err(|_| CoreError::StateUnavailable)?;
             let runtime = state
                 .pairings
                 .get_mut(&pairing_id)
-                .ok_or(ApplicationError::UnknownPairing)?;
+                .ok_or(CoreError::UnknownPairing)?;
             let status = runtime.pairing.snapshot().status;
             if !matches!(
                 status,
                 PairingStatus::Requested | PairingStatus::AwaitingConfirmation
             ) {
-                return Err(ApplicationError::InvalidPairingState);
+                return Err(CoreError::InvalidPairingState);
             }
             let device_id = runtime.pairing.snapshot().device_id;
             let snapshot = runtime
                 .pairing
                 .transition(PairingStatus::Rejected, None)
-                .map_err(ApplicationError::InvalidTransition)?;
+                .map_err(CoreError::InvalidTransition)?;
             if let Some(timer) = runtime.timer.take() {
                 timer.abort();
             }
@@ -747,9 +736,9 @@ impl ApplicationHandle {
     /// over TCP, as it would after a broadcast. Only unicast addresses are
     /// accepted, so this can't be used to spray the identity at a
     /// broadcast or multicast group.
-    pub fn announce_to(&self, address: Ipv4Addr) -> Result<(), ApplicationError> {
+    pub fn announce_to(&self, address: Ipv4Addr) -> Result<(), CoreError> {
         if address.is_unspecified() || address.is_broadcast() || address.is_multicast() {
-            return Err(ApplicationError::InvalidDiscoveryAddress);
+            return Err(CoreError::InvalidDiscoveryAddress);
         }
         self.command(Command::AnnounceTo { address })
     }
@@ -757,16 +746,12 @@ impl ApplicationHandle {
     /// Queue `packet` to a paired, connected device. Refused, with a typed
     /// error, unless the device has advertised the packet's type in its
     /// `incomingCapabilities`.
-    pub(super) fn send_to_capable(
-        &self,
-        device_id: &str,
-        packet: Packet,
-    ) -> Result<(), ApplicationError> {
+    pub(super) fn send_to_capable(&self, device_id: &str, packet: Packet) -> Result<(), CoreError> {
         let connection = self.capable_connection(device_id, &packet.packet_type)?;
         connection
             .packets
             .try_send(packet)
-            .map_err(|_| ApplicationError::DeviceNotConnected)
+            .map_err(|_| CoreError::DeviceNotConnected)
     }
 
     /// Queue `packet` to every paired, connected device that has advertised
@@ -794,7 +779,7 @@ impl ApplicationHandle {
         &self,
         device_id: &str,
         packet_type: &str,
-    ) -> Result<(), ApplicationError> {
+    ) -> Result<(), CoreError> {
         self.capable_connection(device_id, packet_type).map(|_| ())
     }
 
@@ -804,27 +789,27 @@ impl ApplicationHandle {
         &self,
         device_id: &str,
         capability: &str,
-    ) -> Result<Connection, ApplicationError> {
+    ) -> Result<Connection, CoreError> {
         let state = self.read_state()?;
         let device = state
             .devices
             .get(device_id)
-            .ok_or(ApplicationError::UnknownDevice)?;
+            .ok_or(CoreError::UnknownDevice)?;
         if !device.paired {
-            return Err(ApplicationError::NotPaired);
+            return Err(CoreError::NotPaired);
         }
         if !device
             .incoming_capabilities
             .iter()
             .any(|advertised| advertised == capability)
         {
-            return Err(ApplicationError::UnsupportedByPeer);
+            return Err(CoreError::UnsupportedByPeer);
         }
         state
             .connections
             .get(device_id)
             .cloned()
-            .ok_or(ApplicationError::DeviceNotConnected)
+            .ok_or(CoreError::DeviceNotConnected)
     }
 
     fn handle_pair_body(&self, device_id: &str, body: PairingBody, received_at: i64) {
@@ -1082,14 +1067,14 @@ impl ApplicationHandle {
         })
     }
 
-    fn pairing_snapshot(&self, pairing_id: Uuid) -> Result<PairingSnapshot, ApplicationError> {
+    fn pairing_snapshot(&self, pairing_id: Uuid) -> Result<PairingSnapshot, CoreError> {
         self.state
             .read()
-            .map_err(|_| ApplicationError::StateUnavailable)?
+            .map_err(|_| CoreError::StateUnavailable)?
             .pairings
             .get(&pairing_id)
             .map(|runtime| runtime.pairing.snapshot())
-            .ok_or(ApplicationError::UnknownPairing)
+            .ok_or(CoreError::UnknownPairing)
     }
 
     fn schedule_pairing_timeout(&self, pairing_id: Uuid) {
@@ -1196,7 +1181,7 @@ impl ApplicationHandle {
     /// started it. Returns the transfer's current snapshot; its task tears
     /// down its socket and partial file and marks it `cancelled` once it
     /// notices.
-    pub fn cancel_transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, ApplicationError> {
+    pub fn cancel_transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, CoreError> {
         self.transfers.cancel(transfer_id)
     }
 
@@ -1212,17 +1197,13 @@ impl ApplicationHandle {
         }
     }
 
-    fn read_state(
-        &self,
-    ) -> Result<std::sync::RwLockReadGuard<'_, ApplicationState>, ApplicationError> {
-        self.state
-            .read()
-            .map_err(|_| ApplicationError::StateUnavailable)
+    fn read_state(&self) -> Result<std::sync::RwLockReadGuard<'_, CoreState>, CoreError> {
+        self.state.read().map_err(|_| CoreError::StateUnavailable)
     }
 }
 
 fn fail_active_pairing(
-    state: &mut ApplicationState,
+    state: &mut CoreState,
     device_id: &str,
     error_code: OperationErrorCode,
 ) -> Option<PairingSnapshot> {
@@ -1239,8 +1220,8 @@ fn fail_active_pairing(
     Some(snapshot)
 }
 
-impl ApplicationService for ApplicationHandle {
-    fn query(&self, query: Query) -> Result<QueryResult, ApplicationError> {
+impl ApplicationService for Core {
+    fn query(&self, query: Query) -> Result<QueryResult, CoreError> {
         match query {
             Query::Status => return Ok(QueryResult::Status(self.status())),
             Query::Settings => return Ok(QueryResult::Settings(self.settings()?)),
@@ -1293,37 +1274,37 @@ impl ApplicationService for ApplicationHandle {
         })
     }
 
-    fn command(&self, command: Command) -> Result<(), ApplicationError> {
+    fn command(&self, command: Command) -> Result<(), CoreError> {
         self.commands
             .try_send(command)
             .map_err(|error| match error {
-                mpsc::error::TrySendError::Full(_) => ApplicationError::CommandQueueFull,
-                mpsc::error::TrySendError::Closed(_) => ApplicationError::CommandQueueClosed,
+                mpsc::error::TrySendError::Full(_) => CoreError::CommandQueueFull,
+                mpsc::error::TrySendError::Closed(_) => CoreError::CommandQueueClosed,
             })
     }
 
-    fn subscribe(&self) -> broadcast::Receiver<ApplicationEvent> {
+    fn subscribe(&self) -> broadcast::Receiver<CoreEvent> {
         self.events.subscribe()
     }
 
-    fn start_outgoing_pairing(&self, device_id: &str) -> Result<PairingSnapshot, ApplicationError> {
-        ApplicationHandle::start_outgoing_pairing(self, device_id)
+    fn start_outgoing_pairing(&self, device_id: &str) -> Result<PairingSnapshot, CoreError> {
+        Core::start_outgoing_pairing(self, device_id)
     }
 
-    fn accept_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, ApplicationError> {
-        ApplicationHandle::accept_pairing(self, pairing_id)
+    fn accept_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, CoreError> {
+        Core::accept_pairing(self, pairing_id)
     }
 
-    fn cancel_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, ApplicationError> {
-        ApplicationHandle::cancel_pairing(self, pairing_id)
+    fn cancel_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, CoreError> {
+        Core::cancel_pairing(self, pairing_id)
     }
 
-    fn announce_to(&self, address: Ipv4Addr) -> Result<(), ApplicationError> {
-        ApplicationHandle::announce_to(self, address)
+    fn announce_to(&self, address: Ipv4Addr) -> Result<(), CoreError> {
+        Core::announce_to(self, address)
     }
 
-    fn forget_device(&self, device_id: &str) -> Result<(), ApplicationError> {
-        ApplicationHandle::forget_device(self, device_id)
+    fn forget_device(&self, device_id: &str) -> Result<(), CoreError> {
+        Core::forget_device(self, device_id)
     }
 
     fn plugin_routes(&self) -> axum::Router {
@@ -1334,12 +1315,12 @@ impl ApplicationService for ApplicationHandle {
         self.plugins.streaming_routes(&self.plugin_context())
     }
 
-    fn update_settings(&self, patch: SettingsPatch) -> Result<SettingsSnapshot, ApplicationError> {
-        ApplicationHandle::update_settings(self, patch)
+    fn update_settings(&self, patch: SettingsPatch) -> Result<SettingsSnapshot, CoreError> {
+        Core::update_settings(self, patch)
     }
 
-    fn cancel_transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, ApplicationError> {
-        ApplicationHandle::cancel_transfer(self, transfer_id)
+    fn cancel_transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, CoreError> {
+        Core::cancel_transfer(self, transfer_id)
     }
 }
 
@@ -1407,18 +1388,18 @@ fn unix_seconds() -> i64 {
 }
 
 #[derive(Debug, Error)]
-pub enum ApplicationError {
+pub enum CoreError {
     #[error("command queue capacity must be greater than zero")]
     InvalidCommandCapacity,
-    #[error("application command queue is full")]
+    #[error("core command queue is full")]
     CommandQueueFull,
-    #[error("application command queue is closed")]
+    #[error("core command queue is closed")]
     CommandQueueClosed,
-    #[error("application state is unavailable")]
+    #[error("core state is unavailable")]
     StateUnavailable,
-    #[error("application event bus could not be created")]
+    #[error("core event bus could not be created")]
     EventBus(#[from] EventBusError),
-    #[error("application returned an unexpected query result")]
+    #[error("core returned an unexpected query result")]
     UnexpectedQueryResult,
     #[error("unknown device")]
     UnknownDevice,
@@ -1462,14 +1443,14 @@ pub enum ApplicationError {
     InvalidSettings,
     #[error("transfer is not in a state that allows this operation")]
     InvalidTransferState,
-    #[error("internal application error")]
+    #[error("internal core error")]
     Internal,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::testing::{MemoryTrustStore, handle, handle_with_trust, make_identity};
+    use crate::core::testing::{MemoryTrustStore, handle, handle_with_trust, make_identity};
 
     #[test]
     fn status_and_empty_snapshots_are_queryable() {
@@ -1493,7 +1474,7 @@ mod tests {
         handle.command(Command::AnnounceDiscovery).unwrap();
         assert!(matches!(
             handle.command(Command::AnnounceDiscovery),
-            Err(ApplicationError::CommandQueueFull)
+            Err(CoreError::CommandQueueFull)
         ));
         assert_eq!(commands.recv().await, Some(Command::AnnounceDiscovery));
     }
@@ -1508,7 +1489,7 @@ mod tests {
         ] {
             assert!(matches!(
                 handle.announce_to(address),
-                Err(ApplicationError::InvalidDiscoveryAddress)
+                Err(CoreError::InvalidDiscoveryAddress)
             ));
         }
         let address = Ipv4Addr::new(192, 168, 1, 20);
@@ -1521,7 +1502,7 @@ mod tests {
         let (handle, _commands) = handle();
         assert!(matches!(
             handle.start_outgoing_pairing("missing"),
-            Err(ApplicationError::UnknownDevice)
+            Err(CoreError::UnknownDevice)
         ));
     }
 

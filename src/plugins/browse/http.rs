@@ -20,7 +20,7 @@ use crate::{
         ApiProblem, UploadIdleTimeout, declared_size, field_text, forward_upload, next_field,
         skip_field,
     },
-    application::{PluginContext, TransferSnapshot},
+    core::{PluginContext, TransferSnapshot},
 };
 
 #[derive(Clone)]

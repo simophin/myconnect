@@ -36,7 +36,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::{
-    ApplicationError, EventBus, EventData, OperationErrorCode, Transfer, TransferDirection,
+    CoreError, EventBus, EventData, OperationErrorCode, Transfer, TransferDirection,
     TransferSnapshot, TransferStatus, settings::Settings,
 };
 use crate::{
@@ -288,15 +288,15 @@ impl Transfers {
     /// Ask a transfer to stop. Returns its snapshot as it is now: the
     /// transfer's task tears down its socket and partial file and marks it
     /// `cancelled` once it notices.
-    pub fn cancel(&self, id: Uuid) -> Result<TransferSnapshot, ApplicationError> {
+    pub fn cancel(&self, id: Uuid) -> Result<TransferSnapshot, CoreError> {
         let state = self.inner.state();
         let snapshot = state
             .records
             .get(&id)
             .map(Transfer::snapshot)
-            .ok_or(ApplicationError::UnknownTransfer)?;
+            .ok_or(CoreError::UnknownTransfer)?;
         if is_terminal(snapshot.status) {
-            return Err(ApplicationError::InvalidTransferState);
+            return Err(CoreError::InvalidTransferState);
         }
         if let Some(active) = state.active.get(&id) {
             active.cancellation.cancel();
@@ -631,7 +631,7 @@ pub enum FileNameError {
 mod tests {
     use super::*;
     use crate::{
-        application::settings::SettingsDefaults,
+        core::settings::SettingsDefaults,
         device::{DeviceReachability, DeviceSnapshot},
         protocol::DeviceType,
     };
@@ -721,11 +721,11 @@ mod tests {
         ));
         assert!(matches!(
             transfers.cancel(id),
-            Err(ApplicationError::InvalidTransferState)
+            Err(CoreError::InvalidTransferState)
         ));
         assert!(matches!(
             transfers.cancel(Uuid::nil()),
-            Err(ApplicationError::UnknownTransfer)
+            Err(CoreError::UnknownTransfer)
         ));
     }
 

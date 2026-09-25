@@ -2,10 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use myconnect::{
     api::{ApiServer, ApiServerConfig},
-    application::{
-        ApplicationHandle, Command, EventData, LocalDeviceSnapshot, PluginEvent, TransferConfig,
-    },
     config::{ApiToken, FilesystemTrustStore, LocalIdentity},
+    core::{Command, Core, EventData, LocalDeviceSnapshot, PluginEvent, TransferConfig},
     device::DeviceRegistry,
     plugins::clipboard::{ClipboardSettings, ClipboardSnapshot, InMemoryClipboard},
     protocol::{DeviceType, IdentityBody},
@@ -21,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 struct TestServer {
     _directory: tempfile::TempDir,
     token: Option<ApiToken>,
-    application: ApplicationHandle,
+    application: Core,
     commands: tokio::sync::mpsc::Receiver<Command>,
     server: ApiServer,
 }
@@ -39,7 +37,7 @@ impl TestServer {
         let directory = tempfile::tempdir().unwrap();
         let identity =
             Arc::new(LocalIdentity::load_or_create(directory.path().join("identity")).unwrap());
-        let (application, commands) = ApplicationHandle::new(
+        let (application, commands) = Core::new(
             LocalDeviceSnapshot {
                 device_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
                 device_name: "Test Device".into(),

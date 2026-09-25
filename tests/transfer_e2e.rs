@@ -18,11 +18,11 @@ use std::{
 
 use bytes::Bytes;
 use myconnect::{
-    application::{
-        ApplicationError, ApplicationHandle, ApplicationService, EventData, LocalDeviceSnapshot,
-        Query, QueryResult, TransferConfig, TransferDirection, TransferSnapshot, TransferStatus,
-    },
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
+    core::{
+        ApplicationService, Core, CoreError, EventData, LocalDeviceSnapshot, Query, QueryResult,
+        TransferConfig, TransferDirection, TransferSnapshot, TransferStatus,
+    },
     device::DeviceReachability,
     plugins,
     plugins::{clipboard::InMemoryClipboard, share},
@@ -39,8 +39,8 @@ use uuid::Uuid;
 /// Two connected, paired peers with a real LAN transport and a real
 /// auxiliary payload path, ready to exchange files.
 struct Harness {
-    a: ApplicationHandle,
-    b: ApplicationHandle,
+    a: Core,
+    b: Core,
     a_id: String,
     b_id: String,
     b_download_dir: PathBuf,
@@ -79,11 +79,7 @@ fn local(device_id: &str, name: &str) -> LocalDeviceInfo {
     }
 }
 
-async fn wait_for_reachability(
-    application: &ApplicationHandle,
-    device_id: &str,
-    expected: DeviceReachability,
-) {
+async fn wait_for_reachability(application: &Core, device_id: &str, expected: DeviceReachability) {
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             if let QueryResult::Device(Some(device)) = application
@@ -102,7 +98,7 @@ async fn wait_for_reachability(
     .unwrap();
 }
 
-async fn wait_for_paired(application: &ApplicationHandle, device_id: &str, expected: bool) {
+async fn wait_for_paired(application: &Core, device_id: &str, expected: bool) {
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             if let QueryResult::Device(Some(device)) = application
@@ -122,7 +118,7 @@ async fn wait_for_paired(application: &ApplicationHandle, device_id: &str, expec
 }
 
 async fn wait_for_transfer_status(
-    application: &ApplicationHandle,
+    application: &Core,
     transfer_id: Uuid,
     expected: TransferStatus,
 ) -> TransferSnapshot {
@@ -193,7 +189,7 @@ async fn connected_and_paired_with(
             .with_payload_connect_timeout(Duration::from_millis(500)),
     );
 
-    let (a_application, a_commands) = ApplicationHandle::new(
+    let (a_application, a_commands) = Core::new(
         LocalDeviceSnapshot {
             device_id: a_identity.device_id().to_owned(),
             device_name: a_name.to_owned(),
@@ -208,7 +204,7 @@ async fn connected_and_paired_with(
         a_transfer_config,
     )
     .unwrap();
-    let (b_application, b_commands) = ApplicationHandle::new(
+    let (b_application, b_commands) = Core::new(
         LocalDeviceSnapshot {
             device_id: b_identity.device_id().to_owned(),
             device_name: b_name.to_owned(),
@@ -366,7 +362,7 @@ async fn unpaired_device_cannot_initiate_a_transfer() {
     let a_dir = tempfile::tempdir().unwrap();
     let a_identity = Arc::new(LocalIdentity::load_or_create(a_dir.path()).unwrap());
     let a_pubkey = subject_public_key_info(a_identity.certificate_der()).unwrap();
-    let (a_application, _commands) = ApplicationHandle::new(
+    let (a_application, _commands) = Core::new(
         LocalDeviceSnapshot {
             device_id: a_identity.device_id().to_owned(),
             device_name: "Sender".to_owned(),
@@ -389,7 +385,7 @@ async fn unpaired_device_cannot_initiate_a_transfer() {
             "f.bin".into(),
             10
         ),
-        Err(ApplicationError::UnknownDevice)
+        Err(CoreError::UnknownDevice)
     ));
 }
 
@@ -475,7 +471,7 @@ async fn path_traversal_filename_is_rejected_without_touching_the_filesystem() {
     // the pairing unit tests use, avoiding the need to fabricate a second
     // malicious TLS client for what is fundamentally an application-layer
     // check). `sanitize_file_name` (unit tested in
-    // `application::transfers::tests`) also proves that a traversal attempt
+    // `core::transfers::tests`) also proves that a traversal attempt
     // with a real basename, such as `../../etc/passwd`, is normalized down
     // to just `passwd` rather than rejected outright, so it can never escape
     // the download directory either way.

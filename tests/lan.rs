@@ -5,11 +5,11 @@ use std::{
 };
 
 use myconnect::{
-    application::{
-        ApplicationHandle, ApplicationService, Command, EventData, LocalDeviceSnapshot, Query,
-        QueryResult, SettingsPatch,
-    },
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
+    core::{
+        ApplicationService, Command, Core, EventData, LocalDeviceSnapshot, Query, QueryResult,
+        SettingsPatch,
+    },
     device::DeviceReachability,
     plugins::clipboard::InMemoryClipboard,
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
@@ -33,7 +33,7 @@ use tokio_util::sync::CancellationToken;
 struct Peer {
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
-    application: ApplicationHandle,
+    application: Core,
     commands: mpsc::Receiver<Command>,
     _directory: tempfile::TempDir,
 }
@@ -44,7 +44,7 @@ fn peer(name: &str) -> Peer {
     let trust_store: Arc<dyn TrustStore + Send + Sync> =
         Arc::new(FilesystemTrustStore::new(directory.path()));
     let public_key_der = subject_public_key_info(identity.certificate_der()).unwrap();
-    let (application, commands) = ApplicationHandle::new(
+    let (application, commands) = Core::new(
         LocalDeviceSnapshot {
             device_id: identity.device_id().to_owned(),
             device_name: name.to_owned(),
@@ -56,7 +56,7 @@ fn peer(name: &str) -> Peer {
         32,
         128,
         identity.clone(),
-        myconnect::application::TransferConfig::new(directory.path().join("downloads")),
+        myconnect::core::TransferConfig::new(directory.path().join("downloads")),
     )
     .unwrap();
     Peer {
@@ -96,11 +96,7 @@ fn test_config(bind: SocketAddr, target: SocketAddr) -> LanConfig {
         )
 }
 
-async fn wait_for_reachability(
-    application: &ApplicationHandle,
-    device_id: &str,
-    expected: DeviceReachability,
-) {
+async fn wait_for_reachability(application: &Core, device_id: &str, expected: DeviceReachability) {
     timeout(Duration::from_secs(3), async {
         loop {
             if let QueryResult::Device(Some(device)) = application

@@ -29,7 +29,7 @@ use super::{
     ssh::{self, SftpConnection, SftpEndpoint, SftpError},
     unix_millis,
 };
-use crate::application::{ApplicationError, PluginContext};
+use crate::core::{CoreError, PluginContext};
 
 /// How long to wait for the device's `kdeconnect.sftp` answer.
 const OFFER_TIMEOUT: Duration = Duration::from_secs(5);
@@ -126,10 +126,7 @@ impl Sessions {
     }
 
     fn slot(&self, device_id: &str) -> Result<SessionSlot, BrowseError> {
-        let mut slots = self
-            .slots
-            .lock()
-            .map_err(|_| ApplicationError::StateUnavailable)?;
+        let mut slots = self.slots.lock().map_err(|_| CoreError::StateUnavailable)?;
         Ok(slots.entry(device_id.to_owned()).or_default().clone())
     }
 
@@ -150,16 +147,16 @@ impl Sessions {
         let (sender, receiver) = oneshot::channel();
         self.offers
             .lock()
-            .map_err(|_| ApplicationError::StateUnavailable)?
+            .map_err(|_| CoreError::StateUnavailable)?
             .entry(device_id.to_owned())
             .or_default()
             .push(sender);
-        let packet = build_request_packet(unix_millis()).map_err(|_| ApplicationError::Internal)?;
+        let packet = build_request_packet(unix_millis()).map_err(|_| CoreError::Internal)?;
         ctx.send(device_id, packet)?;
         match tokio::time::timeout(OFFER_TIMEOUT, receiver).await {
             Ok(Ok(reply)) => Ok(reply),
             // Waiters are dropped when the device disconnects.
-            Ok(Err(_)) => Err(ApplicationError::DeviceNotConnected.into()),
+            Ok(Err(_)) => Err(CoreError::DeviceNotConnected.into()),
             Err(_) => Err(BrowseError::TimedOut),
         }
     }
