@@ -20,7 +20,8 @@ collide with another run. Do this every time, without being asked:
     `--dart-define=MYCONNECT_DOWNLOAD_DIR=$dir/downloads`.
   - Without the download dir, received files land in the owner's
     `~/Downloads`.
-  - `integration_test/` already makes its own temporary directories.
+  - `integration_test/` and `tests/ui_e2e.rs` already make their own
+    temporary directories.
 
   Delete the directory when you are done.
 - **Ports.** Don't use the default API port 24816 or a port from the docs

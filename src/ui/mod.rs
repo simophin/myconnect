@@ -125,10 +125,28 @@ pub fn run(options: UiOptions, start: impl Fn() -> StartFuture + 'static) -> Res
         windows: Arc::new(windowing::System),
         placements: Some(PlacementStore::for_data_dir(options.data_dir.as_deref())),
         events: Some(desktop::Receiver::new(received)),
+        opener: Arc::new(opening::System),
+        picker: Arc::new(picking::System),
     };
     desktop::watch_quit_signals(&runtime, events);
 
-    let service: ServiceSlot = Arc::default();
+    let (program, service) = program(options, start, desktop);
+    let result = program.run().context("UI failed");
+    if let Some(service) = service.take() {
+        runtime.block_on(service.shutdown())?;
+    }
+    result
+}
+
+/// The UI as an iced program on `desktop`, and the daemon it starts, kept
+/// for the caller to shut down once the program ends. [`run`] runs it in
+/// real windows; the end-to-end tests run it in `iced_test`'s emulator.
+pub fn program(
+    options: UiOptions,
+    start: impl Fn() -> StartFuture + 'static,
+    desktop: Desktop,
+) -> (iced::Daemon<impl iced::Program>, Service) {
+    let service = Service::default();
     let boot = {
         let service = service.clone();
         let start: Rc<dyn Fn() -> StartFuture> = Rc::new(start);
@@ -139,40 +157,47 @@ pub fn run(options: UiOptions, start: impl Fn() -> StartFuture + 'static) -> Res
             App::boot(options, start.clone(), service.clone(), desktop)
         }
     };
-    let result = iced::daemon(boot, App::update, App::view)
+    let program = iced::daemon(boot, App::update, App::view)
         .title("MyConnect")
         .subscription(App::subscription)
-        .font(iced_fonts::LUCIDE_FONT_BYTES)
-        .run()
-        .context("UI failed");
-
-    let service = service
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .take();
-    if let Some(service) = service {
-        runtime.block_on(service.shutdown())?;
-    }
-    result
+        .font(iced_fonts::LUCIDE_FONT_BYTES);
+    (program, service)
 }
 
-/// The running daemon, shared with [`run`], which shuts it down after the
-/// UI exits.
-type ServiceSlot = Arc<Mutex<Option<RunningService>>>;
+/// The daemon the UI started, once it has.
+#[derive(Clone, Default)]
+pub struct Service(Arc<Mutex<Option<RunningService>>>);
+
+impl Service {
+    fn set(&self, service: RunningService) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(service);
+    }
+
+    /// The daemon, to shut it down; `None` if it never started.
+    pub fn take(&self) -> Option<RunningService> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).take()
+    }
+}
 
 /// The desktop around the window: the tray, notifications, the window
-/// itself and where it was. Fakes in tests.
-struct Desktop {
-    tray: Arc<dyn Tray>,
+/// itself and where it was, pickers and file openers. [`run`] uses the
+/// real ones; tests pass fakes to [`program`].
+pub struct Desktop {
+    pub tray: Arc<dyn Tray>,
     /// A tray host shows the icon now. Without one, a closed window could
-    /// come back only by launching the app again, so closing quits.
-    tray_available: bool,
-    notifier: Arc<dyn Notifier>,
-    windows: Arc<dyn Windows>,
+    /// come back only by launching the app again, so closing quits, and
+    /// the window opens at start.
+    pub tray_available: bool,
+    pub notifier: Arc<dyn Notifier>,
+    pub windows: Arc<dyn Windows>,
     /// Where the placement is kept; `None` keeps it in memory only.
-    placements: Option<PlacementStore>,
+    pub placements: Option<PlacementStore>,
     /// The desktop's events, for the subscription.
-    events: Option<desktop::Receiver>,
+    pub events: Option<desktop::Receiver>,
+    /// Opens received files.
+    pub opener: Arc<dyn Open>,
+    /// The desktop's file and folder pickers.
+    pub picker: Arc<dyn Pick>,
 }
 
 /// Where a plugin's message came from, which decides how its outcome is
@@ -331,7 +356,7 @@ enum KeyCommand {
 struct App {
     options: UiOptions,
     start: Rc<dyn Fn() -> StartFuture>,
-    service: ServiceSlot,
+    service: Service,
     desktop: Desktop,
     /// The main window, while it is open; `None` in the tray.
     window: Option<window::Id>,
@@ -363,10 +388,6 @@ struct App {
     answering: Option<Uuid>,
     /// Why answering a request failed, shown in its prompt.
     answer_error: Option<(Uuid, String)>,
-    /// Opens received files.
-    opener: Arc<dyn Open>,
-    /// The desktop's file and folder pickers.
-    picker: Arc<dyn Pick>,
     /// Files being dragged over the window.
     drag: Drag,
     /// Dropped files waiting for the user to choose a device.
@@ -392,7 +413,7 @@ impl App {
     fn boot(
         options: UiOptions,
         start: Rc<dyn Fn() -> StartFuture>,
-        service: ServiceSlot,
+        service: Service,
         desktop: Desktop,
     ) -> (Self, Task<Message>) {
         let placement = desktop
@@ -423,8 +444,6 @@ impl App {
             cancelling: None,
             answering: None,
             answer_error: None,
-            opener: Arc::new(opening::System),
-            picker: Arc::new(picking::System),
             drag: Drag::default(),
             choosing: None,
         };
@@ -454,7 +473,7 @@ impl App {
 
     fn started(&mut self, started: Started) -> Task<Message> {
         let core = started.service.core().clone();
-        *self.service.lock().unwrap_or_else(PoisonError::into_inner) = Some(started.service);
+        self.service.set(started.service);
         let ids: Vec<_> = started.plugins.iter().map(|plugin| plugin.id()).collect();
         tracing::debug!(plugins = ?ids, "UI plugins");
         let mut ctx = UiContext::new(core, self.options.runtime.clone());
@@ -918,7 +937,7 @@ impl App {
     /// Open `path`, or show it in the file manager (`reveal`), off the UI
     /// thread: it spawns a process or calls D-Bus.
     fn open(&self, path: PathBuf, reveal: bool) -> Task<Message> {
-        let opener = self.opener.clone();
+        let opener = self.desktop.opener.clone();
         plugin::on_runtime(&self.options.runtime, async move {
             let result = tokio::task::spawn_blocking({
                 let path = path.clone();
@@ -983,6 +1002,7 @@ impl App {
             return Task::none();
         };
         let picked = self
+            .desktop
             .picker
             .pick_folder("Save received files in", &settings.download_dir);
         Task::future(picked).map(Message::DownloadDirPicked)
@@ -1208,7 +1228,7 @@ impl App {
             // own word ("Open"). From the tray, the files go back as the
             // tray's, so a failure to send them is reported the tray's way.
             ShellRequest::PickFiles { title, then, .. } => {
-                Task::future(self.picker.pick_files(&title)).and_then(move |paths| {
+                Task::future(self.desktop.picker.pick_files(&title)).and_then(move |paths| {
                     if paths.is_empty() {
                         return Task::none();
                     }
@@ -1829,6 +1849,8 @@ mod tests {
                 windows: self.windows.clone(),
                 placements: self.placements.clone(),
                 events: None,
+                opener: Arc::new(opening::System),
+                picker: Arc::new(picking::System),
             }
         }
 
@@ -1863,7 +1885,7 @@ mod tests {
                 data_dir: None,
             },
             start,
-            ServiceSlot::default(),
+            Service::default(),
             fakes.desktop(),
         )
         .0
@@ -2400,7 +2422,7 @@ mod tests {
     async fn opening_a_received_file_reports_only_failures() {
         let mut app = running(Vec::new());
         let opener = Arc::new(FakeOpener::default());
-        app.opener = opener.clone();
+        app.desktop.opener = opener.clone();
         let notes = PathBuf::from("/home/me/Downloads/notes.txt");
 
         settle(&mut app, Message::OpenFile(notes.clone())).await;
@@ -2569,7 +2591,7 @@ mod tests {
 
         // Cancelled: nothing changes.
         let cancelled = picker(None);
-        app.picker = cancelled.clone();
+        app.desktop.picker = cancelled.clone();
         click(&mut app, "Save received files in").await;
         assert_eq!(
             *cancelled.asked.lock().unwrap(),
@@ -2578,7 +2600,7 @@ mod tests {
         assert_eq!(settings(&app).download_dir, current);
 
         let chosen = picker(Some(folder.path().into()));
-        app.picker = chosen.clone();
+        app.desktop.picker = chosen.clone();
         click(&mut app, "Save received files in").await;
         assert_eq!(*chosen.asked.lock().unwrap(), [current]);
         assert_eq!(core(&app).settings().unwrap().download_dir, folder.path());
@@ -2587,7 +2609,7 @@ mod tests {
         assert!(app.toasts.is_empty());
 
         // A folder the daemon refuses: say why, and keep the old one.
-        app.picker = picker(Some("relative/folder".into()));
+        app.desktop.picker = picker(Some("relative/folder".into()));
         click(&mut app, "Save received files in").await;
         assert_eq!(
             app.toasts.items()[0].text,
@@ -2922,7 +2944,7 @@ mod tests {
 
         // Cancelled: nothing is sent.
         let cancelled = picker(None);
-        sharing.app.picker = cancelled.clone();
+        sharing.app.desktop.picker = cancelled.clone();
         click(&mut sharing.app, "Send files").await;
         assert_eq!(
             *cancelled.asked.lock().unwrap(),
@@ -2930,7 +2952,7 @@ mod tests {
         );
         assert!(sharing.sent().is_empty());
 
-        sharing.app.picker = Arc::new(FakePicker {
+        sharing.app.desktop.picker = Arc::new(FakePicker {
             files: Some(vec![sharing.file("photo.jpg"), sharing.file("gone.txt")]),
             ..FakePicker::default()
         });
@@ -2961,7 +2983,7 @@ mod tests {
                 data_dir: None,
             },
             start,
-            ServiceSlot::default(),
+            Service::default(),
             Fakes::default().desktop(),
         );
         assert!(matches!(app.phase, Phase::Starting));
@@ -3611,7 +3633,7 @@ mod tests {
         let _sent = peer(&mut app, &[crate::plugins::share::PACKET_TYPE]).await;
         close(&mut app).await;
 
-        app.picker = Arc::new(FakePicker {
+        app.desktop.picker = Arc::new(FakePicker {
             files: Some(vec![photo.clone()]),
             ..FakePicker::default()
         });

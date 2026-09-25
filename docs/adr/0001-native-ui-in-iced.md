@@ -83,7 +83,7 @@ first needs one adds it to the `gui` feature.
 | Decoding previews | `image` 0.25 (step 12) | What iced renders images with. Only the codecs a preview offers are on (BMP, GIF, JPEG, PNG, WebP), not iced's `image` feature's every format. The browser decodes a preview itself, off the UI thread, so an image that can't be decoded says so ("This image can’t be shown."): iced decodes at draw time and drops the error. |
 | Local time | `chrono` 0.4 (step 12) | Already in the tree through `russh-sftp`, with `clock` for the local time zone (`iana-time-zone`). `time` reads the local offset only on a single-threaded process on Unix, and `jiff` would be a second time crate. |
 | Icons | `iced_fonts` 0.3 (Lucide) | The Lucide icon font with typed helpers, the version matching iced 0.14. |
-| Headless UI tests | `iced_test` 0.14 | iced's own simulator: finds and clicks widgets, and renders snapshots to PNG with no display. |
+| Headless UI tests | `iced_test` 0.14 | iced's own test crate. Its simulator finds and clicks widgets and renders snapshots to PNG with no display; its emulator runs the whole program, tasks and subscriptions included, for the end-to-end tests (`tests/ui_e2e.rs`). |
 | Running tasks in tests | `iced_runtime` 0.14 (dev) | Already in iced's tree; its `task::into_stream` lets a unit test see what a `Task` produces, which `iced` doesn't re-export. |
 | Arguments | `clap` | Already the CLI's parser; `env` reads each flag's environment variable. |
 | File and folder dialogs | `rfd` (step 9) | The standard native dialog crate: the XDG portal on Linux (zenity if there is none), AppKit, Win32. Its async dialogs need no runtime of their own. |

@@ -26,9 +26,11 @@ downloads, uploads (picked or dropped on the open folder), renames,
 creates folders and deletes. Step 13 is done on Linux: the tray and its
 menu, close-to-tray, quit, notifications, the saved window placement and
 a single instance; macOS and Windows get their tray and notifications in
-step 13b, on those machines. Next is step 14 (or 13b, given a Mac or a
-Windows machine). Each finished step says so under its heading, with what differs
-from the plan.
+step 13b, on those machines. Step 14 is done: `tests/ui_e2e.rs` runs the
+whole UI headless in `iced_test`'s emulator against a second daemon (the
+seven Flutter scenarios) and the fake phone (browsing). Next is step 15
+(or 13b, given a Mac or a Windows machine). Each finished step says so
+under its heading, with what differs from the plan.
 
 ## Read first
 
@@ -1436,6 +1438,45 @@ On a Mac and a Windows machine (step 13 had neither):
 tray icon item is ticked.
 
 ### 14. End-to-end tests
+
+**Done (2026-09-26).** Where it differs from the text below:
+- `iced_test::Emulator` is good enough, driven from Rust rather than
+  `.ice` scripts. It runs the whole program as the event loop would, the
+  sync subscription and every task included, so the UI sees its daemon
+  only through the core's events, as in the app. `.ice` scripts can't
+  wait for something outside the program or act as the peer, and their
+  `expect` fails at once, so they don't fit a test that waits on the
+  network. The emulator's own findings match whole texts only; the tests
+  find texts, text fields (the verification code) and widget ids with an
+  `iced_test::Simulator` over the emulator's current view, then click
+  the point found through the emulator (`Mode::Immediate`), and poll
+  until what they wait for shows (20 s at most).
+- The tests can't reach `App`, which is private, so `ui::run` is split:
+  `ui::program(options, start, desktop)` builds the iced program on a
+  `ui::Desktop` (now public: tray, notifier, windows, placements, the
+  desktop's events, and the picker and file opener, which moved into it
+  from `App`) and returns it with a `ui::Service`, the daemon it started,
+  to shut down after. `run` builds the real desktop and calls it.
+- `tests/ui_e2e.rs` (`required-features = ["gui"]`, which a workspace
+  run satisfies): the app with its embedded daemon on loopback, against
+  a second `RunningService` in the same process, both in temporary
+  directories. The peer is driven through its core (and its HTTP client
+  for the clipboard), not a `myconnect run` process. The seven Flutter
+  scenarios, plus browsing: the fake phone (`tests/support/fake_phone.rs`)
+  binds `127.255.255.255:1716` and dials only the app's id; the test pairs
+  with it through Add device, opens *All files*, downloads `notes.txt`
+  and uploads a file through the (fake) picker.
+- The tray, notifier, windows, picker and opener are fakes, so the suite
+  needs no display or session bus, and runs in the existing `Rust` CI job
+  (`cargo test --workspace --all-targets`, with `ICED_BACKEND=tiny-skia`).
+  The Flutter integration job stays until step 15 replaces it. The
+  scenarios run one at a time (a lock), about 15 s in all. Peers get a
+  random name, and pair buttons are picked by the row naming the peer, so
+  other loopback instances in a scan don't matter.
+- Found on the way, not fixed (core, not UI): a device that hears an
+  announcement dials again even when already connected, and the new
+  connection replaces the old one, failing a pairing request sent on it.
+  The tests announce only while the peer isn't connected yet.
 
 **Why:** unit tests with fakes missed real bugs in the first milestone
 (HANDOFF).

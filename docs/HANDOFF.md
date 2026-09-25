@@ -112,7 +112,8 @@ macOS app has only an ad-hoc signature. A Flutter build hook
   large folder can stop partway. Running it as a background job with
   progress would fix that.
 - `ui/integration_test/` doesn't cover browsing, because its peer is the
-  CLI, which serves no files. `examples/fake_phone.rs` could be the peer.
+  CLI, which serves no files. The iced UI's `tests/ui_e2e.rs` does,
+  against the fake phone (`tests/support/fake_phone.rs`).
 - Not offered: dragging files out of the browser (ADR 0008), downloading
   whole folders, video thumbnails, and serving this machine's files (KDE
   Connect desktops don't either).

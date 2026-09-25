@@ -84,6 +84,10 @@ libc = { version = "0.2", optional = true }
 ksni = { version = "0.3", default-features = false, features = ["async-io"], optional = true }
 zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }
 
+[[test]]
+name = "ui_e2e"
+required-features = ["gui"]
+
 [dev-dependencies]
 iced_runtime = "0.14"
 iced_test = "0.14"
