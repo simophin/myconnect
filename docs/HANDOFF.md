@@ -59,8 +59,10 @@ Everything in the milestone works in the Linux app and was checked live.
 Against KDE Connect for Android (a Pixel 8a, from the CLI daemon), these
 work: pairing, unpairing, clipboard, file transfer both ways, and browsing
 the phone's files. Nothing has been checked against KDE Connect on a
-desktop yet. The tray menu lists each paired device (send files, ping,
-browse files, show details), with its battery; the device list and details
+desktop yet. Paired devices are listed even while offline (the daemon
+restores them from their trust records). The tray menu lists each connected
+paired device (send files, ping, browse files, show details), with its
+battery; the device list and details
 page show the battery too (`kdeconnect.battery`, read-only); on Linux it needs a patched `cnativeapi`, vendored in
 `ui/third_party/`. Releases (`.github/workflows/build.yml`) build the
 macOS app, Debian packages for amd64 and arm64, and for tagged builds an

@@ -214,6 +214,7 @@ async fn ping_reaches_a_paired_kde_connect_peer_over_tls() {
             device_id: kde_id.clone(),
             certificate_der: kde.identity.certificate_der().to_vec(),
             last_trusted_protocol_version: 8,
+            last_identity: None,
         })
         .unwrap();
 

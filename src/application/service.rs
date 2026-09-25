@@ -29,10 +29,12 @@ use super::{
 use crate::device::DeviceRegistry;
 use crate::{
     clipboard::ClipboardService,
-    config::{LocalIdentity, SettingsError, TrustError, TrustStore, TrustedDevice},
-    device::DeviceSnapshot,
+    config::{
+        LocalIdentity, SettingsError, TrustError, TrustStore, TrustedDevice, TrustedIdentity,
+    },
+    device::{DeviceReachability, DeviceSnapshot},
     plugins::{self, clipboard::ClipboardBody, share},
-    protocol::{IdentityBody, Packet, PairingBody, verification_code},
+    protocol::{DeviceType, IdentityBody, Packet, PairingBody, verification_code},
     transport::{
         payload,
         tls::{PeerPin, TlsMaterial, subject_public_key_info},
@@ -237,6 +239,7 @@ impl ApplicationHandle {
         }
         let (commands, receiver) = mpsc::channel(command_capacity);
         let events = EventBus::new(event_capacity)?;
+        let devices = paired_devices(trust_store.as_ref());
         let settings = Settings::new(SettingsDefaults {
             device_name: local_device.device_name.clone(),
             download_dir: transfer_config.download_dir.clone(),
@@ -254,7 +257,7 @@ impl ApplicationHandle {
                 identity,
                 transfer_config: Arc::new(transfer_config),
                 state: Arc::new(RwLock::new(ApplicationState {
-                    devices: DeviceRegistry::new(),
+                    devices,
                     connections: HashMap::new(),
                     pairings: BTreeMap::new(),
                     pairing_by_device: HashMap::new(),
@@ -449,6 +452,7 @@ impl ApplicationHandle {
             );
         }
         let snapshot = self.mark_device_connected(device_id, observed_at)?;
+        self.refresh_trusted_identity(&snapshot);
         self.send_clipboard_connect_if_eligible(device_id);
         Ok(snapshot)
     }
@@ -684,6 +688,7 @@ impl ApplicationHandle {
                 device_id: device_id.clone(),
                 certificate_der: connection.certificate_der.clone(),
                 last_trusted_protocol_version: connection.protocol_version,
+                last_identity: self.known_identity(&device_id),
             })
             .map_err(ApplicationError::Trust)?;
 
@@ -1245,6 +1250,7 @@ impl ApplicationHandle {
             .trust_store
             .put(&TrustedDevice {
                 device_id: device_id.clone(),
+                last_identity: self.known_identity(&device_id),
                 certificate_der,
                 last_trusted_protocol_version: protocol_version,
             })
@@ -1443,6 +1449,36 @@ impl ApplicationHandle {
         let _ = self
             .events
             .publish(super::EventData::PairingUpdated(snapshot));
+    }
+
+    /// How a connected peer currently describes itself, for its trust record.
+    fn known_identity(&self, device_id: &str) -> Option<TrustedIdentity> {
+        let state = self.state.read().ok()?;
+        state
+            .devices
+            .get(device_id)
+            .map(|device| trusted_identity(&device))
+    }
+
+    /// Bring a paired peer's trust record up to date with how it describes
+    /// itself now, so it is listed that way while offline. Called once a
+    /// connection is authenticated, never from an unauthenticated
+    /// discovery announcement.
+    fn refresh_trusted_identity(&self, device: &DeviceSnapshot) {
+        if !device.paired {
+            return;
+        }
+        let Ok(Some(mut trusted)) = self.trust_store.get(&device.device_id) else {
+            return;
+        };
+        let identity = trusted_identity(device);
+        if trusted.last_identity.as_ref() == Some(&identity) {
+            return;
+        }
+        trusted.last_identity = Some(identity);
+        if let Err(error) = self.trust_store.put(&trusted) {
+            tracing::debug!(device_id = device.device_id, %error, "could not update trust record");
+        }
     }
 
     fn publish_device_update(&self, device_id: &str) {
@@ -2220,6 +2256,53 @@ impl ApplicationService for ApplicationHandle {
     }
 }
 
+/// The paired peers in `trust_store`, as unreachable until they are seen.
+fn paired_devices(trust_store: &(dyn TrustStore + Send + Sync)) -> DeviceRegistry {
+    let mut registry = DeviceRegistry::new();
+    match trust_store.list() {
+        Ok(devices) => {
+            for device in devices {
+                registry.restore(paired_device_snapshot(device));
+            }
+        }
+        Err(error) => tracing::warn!(%error, "could not list paired devices"),
+    }
+    registry
+}
+
+fn paired_device_snapshot(device: TrustedDevice) -> DeviceSnapshot {
+    // A record from before identities were kept shows its ID until the peer
+    // next connects and fills it in.
+    let identity = device.last_identity.unwrap_or_else(|| TrustedIdentity {
+        device_name: device.device_id.clone(),
+        device_type: DeviceType::Phone,
+        incoming_capabilities: Vec::new(),
+        outgoing_capabilities: Vec::new(),
+    });
+    DeviceSnapshot {
+        device_id: device.device_id,
+        device_name: identity.device_name,
+        device_type: identity.device_type,
+        protocol_version: device.last_trusted_protocol_version,
+        incoming_capabilities: identity.incoming_capabilities,
+        outgoing_capabilities: identity.outgoing_capabilities,
+        reachability: DeviceReachability::Unavailable,
+        paired: true,
+        pairing: false,
+        last_seen_at: 0,
+        battery: None,
+    }
+}
+
+fn trusted_identity(device: &DeviceSnapshot) -> TrustedIdentity {
+    TrustedIdentity {
+        device_name: device.device_name.clone(),
+        device_type: device.device_type,
+        incoming_capabilities: device.incoming_capabilities.clone(),
+        outgoing_capabilities: device.outgoing_capabilities.clone(),
+    }
+}
+
 fn unix_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2354,6 +2437,12 @@ mod tests {
     }
 
     fn handle() -> (ApplicationHandle, mpsc::Receiver<Command>) {
+        handle_with_trust(MemoryTrustStore::default())
+    }
+
+    fn handle_with_trust(
+        trust_store: MemoryTrustStore,
+    ) -> (ApplicationHandle, mpsc::Receiver<Command>) {
         let directory = tempfile::tempdir().unwrap();
         let identity = Arc::new(LocalIdentity::load_or_create(directory.path()).unwrap());
         ApplicationHandle::new(
@@ -2363,7 +2452,7 @@ mod tests {
             },
             8,
             b"local-pubkey".to_vec(),
-            Arc::new(MemoryTrustStore::default()),
+            Arc::new(trust_store),
             crate::clipboard::InMemoryClipboard::shared(),
             1,
             1,
@@ -2437,6 +2526,78 @@ mod tests {
             protocol_version: 8,
             extra: Default::default(),
         }
+    }
+
+    #[test]
+    fn paired_devices_are_listed_offline_and_keep_their_latest_identity() {
+        let described = "740bd4b9b4184ee497d6caf1da8151be";
+        let undescribed = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let trusted = |device_id: &str, last_identity| TrustedDevice {
+            device_id: device_id.into(),
+            certificate_der: vec![1, 2, 3],
+            last_trusted_protocol_version: 8,
+            last_identity,
+        };
+        let (handle, _commands) = handle_with_trust(MemoryTrustStore(Mutex::new(vec![
+            trusted(
+                described,
+                Some(TrustedIdentity {
+                    device_name: "Pixel".into(),
+                    device_type: DeviceType::Phone,
+                    incoming_capabilities: vec!["kdeconnect.ping".into()],
+                    outgoing_capabilities: Vec::new(),
+                }),
+            ),
+            trusted(undescribed, None),
+        ])));
+
+        let QueryResult::Devices(devices) = handle.query(Query::Devices).unwrap() else {
+            panic!("expected devices");
+        };
+        let names: Vec<_> = devices.iter().map(|d| d.device_name.as_str()).collect();
+        assert_eq!(names, ["Pixel", undescribed]);
+        assert!(devices.iter().all(|d| d.paired
+            && d.reachability == DeviceReachability::Unavailable
+            && d.battery.is_none()));
+        assert_eq!(devices[0].incoming_capabilities, ["kdeconnect.ping"]);
+
+        let mut identity = make_identity(undescribed, vec!["kdeconnect.share.request".into()]);
+        identity.device_name = "Laptop".into();
+        identity.device_type = DeviceType::Laptop;
+        handle.discover_device(&identity, true, 5).unwrap();
+        let (tx, _rx) = mpsc::channel(4);
+        handle
+            .register_connection(
+                undescribed,
+                vec![1, 2, 3],
+                8,
+                tx,
+                CancellationToken::new(),
+                5,
+            )
+            .unwrap();
+        let stored = handle.trust_store.get(undescribed).unwrap().unwrap();
+        assert_eq!(
+            stored.last_identity,
+            Some(TrustedIdentity {
+                device_name: "Laptop".into(),
+                device_type: DeviceType::Laptop,
+                incoming_capabilities: vec!["kdeconnect.share.request".into()],
+                outgoing_capabilities: Vec::new(),
+            })
+        );
+
+        handle.unregister_connection(undescribed);
+        let QueryResult::Device(Some(device)) = handle
+            .query(Query::Device {
+                device_id: undescribed.into(),
+            })
+            .unwrap()
+        else {
+            panic!("expected the device");
+        };
+        assert_eq!(device.device_name, "Laptop");
+        assert_eq!(device.reachability, DeviceReachability::Unavailable);
     }
 
     #[test]
@@ -2625,6 +2786,7 @@ mod tests {
                 device_id: device_id.into(),
                 certificate_der: vec![1, 2, 3],
                 last_trusted_protocol_version: 8,
+                last_identity: None,
             })
             .unwrap();
         handle
