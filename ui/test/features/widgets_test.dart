@@ -183,6 +183,31 @@ void main() {
     expect(find.text('Pinged Pixel.'), findsOneWidget);
   });
 
+  testWidgets('a connected device that can ring can be asked to', (
+    tester,
+  ) async {
+    FilledButton ringButton() =>
+        tester.widget(find.widgetWithText(FilledButton, 'Ring'));
+    final daemon = TestDaemon()..devices = [device(name: 'Pixel')];
+    when(() => daemon.api.ring(any())).thenAnswer((_) async {});
+    await pumpApp(tester, daemon);
+    await tester.tap(find.text('Pixel'));
+    await tester.pumpAndSettle();
+    expect(ringButton().onPressed, isNull);
+
+    daemon.events.add(
+      DeviceChanged(
+        device(name: 'Pixel', incomingCapabilities: [ringCapability]),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Ring'));
+    await tester.pumpAndSettle();
+
+    verify(() => daemon.api.ring(device().deviceId)).called(1);
+    expect(find.text('Asked Pixel to ring.'), findsOneWidget);
+  });
+
   testWidgets('the clipboard can be sent to a device that takes it', (
     tester,
   ) async {

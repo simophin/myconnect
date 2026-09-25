@@ -269,6 +269,15 @@ void main() {
     expect(request.uri.path, '/api/v1/devices/device/ping');
   });
 
+  test('asks a device to ring by id', () async {
+    final adapter = FakeAdapter((_) => ResponseBody.fromString('', 202));
+    await apiWith(adapter).ring('device');
+
+    final request = adapter.requests.single;
+    expect(request.method, 'POST');
+    expect(request.uri.path, '/api/v1/devices/device/ring');
+  });
+
   test('sends the clipboard to a device by id', () async {
     final adapter = FakeAdapter((_) => ResponseBody.fromString('', 202));
     await apiWith(adapter).sendClipboard('device');

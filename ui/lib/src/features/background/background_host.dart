@@ -155,6 +155,13 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
                     ? () => unawaited(_ping(device))
                     : null,
               ),
+              if (device.incomingCapabilities.contains(ringCapability))
+                TrayMenuItem(
+                  'Ring',
+                  onSelected: device.canRing
+                      ? () => unawaited(_ring(device))
+                      : null,
+                ),
               if (device.supportsClipboard)
                 TrayMenuItem(
                   'Send clipboard',
@@ -226,6 +233,15 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
       await (await ref.read(apiProvider.future)).ping(device.deviceId);
     } on Object catch (error) {
       await _report("Couldn't ping ${device.deviceName}", describeError(error));
+    }
+  }
+
+  /// Ring [device] without showing the window; only a failure is reported.
+  Future<void> _ring(Device device) async {
+    try {
+      await (await ref.read(apiProvider.future)).ring(device.deviceId);
+    } on Object catch (error) {
+      await _report("Couldn't ring ${device.deviceName}", describeError(error));
     }
   }
 

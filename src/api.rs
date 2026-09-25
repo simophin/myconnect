@@ -239,6 +239,7 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
             get(get_device).delete(delete_device),
         )
         .route("/devices/{device_id}/ping", post(post_ping))
+        .route("/devices/{device_id}/ring", post(post_ring))
         .route(
             "/devices/{device_id}/clipboard",
             post(post_device_clipboard),
@@ -467,6 +468,19 @@ async fn post_ping(
     state
         .application
         .send_ping(&device_id, message)
+        .map_err(map_error)?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Ask a paired, connected device that advertises
+/// `kdeconnect.findmyphone.request` to ring so it can be found.
+async fn post_ring(
+    State(state): State<ApiState>,
+    Path(device_id): Path<String>,
+) -> Result<StatusCode, ApiProblem> {
+    state
+        .application
+        .ring_device(&device_id)
         .map_err(map_error)?;
     Ok(StatusCode::ACCEPTED)
 }
