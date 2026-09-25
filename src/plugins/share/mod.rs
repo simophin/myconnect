@@ -1,7 +1,7 @@
 //! Share: send a file to a paired device, and save files it sends here.
 //!
-//! Sending (`POST /devices/{id}/share`, a streamed upload) offers the file
-//! with a `kdeconnect.share.request` that advertises a payload port, and
+//! Sending (`POST /devices/{id}/share`, a streamed upload, or
+//! [`send_path`], a local file, for the UI) offers the file with a `kdeconnect.share.request` that advertises a payload port, and
 //! streams the upload's bytes to the device once it dials in. Receiving
 //! dials the port a device's `kdeconnect.share.request` advertises and
 //! saves the file in the download directory. Both run as transfers of the
@@ -15,15 +15,20 @@
 
 mod http;
 pub mod packet;
+#[cfg(feature = "gui")]
+pub mod ui;
 
 use std::{
+    io,
+    path::Path,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::Router;
 use bytes::Bytes;
-use tokio::sync::mpsc;
+use thiserror::Error;
+use tokio::{io::AsyncReadExt, sync::mpsc};
 use uuid::Uuid;
 
 pub use packet::{
@@ -34,16 +39,20 @@ pub use packet::{
 use crate::{
     core::{
         CoreError, DeviceSnapshot, OperationErrorCode, PayloadPeer, Plugin, PluginContext,
-        TransferDirection, TransferHandle, TransferSnapshot, sanitize_file_name, upload_channel,
+        TransferDirection, TransferHandle, TransferSnapshot, forward_reader, sanitize_file_name,
+        upload_channel,
     },
     protocol::Packet,
 };
+
+/// The plugin's id.
+pub const ID: &str = "share";
 
 pub struct SharePlugin;
 
 impl Plugin for SharePlugin {
     fn id(&self) -> &'static str {
-        "share"
+        ID
     }
 
     fn incoming(&self) -> &'static [&'static str] {
@@ -100,6 +109,51 @@ pub fn send_file(
     let device_id = device_id.to_owned();
     transfer.spawn(move |transfer| send(ctx, device_id, peer, transfer, chunks));
     Ok((started, sender))
+}
+
+/// Why a local file couldn't be sent.
+#[derive(Debug, Error)]
+pub enum SendPathError {
+    /// The core refused to start the transfer.
+    #[error(transparent)]
+    Core(#[from] CoreError),
+    /// The file couldn't be opened, or isn't a regular file.
+    #[error("the file couldn't be read")]
+    File(#[source] io::Error),
+}
+
+/// Send the local file at `path` to a device, under its own name: a
+/// [`send_file`] of its size, streamed from disk. Resolves once the whole
+/// file has gone into the transfer, or the transfer has ended first (it
+/// was cancelled or failed), with the transfer as it is then, as
+/// `POST /devices/{id}/share` answers. Run it on the daemon's runtime.
+pub async fn send_path(
+    ctx: &PluginContext,
+    device_id: &str,
+    path: &Path,
+) -> Result<TransferSnapshot, SendPathError> {
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(SendPathError::File)?;
+    let metadata = file.metadata().await.map_err(SendPathError::File)?;
+    if !metadata.is_file() {
+        return Err(SendPathError::File(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        )));
+    }
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let size = metadata.len();
+    let (started, sender) = send_file(ctx, device_id, file_name, size, None)?;
+    // A file that grows meanwhile sends what it had; one that shrinks, or
+    // fails part-way, fails the transfer as short.
+    if let Err(error) = forward_reader(file.take(size), sender).await {
+        tracing::debug!(device_id, %error, "reading a file to send failed");
+    }
+    Ok(ctx.transfers().get(started.id).unwrap_or(started))
 }
 
 /// Offer the file on a fresh payload port, wait for the device to dial in,
@@ -241,6 +295,31 @@ mod tests {
         assert!(matches!(
             send_file(&ctx, PEER, "a.txt".into(), u64::MAX, None),
             Err(CoreError::TransferTooLarge { .. })
+        ));
+        assert!(ctx.transfers().list().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_path_that_is_not_a_readable_file_is_refused_before_a_transfer() {
+        let (handle, _plugin, _commands) = handle_with_plugin(SharePlugin);
+        let _packets = paired_peer(&handle);
+        let ctx = handle.plugin_context();
+        let folder = tempfile::tempdir().unwrap();
+
+        for path in [folder.path().to_owned(), folder.path().join("missing.txt")] {
+            assert!(
+                matches!(
+                    send_path(&ctx, PEER, &path).await,
+                    Err(SendPathError::File(_))
+                ),
+                "{path:?}"
+            );
+        }
+        let file = folder.path().join("notes.txt");
+        std::fs::write(&file, "notes").unwrap();
+        assert!(matches!(
+            send_path(&ctx, "unknown", &file).await,
+            Err(SendPathError::Core(CoreError::UnknownDevice))
         ));
         assert!(ctx.transfers().list().is_empty());
     }

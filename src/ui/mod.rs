@@ -58,11 +58,14 @@ use desktop::{
 };
 use overlay::{
     dialog::{self as dialogs, Dialog, DialogEvent, Dialogs, Field, Step, Submit},
+    drop::{self as dropping, Drag, Dropped},
     incoming,
     toast::{self, Toasts},
 };
 use pages::{add_device, device, devices, pairing, settings, startup, transfers};
-use plugin::{Command, ErasedUiPlugin, Outcome, PluginMessage, ShellRequest, UiContext};
+use plugin::{
+    Command, DropTarget, ErasedUiPlugin, Outcome, PluginMessage, ShellRequest, UiContext,
+};
 use route::Route;
 use store::Snapshot;
 
@@ -227,6 +230,12 @@ enum Message {
     SetCloseToTray(bool),
     /// A settings change finished: the settings now, or why it failed.
     SettingsSaved(Result<SettingsSnapshot, String>),
+    /// The wait for the rest of this drag's dropped files is over.
+    DropSettled(u64),
+    /// Send the dropped files to this device, chosen in the chooser.
+    DropOn(String),
+    /// Close the chooser without sending.
+    CancelDrop,
     Key(KeyCommand),
     DemoTick(u64),
     WindowOpened,
@@ -273,6 +282,10 @@ struct App {
     opener: Arc<dyn Open>,
     /// The desktop's file and folder pickers.
     picker: Arc<dyn Pick>,
+    /// Files being dragged over the window.
+    drag: Drag,
+    /// Dropped files waiting for the user to choose a device.
+    choosing: Option<Vec<PathBuf>>,
 }
 
 /// Whether the daemon runs yet.
@@ -319,6 +332,8 @@ impl App {
             answer_error: None,
             opener: Arc::new(opening::System),
             picker: Arc::new(picking::System),
+            drag: Drag::default(),
+            choosing: None,
         };
         let start = app.start();
         (
@@ -568,9 +583,22 @@ impl App {
                 Task::none()
             }
             Message::SettingsSaved(Err(error)) => self.toast(error, None),
+            Message::DropSettled(gesture) => match self.drag.settled(gesture) {
+                Some(paths) => self.dropped(paths),
+                None => Task::none(),
+            },
+            Message::DropOn(device_id) => self.drop_on(device_id),
+            Message::CancelDrop => {
+                self.choosing = None;
+                Task::none()
+            }
             // The pairing prompt can't be dismissed; Escape would only
             // reach a dialog hidden under it.
             Message::Key(KeyCommand::Cancel) if self.incoming_prompt_shows() => Task::none(),
+            Message::Key(KeyCommand::Cancel) if self.choosing.is_some() => {
+                self.choosing = None;
+                Task::none()
+            }
             Message::Key(KeyCommand::Cancel) => self.dialog(DialogEvent::Cancel),
             Message::Key(KeyCommand::CloseWindow) => window::close(self.window),
             Message::Key(KeyCommand::Quit) => iced::exit(),
@@ -594,6 +622,29 @@ impl App {
                 // Closing the window quits, until the tray can keep the app
                 // running without one.
                 window::Event::Closed => iced::exit(),
+                // The pairing prompt is modal: a drop would open the
+                // chooser under it.
+                window::Event::FileHovered(_) if !self.incoming_prompt_shows() => {
+                    self.drag.hover();
+                    Task::none()
+                }
+                window::Event::FileDropped(_) | window::Event::FileHovered(_)
+                    if self.incoming_prompt_shows() =>
+                {
+                    self.drag.leave();
+                    Task::none()
+                }
+                window::Event::FilesHoveredLeft => {
+                    self.drag.leave();
+                    Task::none()
+                }
+                window::Event::FileDropped(path) => match self.drag.drop_file(path) {
+                    Dropped::Wait => Task::none(),
+                    Dropped::Settle(gesture) => {
+                        self.after(dropping::SETTLE, Message::DropSettled(gesture))
+                    }
+                    Dropped::Done(paths) => self.dropped(paths),
+                },
                 _ => Task::none(),
             },
             Message::Window(..) => Task::none(),
@@ -825,6 +876,77 @@ impl App {
         .map(then)
     }
 
+    /// Files were dropped on the window: send them where the page says, if
+    /// a plugin takes them there, or ask where. Folders are refused.
+    fn dropped(&mut self, paths: Vec<PathBuf>) -> Task<Message> {
+        if self.running().is_none() {
+            return Task::none();
+        }
+        // Folders can't be sent, and some drops aren't local files.
+        let files: Vec<_> = paths
+            .iter()
+            .filter(|path| path.is_file())
+            .cloned()
+            .collect();
+        if files.is_empty() {
+            if paths.is_empty() {
+                return Task::none();
+            }
+            return self.toast("Only files can be sent, not folders.".into(), None);
+        }
+        match self.drop_target_here() {
+            Some(target) => Task::done(Message::Plugin((target.on_drop)(files))),
+            None => {
+                self.choosing = Some(files);
+                Task::none()
+            }
+        }
+    }
+
+    /// The chooser's device was picked: open its page and hand it the
+    /// files.
+    fn drop_on(&mut self, device_id: String) -> Task<Message> {
+        let Some(files) = self.choosing.take() else {
+            return Task::none();
+        };
+        let route = Route::Device(device_id.clone());
+        let target = self.drop_target(&device_id, &route);
+        let go = self.go(route);
+        let then = match target {
+            Some(target) => Task::done(Message::Plugin((target.on_drop)(files))),
+            // It dropped out of the list as it was chosen.
+            None => self.toast(error::describe_code("device_not_connected"), None),
+        };
+        Task::batch([go, then])
+    }
+
+    /// Where a drop on the current page goes, if a plugin takes it.
+    fn drop_target_here(&self) -> Option<DropTarget<PluginMessage>> {
+        self.drop_target(self.route.device()?, &self.route)
+    }
+
+    /// What files dropped on `device_id` while the window shows `route`
+    /// would do: the first plugin that takes them, starting with the one
+    /// whose page it is.
+    fn drop_target(&self, device_id: &str, route: &Route) -> Option<DropTarget<PluginMessage>> {
+        let Phase::Running(running) = &self.phase else {
+            return None;
+        };
+        let device = running.ctx.device(device_id)?;
+        let owner = match route {
+            Route::Plugin { plugin, .. } => Some(*plugin),
+            _ => None,
+        };
+        let (first, rest): (Vec<_>, Vec<_>) = running
+            .plugins
+            .iter()
+            .partition(|plugin| Some(plugin.id()) == owner);
+        first
+            .into_iter()
+            .chain(rest)
+            .find_map(|plugin| plugin.drop_target(device, route))
+    }
+
     /// Whether an incoming pairing request is waiting for the user.
     fn incoming_prompt_shows(&self) -> bool {
         match &self.phase {
@@ -903,9 +1025,16 @@ impl App {
                 confirm_label,
                 Submit::Close(Arc::new(move |text| Message::Plugin(then(text)))),
             )),
-            request @ ShellRequest::PickFiles { .. } => {
-                tracing::warn!(?request, "the shell can't do this yet");
-                Task::none()
+            // rfd can't relabel the confirm button, so it is the platform's
+            // own word ("Open").
+            ShellRequest::PickFiles { title, then, .. } => {
+                Task::future(self.picker.pick_files(&title)).and_then(move |paths| {
+                    if paths.is_empty() {
+                        Task::none()
+                    } else {
+                        Task::done(Message::Plugin(then(paths)))
+                    }
+                })
             }
         }
     }
@@ -936,11 +1065,62 @@ impl App {
         } else {
             stack![page, self.toasts.view(Message::ToastAction)].into()
         };
+        let page = match self.drop_hint() {
+            Some(label) => dropping::hint(page, label),
+            None => page,
+        };
         let page = self.dialogs.view(page, Message::Dialog);
+        let page = match self.chooser() {
+            Some(chooser) => dialogs::modal(page, chooser, Some(Message::CancelDrop)),
+            None => page,
+        };
         match self.incoming_prompt() {
             Some(prompt) => dialogs::modal(page, prompt, None),
             None => page,
         }
+    }
+
+    /// What the drop hint says while files hover over the window, if they
+    /// do.
+    fn drop_hint(&self) -> Option<String> {
+        if !self.drag.is_active() || !matches!(self.phase, Phase::Running(_)) {
+            return None;
+        }
+        Some(
+            self.drop_target_here()
+                .map_or_else(|| dropping::CHOOSE_LABEL.into(), |target| target.label),
+        )
+    }
+
+    /// The chooser for dropped files, listing the paired devices a plugin
+    /// would send them to now. It follows devices as they come and go.
+    fn chooser(&self) -> Option<Element<'_, Message>> {
+        let files = self.choosing.as_ref()?;
+        Some(dropping::chooser(
+            files,
+            self.recipients(),
+            Message::DropOn,
+            Message::CancelDrop,
+        ))
+    }
+
+    /// The paired devices that would take dropped files now, by name.
+    fn recipients(&self) -> Vec<&crate::core::DeviceSnapshot> {
+        let Phase::Running(running) = &self.phase else {
+            return Vec::new();
+        };
+        running
+            .ctx
+            .store()
+            .paired_devices()
+            .into_loaded()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|device| {
+                self.drop_target(&device.device_id, &Route::Device(device.device_id.clone()))
+                    .is_some()
+            })
+            .collect()
     }
 
     /// The prompt for the oldest incoming pairing request, over everything.
@@ -975,17 +1155,12 @@ impl App {
     /// The page for the current route.
     fn page<'a>(&'a self, running: &'a Running) -> Element<'a, Message> {
         match &self.route {
-            Route::Devices => {
-                // Drops arrive with the share step, which highlights the
-                // card under them.
-                devices::view(
-                    running.ctx.store(),
-                    &running.plugins,
-                    None,
-                    Message::Navigate,
-                    Message::Reload,
-                )
-            }
+            Route::Devices => devices::view(
+                running.ctx.store(),
+                &running.plugins,
+                Message::Navigate,
+                Message::Reload,
+            ),
             Route::Plugin {
                 plugin,
                 device,
@@ -1821,9 +1996,12 @@ mod tests {
         assert!(shows(&app, "1.2.3 (test)"));
     }
 
-    /// Picks what it is told to, and records where it started.
+    /// Picks what it is told to, and records where it started (folders) or
+    /// its title (files).
+    #[derive(Default)]
     struct FakePicker {
         answer: Option<PathBuf>,
+        files: Option<Vec<PathBuf>>,
         asked: Mutex<Vec<PathBuf>>,
     }
 
@@ -1833,12 +2011,18 @@ mod tests {
             let answer = self.answer.clone();
             Box::pin(async move { answer })
         }
+
+        fn pick_files(&self, title: &str) -> picking::Picked<Vec<PathBuf>> {
+            self.asked.lock().unwrap().push(title.into());
+            let files = self.files.clone();
+            Box::pin(async move { files })
+        }
     }
 
     fn picker(answer: Option<PathBuf>) -> Arc<FakePicker> {
         Arc::new(FakePicker {
             answer,
-            asked: Mutex::default(),
+            ..FakePicker::default()
         })
     }
 
@@ -1877,6 +2061,278 @@ mod tests {
             "That folder can’t be used for downloads."
         );
         assert_eq!(settings(&app).download_dir, folder.path());
+    }
+
+    /// An app running the share plugin's UI half over a core that runs
+    /// share, with `photo.jpg` and `notes.txt` to send from a folder that
+    /// also holds a folder, `album`.
+    struct Sharing {
+        app: App,
+        core: Core,
+        files: tempfile::TempDir,
+    }
+
+    impl Sharing {
+        fn new() -> Self {
+            let (core, _plugin, _commands) =
+                crate::core::testing::handle_with_plugin(crate::plugins::share::SharePlugin);
+            let app = running_on(
+                core.clone(),
+                vec![Box::new(crate::plugins::share::ui::ShareUi)],
+            );
+            let files = tempfile::tempdir().unwrap();
+            std::fs::write(files.path().join("photo.jpg"), "jpg").unwrap();
+            std::fs::write(files.path().join("notes.txt"), "txt").unwrap();
+            std::fs::create_dir(files.path().join("album")).unwrap();
+            Self { app, core, files }
+        }
+
+        fn file(&self, name: &str) -> PathBuf {
+            self.files.path().join(name)
+        }
+
+        /// A paired, connected peer; one that takes files if `capable`.
+        async fn peer(&mut self, device_id: &str, capable: bool) -> String {
+            let capabilities: &[&str] = if capable {
+                &[crate::plugins::share::PACKET_TYPE]
+            } else {
+                &[]
+            };
+            let (peer, sent) = testing::connect_peer(&self.core, device_id, capabilities);
+            // The connection lasts as long as its receiver.
+            std::mem::forget(sent);
+            settle(&mut self.app, Message::Reload).await;
+            peer.device_id
+        }
+
+        /// Drag `paths` over the window and drop them, as winit reports it.
+        async fn drop(&mut self, paths: &[PathBuf]) {
+            self.hover(paths).await;
+            for path in paths {
+                self.window(window::Event::FileDropped(path.clone())).await;
+            }
+        }
+
+        async fn hover(&mut self, paths: &[PathBuf]) {
+            for path in paths {
+                self.window(window::Event::FileHovered(path.clone())).await;
+            }
+        }
+
+        async fn window(&mut self, event: window::Event) {
+            let id = self.app.window;
+            settle(&mut self.app, Message::Window(id, event)).await;
+        }
+
+        /// To whom each file sent so far went, by file name. (Transfers
+        /// started in the same millisecond can't be told apart by age.)
+        fn sent(&self) -> Vec<(String, String)> {
+            let mut sent: Vec<_> = self
+                .core
+                .transfers()
+                .list()
+                .into_iter()
+                .map(|transfer| (transfer.device_id, transfer.file_name))
+                .collect();
+            sent.sort_by(|a, b| a.1.cmp(&b.1));
+            sent
+        }
+    }
+
+    const OTHER_PEER: &str = "8f9e2a1c3b4d4e5f8a9b0c1d2e3f4a5b";
+
+    #[tokio::test(start_paused = true)]
+    async fn files_dropped_on_a_device_page_go_straight_to_it() {
+        let mut sharing = Sharing::new();
+        let peer = sharing.peer(testing::PEER_ID, true).await;
+        let _other = sharing.peer(OTHER_PEER, true).await;
+        sharing.app.route = Route::Device(peer.clone());
+        let (photo, notes) = (sharing.file("photo.jpg"), sharing.file("notes.txt"));
+
+        sharing.hover(&[photo.clone(), notes.clone()]).await;
+        assert_eq!(
+            sharing.app.drop_hint().as_deref(),
+            Some("Drop to send to Peer")
+        );
+        assert!(shows(&sharing.app, "Drop to send to Peer"));
+        for path in [&photo, &notes] {
+            sharing
+                .window(window::Event::FileDropped(path.clone()))
+                .await;
+        }
+
+        assert_eq!(
+            sharing.sent(),
+            [
+                (peer.clone(), "notes.txt".into()),
+                (peer.clone(), "photo.jpg".into())
+            ]
+        );
+        assert!(sharing.app.choosing.is_none());
+        assert_eq!(sharing.app.route, Route::Device(peer));
+        assert!(sharing.app.drop_hint().is_none(), "the hint goes");
+        assert!(sharing.app.toasts.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn files_dropped_away_from_a_device_ask_where_to_go() {
+        let mut sharing = Sharing::new();
+        let peer = sharing.peer(testing::PEER_ID, true).await;
+        sharing.app.route = Route::Transfers;
+        let photo = sharing.file("photo.jpg");
+
+        sharing.hover(std::slice::from_ref(&photo)).await;
+        assert_eq!(
+            sharing.app.drop_hint().as_deref(),
+            Some(dropping::CHOOSE_LABEL)
+        );
+        sharing
+            .window(window::Event::FileDropped(photo.clone()))
+            .await;
+        assert!(shows(&sharing.app, "Send photo.jpg"));
+        assert!(sharing.sent().is_empty());
+
+        click(&mut sharing.app, "Peer").await;
+        assert!(sharing.app.choosing.is_none());
+        assert_eq!(sharing.sent(), [(peer.clone(), "photo.jpg".into())]);
+        // The device's page, where the transfer shows.
+        assert_eq!(sharing.app.route, Route::Device(peer));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_drop_on_a_device_that_cant_take_files_asks_instead() {
+        let mut sharing = Sharing::new();
+        let incapable = sharing.peer(testing::PEER_ID, false).await;
+        let capable = sharing.peer(OTHER_PEER, true).await;
+        sharing.app.route = Route::Device(incapable);
+
+        sharing.hover(&[sharing.file("photo.jpg")]).await;
+        assert_eq!(
+            sharing.app.drop_hint().as_deref(),
+            Some(dropping::CHOOSE_LABEL)
+        );
+        sharing.drop(&[sharing.file("photo.jpg")]).await;
+        let recipients: Vec<_> = sharing
+            .app
+            .recipients()
+            .iter()
+            .map(|device| device.device_id.clone())
+            .collect();
+        assert_eq!(recipients, [capable]);
+
+        // Escape closes it, as Cancel does.
+        settle(&mut sharing.app, Message::Key(KeyCommand::Cancel)).await;
+        assert!(sharing.app.choosing.is_none());
+        assert!(sharing.sent().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_chooser_follows_devices_and_says_when_none_can_take_files() {
+        let mut sharing = Sharing::new();
+        sharing.drop(&[sharing.file("photo.jpg")]).await;
+        assert!(shows(
+            &sharing.app,
+            "No paired device is connected and able to receive files."
+        ));
+
+        let peer = sharing.peer(testing::PEER_ID, true).await;
+        assert_eq!(sharing.app.recipients()[0].device_id, peer);
+        assert!(shows(&sharing.app, "Choose the device to send to:"));
+
+        click(&mut sharing.app, "Cancel").await;
+        assert!(sharing.app.choosing.is_none());
+        assert!(sharing.sent().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_dropped_folder_is_refused() {
+        let mut sharing = Sharing::new();
+        let peer = sharing.peer(testing::PEER_ID, true).await;
+        sharing.app.route = Route::Device(peer.clone());
+
+        sharing.drop(&[sharing.file("album")]).await;
+        assert_eq!(
+            sharing.app.toasts.items()[0].text,
+            "Only files can be sent, not folders."
+        );
+        assert!(sharing.sent().is_empty());
+
+        // Among files, a folder is left out.
+        sharing
+            .drop(&[sharing.file("album"), sharing.file("notes.txt")])
+            .await;
+        assert_eq!(sharing.sent(), [(peer, "notes.txt".into())]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_drop_without_hover_events_still_arrives_whole() {
+        let mut sharing = Sharing::new();
+        let peer = sharing.peer(testing::PEER_ID, true).await;
+        sharing.app.route = Route::Device(peer.clone());
+        let (photo, notes) = (sharing.file("photo.jpg"), sharing.file("notes.txt"));
+
+        let id = sharing.app.window;
+        let first = step(
+            &mut sharing.app,
+            Message::Window(id, window::Event::FileDropped(photo)),
+        )
+        .await;
+        sharing.window(window::Event::FileDropped(notes)).await;
+        assert!(sharing.sent().is_empty(), "waits for the rest");
+        for message in first {
+            settle(&mut sharing.app, message).await;
+        }
+        assert_eq!(
+            sharing.sent(),
+            [
+                (peer.clone(), "notes.txt".into()),
+                (peer, "photo.jpg".into())
+            ]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn drops_are_ignored_while_the_pairing_prompt_shows() {
+        let mut sharing = Sharing::new();
+        let peer = sharing.peer(testing::PEER_ID, true).await;
+        let (stranger, _sent) = testing::connect_unpaired_peer(&sharing.core, OTHER_PEER);
+        testing::request_pairing(&sharing.core, &stranger.device_id);
+        settle(&mut sharing.app, Message::Reload).await;
+        sharing.app.route = Route::Device(peer);
+
+        sharing.hover(&[sharing.file("photo.jpg")]).await;
+        assert!(sharing.app.drop_hint().is_none());
+        sharing.drop(&[sharing.file("photo.jpg")]).await;
+        assert!(sharing.sent().is_empty());
+        assert!(sharing.app.choosing.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn send_files_picks_files_and_sends_them() {
+        let mut sharing = Sharing::new();
+        let peer = sharing.peer(testing::PEER_ID, true).await;
+        sharing.app.route = Route::Device(peer.clone());
+
+        // Cancelled: nothing is sent.
+        let cancelled = picker(None);
+        sharing.app.picker = cancelled.clone();
+        click(&mut sharing.app, "Send files").await;
+        assert_eq!(
+            *cancelled.asked.lock().unwrap(),
+            [PathBuf::from("Send files to Peer")]
+        );
+        assert!(sharing.sent().is_empty());
+
+        sharing.app.picker = Arc::new(FakePicker {
+            files: Some(vec![sharing.file("photo.jpg"), sharing.file("gone.txt")]),
+            ..FakePicker::default()
+        });
+        click(&mut sharing.app, "Send files").await;
+        assert_eq!(sharing.sent(), [(peer, "photo.jpg".into())]);
+        assert_eq!(
+            sharing.app.toasts.items()[0].text,
+            "Couldn’t send gone.txt: The file couldn’t be read."
+        );
     }
 
     #[test]

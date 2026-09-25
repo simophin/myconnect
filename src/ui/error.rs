@@ -5,6 +5,8 @@
 //! way. A plugin with its own error type words its own codes and hands the
 //! rest to [`describe_code`].
 
+use std::path::{Path, PathBuf};
+
 use crate::core::CoreError;
 
 /// A sentence for the user about `error`.
@@ -40,6 +42,28 @@ pub fn describe_code(code: &str) -> String {
         code => return format!("Something went wrong ({code})."),
     };
     message.into()
+}
+
+/// One sentence about the files among a batch that failed, if any:
+/// `verb` is what was being done ("send", "upload"), and each failure is a
+/// file and why. Only the first reason is given, as the Flutter app did.
+pub fn describe_file_failures(verb: &str, failures: &[(PathBuf, String)]) -> Option<String> {
+    match failures {
+        [] => None,
+        [(path, reason)] => Some(format!("Couldn’t {verb} {}: {reason}", file_name(path))),
+        [(_, reason), ..] => Some(format!(
+            "Couldn’t {verb} {} files: {reason}",
+            failures.len()
+        )),
+    }
+}
+
+/// The last part of `path`, for the user.
+pub fn file_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[cfg(test)]
@@ -120,6 +144,25 @@ mod tests {
         assert_eq!(
             describe_error(&CoreError::Internal),
             "Something went wrong (internal_error)."
+        );
+    }
+
+    #[test]
+    fn failed_files_are_summed_up_in_one_sentence() {
+        let failed =
+            |name: &str, reason: &str| (PathBuf::from(format!("/tmp/{name}")), reason.into());
+        assert_eq!(describe_file_failures("send", &[]), None);
+        assert_eq!(
+            describe_file_failures("send", &[failed("photo.jpg", "It broke.")]).unwrap(),
+            "Couldn’t send photo.jpg: It broke."
+        );
+        assert_eq!(
+            describe_file_failures(
+                "upload",
+                &[failed("a.txt", "First."), failed("b.txt", "Second.")]
+            )
+            .unwrap(),
+            "Couldn’t upload 2 files: First."
         );
     }
 }

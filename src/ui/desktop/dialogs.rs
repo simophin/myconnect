@@ -14,6 +14,9 @@ pub type Picked<T> = Pin<Box<dyn Future<Output = Option<T>> + Send>>;
 pub trait Pick: Send + Sync + 'static {
     /// Choose a folder, starting in `start`.
     fn pick_folder(&self, title: &str, start: &Path) -> Picked<PathBuf>;
+
+    /// Choose one or more files to open.
+    fn pick_files(&self, title: &str) -> Picked<Vec<PathBuf>>;
 }
 
 /// The platform's dialogs, through `rfd`: the XDG portal (or zenity) on
@@ -27,5 +30,14 @@ impl Pick for System {
             .set_directory(start)
             .pick_folder();
         Box::pin(async move { dialog.await.map(|folder| folder.path().to_owned()) })
+    }
+
+    fn pick_files(&self, title: &str) -> Picked<Vec<PathBuf>> {
+        let dialog = rfd::AsyncFileDialog::new().set_title(title).pick_files();
+        Box::pin(async move {
+            dialog
+                .await
+                .map(|files| files.iter().map(|file| file.path().to_owned()).collect())
+        })
     }
 }

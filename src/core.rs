@@ -56,7 +56,7 @@ pub use settings::{SettingsDefaults, SettingsPatch, SettingsSnapshot};
 pub use transfers::{
     DEFAULT_MAX_TRANSFER_BYTES, FileNameError, PROGRESS_EVENT_INTERVAL, Transfer, TransferConfig,
     TransferDirection, TransferHandle, TransferProgressError, TransferSnapshot, TransferStatus,
-    TransferTransitionError, Transfers, sanitize_file_name, upload_channel,
+    TransferTransitionError, Transfers, forward_reader, sanitize_file_name, upload_channel,
 };
 
 /// The core: devices, connections, pairing, transfers, settings and events,

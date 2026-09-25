@@ -61,6 +61,7 @@ pub fn builtin_with_ui(clipboard: Arc<dyn clipboard::ClipboardService + Send + S
             Box::new(findmyphone::ui::FindMyPhoneUi),
             Box::new(battery::ui::BatteryUi),
             Box::new(clipboard::ui::ClipboardUi::new(clipboard)),
+            Box::new(share::ui::ShareUi),
         ],
     }
 }

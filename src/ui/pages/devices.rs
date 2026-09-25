@@ -19,12 +19,10 @@ use crate::{
 
 /// The home page, from what `store` holds, with each device's status from
 /// `plugins`. `navigate` makes the message that opens a page, and `retry`
-/// takes a fresh snapshot after a failed one. The card of `drop_target`,
-/// if any, shows that files dropped now go to it.
+/// takes a fresh snapshot after a failed one.
 pub fn view<'a, Message: Clone + 'a>(
     store: &'a Store,
     plugins: &'a [Box<dyn ErasedUiPlugin>],
-    drop_target: Option<&str>,
     navigate: impl Fn(Route) -> Message,
     retry: Message,
 ) -> Element<'a, Message> {
@@ -88,11 +86,9 @@ pub fn view<'a, Message: Clone + 'a>(
             // Connected first; the store sorts by name.
             paired.sort_by_key(|device| !is_connected(device));
             let cards = paired.into_iter().map(|device| {
-                let dropping = drop_target == Some(device.device_id.as_str());
                 device_card(
                     device,
                     plugins,
-                    dropping,
                     navigate(Route::Device(device.device_id.clone())),
                 )
             });
@@ -106,28 +102,19 @@ pub fn view<'a, Message: Clone + 'a>(
     widgets::page(header, body)
 }
 
-/// A device's card, which opens it. While files are dragged over it and it
-/// takes them (`dropping`), it says so instead of its status.
+/// A device's card, which opens it.
 fn device_card<'a, Message: Clone + 'a>(
     device: &'a DeviceSnapshot,
     plugins: &'a [Box<dyn ErasedUiPlugin>],
-    dropping: bool,
     open: Message,
 ) -> Element<'a, Message> {
     let connected = is_connected(device);
 
-    let icon = if dropping {
-        lucide::file_up()
-    } else {
-        device_icon(device.device_type)
-    };
-    let badge = container(icon.size(20))
+    let badge = container(device_icon(device.device_type).size(20))
         .center(40)
         .style(move |theme: &Theme| {
             let palette = theme.extended_palette();
-            let pair = if dropping {
-                palette.primary.base
-            } else if connected {
+            let pair = if connected {
                 palette.primary.weak
             } else {
                 palette.background.strong
@@ -140,22 +127,13 @@ fn device_card<'a, Message: Clone + 'a>(
             }
         });
 
-    let status_row = if dropping {
-        row![
-            text("Drop to send")
-                .size(13)
-                .font(widgets::semibold())
-                .style(|theme: &Theme| text::Style {
-                    color: Some(theme.extended_palette().primary.weak.text),
-                })
-        ]
-    } else {
-        status_row(device, plugins)
-    };
-
     let content = row![
         badge,
-        column![text(&device.device_name).size(15), status_row].spacing(3),
+        column![
+            text(&device.device_name).size(15),
+            status_row(device, plugins)
+        ]
+        .spacing(3),
         space::horizontal(),
         lucide::chevron_right().size(18).style(text::secondary),
     ]
@@ -165,7 +143,7 @@ fn device_card<'a, Message: Clone + 'a>(
     button(content)
         .padding([12, 14])
         .width(Length::Fill)
-        .style(move |theme: &Theme, status| card_style(theme, status, dropping))
+        .style(widgets::card_button)
         .on_press(open)
         .into()
 }
@@ -198,21 +176,6 @@ pub fn status_row<'a, Message: 'a>(
         );
     }
     status_row
-}
-
-/// A card that reacts to the pointer, and stands out while it is where
-/// files would be dropped.
-fn card_style(theme: &Theme, status: button::Status, highlighted: bool) -> button::Style {
-    let style = widgets::card_button(theme, status);
-    if !highlighted {
-        return style;
-    }
-    let palette = theme.extended_palette();
-    button::Style {
-        background: Some(Background::Color(palette.primary.weak.color)),
-        border: style.border.color(palette.primary.base.color),
-        ..style
-    }
 }
 
 fn status_dot<'a, Message: 'a>(reachability: DeviceReachability) -> Element<'a, Message> {
@@ -321,12 +284,8 @@ mod tests {
         Retry,
     }
 
-    fn page<'a>(
-        store: &'a Store,
-        plugins: &'a [Box<dyn ErasedUiPlugin>],
-        drop_target: Option<&str>,
-    ) -> Element<'a, Asked> {
-        view(store, plugins, drop_target, Asked::Go, Asked::Retry)
+    fn page<'a>(store: &'a Store, plugins: &'a [Box<dyn ErasedUiPlugin>]) -> Element<'a, Asked> {
+        view(store, plugins, Asked::Go, Asked::Retry)
     }
 
     fn some_devices() -> Vec<DeviceSnapshot> {
@@ -366,7 +325,7 @@ mod tests {
         > + Send,
     ) -> Vec<Asked> {
         let plugins: Vec<Box<dyn ErasedUiPlugin>> = vec![Box::new(Signal)];
-        let mut ui = Simulator::new(page(store, &plugins, None));
+        let mut ui = Simulator::new(page(store, &plugins));
         ui.click(target).expect("the target is on the page");
         ui.into_messages().collect()
     }
@@ -384,7 +343,7 @@ mod tests {
         devices.push(stranger);
         let store = testing::store("Demo desktop", devices);
         let plugins: Vec<Box<dyn ErasedUiPlugin>> = vec![Box::new(Signal)];
-        let mut ui = Simulator::new(page(&store, &plugins, None));
+        let mut ui = Simulator::new(page(&store, &plugins));
 
         for shown in [
             "This computer: Demo desktop",
@@ -399,14 +358,13 @@ mod tests {
             assert!(ui.find(shown).is_ok(), "{shown} is shown");
         }
         assert!(ui.find("Stranger").is_err(), "unpaired devices aren't");
-        assert!(ui.find("Drop to send").is_err());
     }
 
     #[test]
     fn connected_devices_come_first_then_by_name() {
         let store = testing::store("Demo desktop", some_devices());
         let plugins: Vec<Box<dyn ErasedUiPlugin>> = vec![];
-        let mut ui = Simulator::new(page(&store, &plugins, None));
+        let mut ui = Simulator::new(page(&store, &plugins));
         let top = |ui: &mut Simulator<'_, Asked>, name: &str| {
             ui.find(name).unwrap().visible_bounds().unwrap().y
         };
@@ -476,35 +434,17 @@ mod tests {
     }
 
     #[test]
-    fn a_card_under_a_drag_says_drop_to_send() {
-        let store = testing::store("Demo desktop", some_devices());
-        let plugins: Vec<Box<dyn ErasedUiPlugin>> = vec![Box::new(Signal)];
-        let pixel = id_of(&store, "Pixel 8a");
-        let mut ui = Simulator::new(page(&store, &plugins, Some(&pixel)));
-        assert!(ui.find("Drop to send").is_ok());
-        assert!(ui.find("4 bars").is_err(), "the status gives way");
-    }
-
-    #[test]
     fn snapshot_device_list() {
         let store = testing::store("Demo desktop", some_devices());
         let plugins: Vec<Box<dyn ErasedUiPlugin>> = vec![Box::new(Signal)];
-        let dropping = id_of(&store, "galaxy Tab S9");
-        testing::snapshot("devices", (440.0, 620.0), || page(&store, &plugins, None));
-        testing::snapshot("devices-drop", (440.0, 620.0), || {
-            page(&store, &plugins, Some(&dropping))
-        });
+        testing::snapshot("devices", (440.0, 620.0), || page(&store, &plugins));
         let loading = Store::default();
         testing::snapshot("devices-loading", (440.0, 400.0), || {
-            page(&loading, &plugins, None)
+            page(&loading, &plugins)
         });
         let empty = testing::store("Demo desktop", Vec::new());
-        testing::snapshot("devices-empty", (440.0, 400.0), || {
-            page(&empty, &plugins, None)
-        });
+        testing::snapshot("devices-empty", (440.0, 400.0), || page(&empty, &plugins));
         let failed = failed();
-        testing::snapshot("devices-failed", (440.0, 400.0), || {
-            page(&failed, &plugins, None)
-        });
+        testing::snapshot("devices-failed", (440.0, 400.0), || page(&failed, &plugins));
     }
 }

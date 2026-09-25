@@ -19,8 +19,10 @@ Settings renames this computer, picks the download folder and flips its
 switches, the clipboard plugin's included. Step 10's desktop spike is
 done too: its findings and decisions for drops, the tray, notifications,
 placement and single instance are in ADR 0001's "Desktop integration".
-Next is step 11. Each finished step says so under its heading, with what
-differs from the plan.
+Step 11 is done: the device page sends files through a picker, and files
+dropped on the window go to the page's device or to a chooser. Next is
+step 12. Each finished step says so under its heading, with what differs
+from the plan.
 
 ## Read first
 
@@ -1052,6 +1054,69 @@ each gap.
 
 ### 11. Share: send files, drag and drop, the chooser
 
+**Done (2026-09-26).** Where it differs from the text below:
+- `share::send_path(ctx, device_id, path)` opens the file, calls
+  `send_file` with its name and size, and streams it in with the new
+  `core::forward_reader` (browse's upload from a path can use it too). It
+  doesn't spawn the copy: it resolves once the whole file has gone into
+  the transfer, or the transfer ended first, as `POST
+  /devices/{id}/share` answers, so the UI's "one at a time" waits for
+  each file like Flutter's did. A path that isn't a readable regular file
+  is `SendPathError::File` ("The file couldn’t be read."), before any
+  transfer is recorded. `http.rs` is unchanged: it streams multipart, not
+  a path.
+- `plugins/share/ui.rs`: *Send files* (listed always, enabled while the
+  device is connected and takes `kdeconnect.share.request`, in the tray
+  too) asks the shell for `PickFiles` titled "Send files to {name}"; the
+  files go one at a time and failures are summed up once by the new
+  `ui::error::describe_file_failures` ("Couldn’t send {name}: …" /
+  "Couldn’t send N files: …"), which browse's uploads will share.
+  `drop_target` takes files for such a device, labelled "Drop to send to
+  {name}".
+- The shell's `PickFiles` goes through `Pick::pick_files` (rfd's
+  `pick_files`). rfd can't relabel the confirm button, so "Send" is the
+  platform's "Open".
+- Drops (`ui::overlay::drop`): winit sends a `FileHovered` per file, then a
+  `FileDropped` per file. `Drag` counts them and hands over the whole drop
+  once as many have dropped as hovered, or 200 ms after the first if the
+  count doesn't come (a timer, so macOS or Windows can differ harmlessly).
+  While files hover, the window is outlined and a pill says what a drop
+  does: the target's label on a page whose device takes them, otherwise
+  "Drop anywhere to choose a device" (not Flutter's "Drop on a device, or
+  anywhere to choose one": cards aren't targets any more).
+- The shell routes a drop to the page's device (`Route::device()`), asking
+  the plugin whose page it is first, then the others in
+  `builtin_with_ui()` order. Anywhere else, or when no plugin takes it,
+  the chooser opens: a modal over dialogs, "Send {file}" / "Send N files",
+  the paired devices a plugin's `drop_target` accepts for
+  `Route::Device`, drawn from the store so it follows devices live, and
+  "No paired device is connected and able to receive files." Choosing
+  opens the device's page and hands it the files; Escape, Cancel or a
+  click outside close it. Folders (anything not a regular file) are left
+  out, and a drop of only folders toasts "Only files can be sent, not
+  folders." Drops and the hint are ignored while the pairing prompt shows.
+- Step 5's per-card highlight ("Drop to send" on the card) is gone, with
+  its snapshot `devices-drop`.
+- Tests: the share UI half (gating, the picker request, failures summed
+  up once), `Drag` (counted, timed, a stale timer), the chooser widget,
+  and the shell over a real core running share: a drop on the device page
+  sends both files there, a drop away asks and choosing sends and opens
+  the device, a drop on a device that can't take files asks with only
+  the capable one listed, the chooser follows devices and says when none
+  can, a folder is refused and left out among files, a drop without hover
+  events still arrives whole, drops are ignored under the pairing prompt,
+  and *Send files* picks (a cancel sends nothing) and reports a file that
+  can't be read. `tests/transfer_e2e.rs` sends a local file from disk
+  between two real daemons. Snapshots `drop-chooser`, `drop-hint`.
+- Checked in the real app on X11 (Xvfb, private bus, a GTK drag source
+  moved with XTest, a CLI peer on loopback): the outline and pill show
+  while hovering; two files dropped on the home page open "Send 2 files"
+  listing the peer, and choosing it opens its page and both arrive
+  byte-identical; a drop on the device page says "Drop to send to Peer"
+  and sends straight away; a folder toasts; a drop under the pairing
+  prompt does nothing; *Send files* opened the portal's GTK chooser
+  (titled "Send files to Peer"), and a typed path was sent.
+
 **Build:**
 - Add `share::send_path(ctx, device_id, path)` in the daemon first (see
   the typed API table).
@@ -1287,6 +1352,14 @@ app.
   `GDK_BACKEND=x11` (and `XDG_SESSION_TYPE=x11` for `display-info`); for
   a headless compositor give it its own short `XDG_RUNTIME_DIR` (socket
   paths are limited to 108 bytes, so not under the scratchpad).
+- **Portals on a private bus.** A file picker asks `xdg-desktop-portal`,
+  which D-Bus activates on your private bus, and it starts
+  `xdg-document-portal` too. That one mounts its FUSE file system at the
+  owner's `$XDG_RUNTIME_DIR/doc` if nothing is mounted there. Stop every
+  process on your bus when done (match `DBUS_SESSION_BUS_ADDRESS` in
+  `/proc/<pid>/environ`), and check the mount is as you found it.
+- **`setsid cmd &` forks**, so `$!` is a wrapper that has already exited.
+  Record the PID from `pgrep -f` with your run directory in the pattern.
 - **iced version.** Pin `iced = "0.14"` and `iced_fonts = "0.3"` (the
   version that matches 0.14). Upgrading iced is its own change, never
   mixed into a feature step.
@@ -1321,13 +1394,13 @@ are to the Flutter app under `ui/lib/src/`.
 - [x] Loading; error with Retry; empty: icon, "No paired devices yet", "Find a device to pair"
 - [x] Paired devices only, sorted by name (case-insensitive)
 - [x] Card: type icon (primary when connected), name, status label (Connected / Nearby / Not reachable) + status slot; opens the device
-- [ ] Drop on a card: "Drop to send" highlight when the device accepts files
+- [x] ~~Drop on a card: "Drop to send" highlight when the device accepts files~~ No position while a drag hovers (step 10): a drop on the home page opens the chooser
 
 ### §3 Device detail (`features/devices/device_detail_page.dart`)
 - [x] Title = device name; "This device is no longer known." when gone
 - [x] Header: large icon, name, status (with battery)
 - [x] Selectable facts: Device ID, Type, Protocol version
-- [ ] Send file: enabled when `acceptsFiles`; multi-select picker "Send"; one summary toast for failures
+- [x] Send file: enabled when `acceptsFiles`; multi-select picker "Send"; one summary toast for failures
 - [ ] Browse files: enabled when `sharesFiles`
 - [x] Ping: enabled when `acceptsPings`; toast "Pinged {name}."
 - [x] Ring: enabled when `canRing`; toast "Asked {name} to ring."
@@ -1335,7 +1408,7 @@ are to the Flutter app under `ui/lib/src/`.
 - [x] Errors from any action as a toast
 - [x] Recent transfers (≤5, newest first, no device name) + "See all"
 - [x] Unpair: confirm "Unpair {name}?" + body text; goes home; toast on error
-- [ ] Drop anywhere on the page sends to this device
+- [x] Drop anywhere on the page sends to this device
 
 ### §4 Add device (`features/devices/add_device_page.dart`)
 - [x] Scan on open; 4 s "searching" indicator; Scan again disabled while searching; toast on scan error
@@ -1354,13 +1427,13 @@ are to the Flutter app under `ui/lib/src/`.
 
 ### §6 Send files and drop (`features/send/`)
 Dropping applies on X11, macOS and Windows, not on Wayland (see Owner decisions).
-- [ ] Drop on a device that accepts files: sends directly
-- [ ] Drop elsewhere / on a device that can't take files: chooser dialog ("Send {file}" / "Send N files", live list, empty text, Cancel); after choosing, go to the device
+- [x] Drop on a device that accepts files: sends directly (on its page; see step 11)
+- [x] Drop elsewhere / on a device that can't take files: chooser dialog ("Send {file}" / "Send N files", live list, empty text, Cancel); after choosing, go to the device
 - [ ] Drop on an open browser folder: uploads there
-- [ ] Folders refused: "Only files can be sent, not folders."
-- [ ] Drag hint: window border + "Drop on a device, or anywhere to choose one"
-- [ ] Drops disabled while the pairing prompt shows
-- [ ] Files sent one at a time; failures summarised once (send and upload wording)
+- [x] Folders refused: "Only files can be sent, not folders."
+- [x] Drag hint: window border + a pill (the target's label, or "Drop anywhere to choose a device")
+- [x] Drops disabled while the pairing prompt shows
+- [x] Files sent one at a time; failures summarised once (send wording; upload comes with step 12)
 
 ### §7 Transfers (`features/transfers/`)
 - [x] Page: newest first; empty "No transfers yet"; loading; error + Retry
