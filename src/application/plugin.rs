@@ -24,16 +24,19 @@ pub trait Plugin: Send + Sync + 'static {
     fn id(&self) -> &'static str;
 
     /// Packet types this plugin handles; advertised as incoming
-    /// capabilities.
-    fn incoming(&self) -> &'static [&'static str];
+    /// capabilities. None by default, for a plugin that only sends.
+    fn incoming(&self) -> &'static [&'static str] {
+        &[]
+    }
 
     /// Packet types this plugin sends; advertised as outgoing capabilities.
     fn outgoing(&self) -> &'static [&'static str];
 
     /// Handle a packet of one of [`Self::incoming`]'s types. The core calls
     /// this only for devices that are paired, and never while holding its
-    /// own state lock.
-    fn handle_packet(&self, ctx: &PluginContext, device: &DeviceSnapshot, packet: &Packet);
+    /// own state lock. A plugin that declares incoming types must override
+    /// it.
+    fn handle_packet(&self, _ctx: &PluginContext, _device: &DeviceSnapshot, _packet: &Packet) {}
 
     /// HTTP routes under `/api/v1`, with their state already applied. They
     /// get the standard body limit, request deadline and authentication.

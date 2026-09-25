@@ -1,7 +1,7 @@
 //! The daemon's features.
 //!
 //! A feature implements [`crate::application::Plugin`] and is listed in
-//! [`builtin`]; ping is the first to do so. The others are still routed by
+//! [`builtin`]; so far ping and find my phone do. The others are still routed by
 //! the fixed table below ([`dispatch_incoming`], [`legacy_capabilities`])
 //! while they move over (see `docs/research/feature-modules.md`). The set
 //! is fixed at compile time; nothing is loaded at runtime.
@@ -24,7 +24,10 @@ use crate::{
 
 /// Every plugin in this build.
 pub fn builtin() -> Vec<Arc<dyn Plugin>> {
-    vec![Arc::new(ping::PingPlugin)]
+    vec![
+        Arc::new(ping::PingPlugin),
+        Arc::new(findmyphone::FindMyPhonePlugin),
+    ]
 }
 
 /// Capability strings advertised by all packet handlers registered here.
@@ -55,10 +58,9 @@ pub fn capabilities() -> PluginCapabilities {
     }
 }
 
-/// The packet types of the features not yet moved to a plugin. Browsing,
-/// battery reports and ringing are one-way: this build asks peers to serve
-/// files and to ring, and reads their battery, but serves no files, doesn't
-/// ring and reports no battery.
+/// The packet types of the features not yet moved to a plugin. Browsing
+/// and battery reports are one-way: this build asks peers to serve files
+/// and reads their battery, but serves no files and reports no battery.
 fn legacy_capabilities() -> PluginCapabilities {
     PluginCapabilities {
         incoming: vec![
@@ -73,7 +75,6 @@ fn legacy_capabilities() -> PluginCapabilities {
             clipboard::CONNECT_PACKET_TYPE.to_owned(),
             share::PACKET_TYPE.to_owned(),
             sftp::REQUEST_PACKET_TYPE.to_owned(),
-            findmyphone::REQUEST_PACKET_TYPE.to_owned(),
         ],
     }
 }
@@ -125,6 +126,14 @@ mod tests {
 
     #[test]
     fn advertises_ping_clipboard_and_share_both_directions_and_the_rest_one_way() {
+        // Order doesn't matter to peers, so compare sorted lists.
+        fn sorted(mut values: Vec<String>) -> Vec<String> {
+            values.sort();
+            values
+        }
+        fn strings(values: &[&str]) -> Vec<String> {
+            sorted(values.iter().map(|value| value.to_string()).collect())
+        }
         let capabilities = capabilities();
         let bidirectional = [
             ping::PACKET_TYPE,
@@ -133,20 +142,24 @@ mod tests {
             share::PACKET_TYPE,
         ];
         assert_eq!(
-            capabilities.incoming,
-            [
-                &bidirectional[..],
-                &[sftp::PACKET_TYPE, battery::PACKET_TYPE]
-            ]
-            .concat()
+            sorted(capabilities.incoming),
+            strings(
+                &[
+                    &bidirectional[..],
+                    &[sftp::PACKET_TYPE, battery::PACKET_TYPE]
+                ]
+                .concat()
+            )
         );
         assert_eq!(
-            capabilities.outgoing,
-            [
-                &bidirectional[..],
-                &[sftp::REQUEST_PACKET_TYPE, findmyphone::REQUEST_PACKET_TYPE]
-            ]
-            .concat()
+            sorted(capabilities.outgoing),
+            strings(
+                &[
+                    &bidirectional[..],
+                    &[sftp::REQUEST_PACKET_TYPE, findmyphone::REQUEST_PACKET_TYPE]
+                ]
+                .concat()
+            )
         );
     }
 

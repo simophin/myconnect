@@ -102,7 +102,6 @@ pub trait ApplicationService: Send + Sync {
     fn announce_to(&self, address: Ipv4Addr) -> Result<(), ApplicationError>;
     /// The HTTP routes of every plugin, merged.
     fn plugin_routes(&self) -> axum::Router;
-    fn ring_device(&self, device_id: &str) -> Result<(), ApplicationError>;
     fn send_clipboard(&self, device_id: &str) -> Result<(), ApplicationError>;
     fn set_clipboard(&self, text: String) -> Result<ClipboardSnapshot, ApplicationError>;
     fn update_settings(&self, patch: SettingsPatch) -> Result<SettingsSnapshot, ApplicationError>;
@@ -876,17 +875,6 @@ impl ApplicationHandle {
             .packets
             .try_send(packet)
             .map_err(|_| ApplicationError::DeviceNotConnected)
-    }
-
-    /// Ask a paired, connected device to ring so it can be found, with a
-    /// `kdeconnect.findmyphone.request`. Refused like
-    /// [`Self::send_to_capable`] unless the device advertised that packet
-    /// type.
-    pub fn ring_device(&self, device_id: &str) -> Result<(), ApplicationError> {
-        self.send_to_capable(
-            device_id,
-            plugins::findmyphone::build_request_packet(unix_millis()),
-        )
     }
 
     /// Send this machine's clipboard text to one paired, connected device
@@ -2209,10 +2197,6 @@ impl ApplicationService for ApplicationHandle {
         self.plugins.routes(&self.plugin_context())
     }
 
-    fn ring_device(&self, device_id: &str) -> Result<(), ApplicationError> {
-        ApplicationHandle::ring_device(self, device_id)
-    }
-
     fn send_clipboard(&self, device_id: &str) -> Result<(), ApplicationError> {
         ApplicationHandle::send_clipboard(self, device_id)
     }
@@ -2583,34 +2567,6 @@ mod tests {
         };
         assert_eq!(device.device_name, "Laptop");
         assert_eq!(device.reachability, DeviceReachability::Unavailable);
-    }
-
-    #[test]
-    fn devices_that_accept_it_can_be_asked_to_ring() {
-        let (handle, _commands) = handle();
-        let device_id = "740bd4b9b4184ee497d6caf1da8151be";
-        let identity = make_identity(device_id, vec![plugins::ping::PACKET_TYPE.into()]);
-        handle.discover_device(&identity, true, 1).unwrap();
-        let (tx, mut rx) = mpsc::channel(4);
-        handle
-            .register_connection(device_id, vec![1, 2, 3], 8, tx, CancellationToken::new(), 1)
-            .unwrap();
-
-        // Accepting pings says nothing about ringing.
-        assert!(matches!(
-            handle.ring_device(device_id),
-            Err(ApplicationError::UnsupportedByPeer)
-        ));
-
-        let identity = make_identity(
-            device_id,
-            vec![plugins::findmyphone::REQUEST_PACKET_TYPE.into()],
-        );
-        handle.discover_device(&identity, true, 2).unwrap();
-        handle.ring_device(device_id).unwrap();
-        let sent = rx.try_recv().unwrap();
-        assert_eq!(sent.packet_type, plugins::findmyphone::REQUEST_PACKET_TYPE);
-        assert!(sent.body.is_empty());
     }
 
     #[test]
