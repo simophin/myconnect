@@ -203,23 +203,15 @@ pub fn status_row<'a, Message: 'a>(
 /// A card that reacts to the pointer, and stands out while it is where
 /// files would be dropped.
 fn card_style(theme: &Theme, status: button::Status, highlighted: bool) -> button::Style {
+    let style = widgets::card_button(theme, status);
+    if !highlighted {
+        return style;
+    }
     let palette = theme.extended_palette();
-    let card = widgets::card_style(theme);
-    let (background, border) = if highlighted {
-        (palette.primary.weak.color, palette.primary.base.color)
-    } else {
-        let background = match status {
-            button::Status::Hovered => palette.background.weak.color,
-            button::Status::Pressed => palette.background.strong.color,
-            _ => palette.background.weakest.color,
-        };
-        (background, card.border.color)
-    };
     button::Style {
-        background: Some(Background::Color(background)),
-        text_color: palette.background.base.text,
-        border: card.border.color(border),
-        ..button::Style::default()
+        background: Some(Background::Color(palette.primary.weak.color)),
+        border: style.border.color(palette.primary.base.color),
+        ..style
     }
 }
 

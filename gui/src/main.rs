@@ -111,6 +111,7 @@ fn main() -> Result<()> {
         UiOptions {
             runtime: runtime.handle().clone(),
             demo: args.demo,
+            version: env!("MYCONNECT_APP_VERSION").into(),
         },
         start,
     );

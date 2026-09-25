@@ -48,8 +48,9 @@ pub struct Field {
 }
 
 /// Work that runs while the dialog stays open: `Err` is shown in the
-/// dialog, `Ok` closes it.
-pub type Work = Arc<dyn Fn(String) -> Task<Result<(), String>> + Send + Sync>;
+/// dialog, `Ok` closes it and sends its message (the work's answer, for
+/// its owner to apply).
+pub type Work<M> = Arc<dyn Fn(String) -> Task<Result<M, String>> + Send + Sync>;
 
 /// What submitting does.
 #[derive(Clone)]
@@ -58,7 +59,7 @@ pub enum Submit<M> {
     /// (empty for a confirmation).
     Close(Callback<String, M>),
     /// Keep the dialog open, busy, while the work runs.
-    Run(Work),
+    Run(Work<M>),
 }
 
 #[derive(Clone)]
@@ -70,8 +71,6 @@ pub struct Dialog<M> {
     pub submit: Submit<M>,
     /// Destructive: the confirm button says so.
     pub danger: bool,
-    /// Sent when [`Submit::Run`] work succeeds and the dialog closes.
-    pub on_success: Option<M>,
     busy: bool,
     error: Option<String>,
 }
@@ -91,7 +90,6 @@ impl<M> Dialog<M> {
             confirm_label: confirm_label.into(),
             submit,
             danger: false,
-            on_success: None,
             busy: false,
             error: None,
         }
@@ -111,7 +109,6 @@ impl<M> Dialog<M> {
             confirm_label: confirm_label.into(),
             submit,
             danger: false,
-            on_success: None,
             busy: false,
             error: None,
         }
@@ -119,12 +116,6 @@ impl<M> Dialog<M> {
 
     pub fn danger(mut self) -> Self {
         self.danger = true;
-        self
-    }
-
-    /// Send `message` once the dialog's work has succeeded.
-    pub fn on_success(mut self, message: M) -> Self {
-        self.on_success = Some(message);
         self
     }
 
@@ -158,7 +149,7 @@ pub enum Step<M> {
     Send(M),
     /// The dialog's work, which reports back through [`Dialogs::finished`]
     /// with this dialog id.
-    Run(u64, Task<Result<(), String>>),
+    Run(u64, Task<Result<M, String>>),
 }
 
 /// The dialog showing and the ones waiting, oldest first.
@@ -244,12 +235,15 @@ impl<M: Clone + 'static> Dialogs<M> {
     }
 
     /// The work of dialog `id` finished: on success the dialog closes and
-    /// its [`on_success`](Dialog::on_success) message is returned. Nothing
-    /// happens if the dialog was cancelled meanwhile.
-    pub fn finished(&mut self, id: u64, result: Result<(), String>) -> Option<M> {
+    /// the work's message is returned. Nothing happens if the dialog was
+    /// cancelled meanwhile.
+    pub fn finished(&mut self, id: u64, result: Result<M, String>) -> Option<M> {
         let index = self.queue.iter().position(|(queued, _)| *queued == id)?;
         match result {
-            Ok(()) => self.queue.remove(index)?.1.on_success,
+            Ok(message) => {
+                self.queue.remove(index);
+                Some(message)
+            }
             Err(error) => {
                 let dialog = &mut self.queue[index].1;
                 dialog.busy = false;
@@ -508,30 +502,11 @@ mod tests {
             panic!("the dialog should run its work again");
         };
         assert_eq!(dialogs.current().unwrap().error(), None);
-        assert_eq!(dialogs.finished(id, Ok(())), None);
-        assert!(dialogs.current().is_none());
-    }
-
-    #[test]
-    fn work_that_succeeds_sends_the_success_message() {
-        let mut dialogs: Dialogs<String> = Dialogs::default();
-        let _: Task<()> = dialogs.open(
-            Dialog::prompt(
-                "Add",
-                Field::default(),
-                "Add",
-                Submit::Run(Arc::new(|_| Task::none())),
-            )
-            .on_success("added".into()),
+        assert_eq!(
+            dialogs.finished(id, Ok("added".into())).as_deref(),
+            Some("added"),
+            "the work's message is sent"
         );
-        let Step::Run(id, _) = dialogs.update(DialogEvent::Submit) else {
-            panic!("the dialog should run its work");
-        };
-        assert_eq!(dialogs.finished(id, Err("no".into())), None);
-        let Step::Run(id, _) = dialogs.update(DialogEvent::Submit) else {
-            panic!("the dialog should run its work again");
-        };
-        assert_eq!(dialogs.finished(id, Ok(())).as_deref(), Some("added"));
         assert!(dialogs.current().is_none());
     }
 

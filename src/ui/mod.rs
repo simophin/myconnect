@@ -49,16 +49,19 @@ use iced_fonts::lucide;
 use uuid::Uuid;
 
 use crate::{
-    core::{Core, CoreError, PairingSnapshot},
+    core::{Core, CoreError, PairingSnapshot, SettingsPatch, SettingsSnapshot},
     daemon::RunningService,
 };
-use desktop::open::{self as opening, Open};
+use desktop::{
+    dialogs::{self as picking, Pick},
+    open::{self as opening, Open},
+};
 use overlay::{
     dialog::{self as dialogs, Dialog, DialogEvent, Dialogs, Field, Step, Submit},
     incoming,
     toast::{self, Toasts},
 };
-use pages::{add_device, device, devices, pairing, startup, transfers};
+use pages::{add_device, device, devices, pairing, settings, startup, transfers};
 use plugin::{Command, ErasedUiPlugin, Outcome, PluginMessage, ShellRequest, UiContext};
 use route::Route;
 use store::Snapshot;
@@ -71,6 +74,8 @@ pub struct UiOptions {
     pub runtime: tokio::runtime::Handle,
     /// Fill the core with made-up devices ([`demo`]).
     pub demo: bool,
+    /// The app's version, for Settings.
+    pub version: String,
 }
 
 /// A started daemon, and the UI halves of the plugins it runs.
@@ -181,8 +186,9 @@ enum Message {
     ToastAction(u64, Route),
     DismissToast(u64),
     Dialog(DialogEvent),
-    /// A dialog's work finished; an error keeps it open.
-    DialogFinished(u64, Result<(), String>),
+    /// A dialog's work finished with the message to send; an error keeps
+    /// it open.
+    DialogFinished(u64, Result<Box<Message>, String>),
     /// Announce this computer so devices nearby answer.
     Scan,
     /// Show the "searching" bar for a while.
@@ -212,6 +218,15 @@ enum Message {
     RevealFile(PathBuf),
     /// Opening a file failed: which one, and why.
     OpenFailed(PathBuf, String),
+    /// Ask for a new name for this computer.
+    Rename,
+    /// Pick the folder received files are saved in.
+    ChooseDownloadDir,
+    /// The folder picked, or `None` if the picker was cancelled.
+    DownloadDirPicked(Option<PathBuf>),
+    SetCloseToTray(bool),
+    /// A settings change finished: the settings now, or why it failed.
+    SettingsSaved(Result<SettingsSnapshot, String>),
     Key(KeyCommand),
     DemoTick(u64),
     WindowOpened,
@@ -256,6 +271,8 @@ struct App {
     answer_error: Option<(Uuid, String)>,
     /// Opens received files.
     opener: Arc<dyn Open>,
+    /// The desktop's file and folder pickers.
+    picker: Arc<dyn Pick>,
 }
 
 /// Whether the daemon runs yet.
@@ -301,6 +318,7 @@ impl App {
             answering: None,
             answer_error: None,
             opener: Arc::new(opening::System),
+            picker: Arc::new(picking::System),
         };
         let start = app.start();
         (
@@ -453,7 +471,7 @@ impl App {
             Message::Dialog(event) => self.dialog(event),
             Message::DialogFinished(id, result) => {
                 let closed = result.is_ok();
-                let then = self.dialogs.finished(id, result);
+                let then = self.dialogs.finished(id, result.map(|message| *message));
                 if closed {
                     Task::batch([
                         self.dialogs.focus(),
@@ -532,6 +550,24 @@ impl App {
                 tracing::warn!(path = %path.display(), %error, "couldn't open a file");
                 self.toast(format!("Couldn’t open {}", path.display()), None)
             }
+            Message::Rename => self.rename(),
+            Message::ChooseDownloadDir => self.choose_download_dir(),
+            Message::DownloadDirPicked(Some(folder)) => self.update_settings(SettingsPatch {
+                download_dir: Some(Some(folder)),
+                ..SettingsPatch::default()
+            }),
+            Message::DownloadDirPicked(None) => Task::none(),
+            Message::SetCloseToTray(enabled) => self.update_settings(SettingsPatch {
+                close_to_tray: Some(Some(enabled)),
+                ..SettingsPatch::default()
+            }),
+            Message::SettingsSaved(Ok(settings)) => {
+                if let Some(running) = self.running() {
+                    running.ctx.store_mut().apply_settings(settings);
+                }
+                Task::none()
+            }
+            Message::SettingsSaved(Err(error)) => self.toast(error, None),
             // The pairing prompt can't be dismissed; Escape would only
             // reach a dialog hidden under it.
             Message::Key(KeyCommand::Cancel) if self.incoming_prompt_shows() => Task::none(),
@@ -608,26 +644,23 @@ impl App {
             return Task::none();
         };
         let core = running.ctx.core().clone();
-        self.dialogs.open(
-            Dialog::prompt(
-                "Add by IP address",
-                Field {
-                    label: Some("IP address".into()),
-                    hint: Some("192.168.1.20".into()),
-                    helper: Some(
-                        "MyConnect or KDE Connect must be running on that device. It appears \
+        self.dialogs.open(Dialog::prompt(
+            "Add by IP address",
+            Field {
+                label: Some("IP address".into()),
+                hint: Some("192.168.1.20".into()),
+                helper: Some(
+                    "MyConnect or KDE Connect must be running on that device. It appears \
                          in the list once it answers."
-                            .into(),
-                    ),
-                    ..Field::default()
-                },
-                "Add",
-                Submit::Run(Arc::new(move |address| {
-                    Task::done(announce_to(&core, &address))
-                })),
-            )
-            .on_success(Message::ShowSearching),
-        )
+                        .into(),
+                ),
+                ..Field::default()
+            },
+            "Add",
+            Submit::Run(Arc::new(move |address| {
+                Task::done(announce_to(&core, &address).map(|()| Message::ShowSearching))
+            })),
+        ))
     }
 
     /// Start pairing with `device_id` on the daemon's runtime, which times
@@ -719,6 +752,67 @@ impl App {
         .and_then(Task::done)
     }
 
+    /// Ask for a new name for this computer. The dialog stays open, with
+    /// the daemon's objection under the field, until a name is accepted.
+    fn rename(&mut self) -> Task<Message> {
+        let Some(running) = self.running() else {
+            return Task::none();
+        };
+        let Some(current) = running.ctx.store().settings().loaded() else {
+            return Task::none();
+        };
+        let current = current.device_name.clone();
+        let core = running.ctx.core().clone();
+        let runtime = self.options.runtime.clone();
+        self.dialogs.open(Dialog::prompt(
+            "Device name",
+            Field {
+                value: current,
+                helper: Some("How this computer appears on your other devices".into()),
+                max_len: Some(32),
+                ..Field::default()
+            },
+            "Save",
+            Submit::Run(Arc::new(move |name| {
+                let core = core.clone();
+                plugin::on_runtime(&runtime, async move {
+                    core.update_settings(SettingsPatch {
+                        device_name: Some(Some(name)),
+                        ..SettingsPatch::default()
+                    })
+                    .map(|settings| Message::SettingsSaved(Ok(settings)))
+                    .map_err(|error| error::describe_error(&error))
+                })
+            })),
+        ))
+    }
+
+    /// Open the folder picker at the current download folder. It isn't
+    /// disabled meanwhile, as in Flutter: a portal that never answers would
+    /// otherwise lock the setting until the app restarts.
+    fn choose_download_dir(&self) -> Task<Message> {
+        let Phase::Running(running) = &self.phase else {
+            return Task::none();
+        };
+        let Some(settings) = running.ctx.store().settings().loaded() else {
+            return Task::none();
+        };
+        let picked = self
+            .picker
+            .pick_folder("Save received files in", &settings.download_dir);
+        Task::future(picked).map(Message::DownloadDirPicked)
+    }
+
+    /// Change settings on the daemon's runtime (it writes the settings
+    /// file), applying the answer or saying why it failed.
+    fn update_settings(&mut self, patch: SettingsPatch) -> Task<Message> {
+        let Some(running) = self.running() else {
+            return Task::none();
+        };
+        let core = running.ctx.core().clone();
+        self.core_task(move || core.update_settings(patch), Message::SettingsSaved)
+    }
+
     /// Run a core call on the daemon's runtime, with its error in words.
     fn core_task<T: Send + 'static>(
         &self,
@@ -765,7 +859,9 @@ impl App {
             Step::Nothing if closes => self.dialogs.focus(),
             Step::Nothing => Task::none(),
             Step::Send(message) => Task::batch([self.dialogs.focus(), Task::done(message)]),
-            Step::Run(id, work) => work.map(move |result| Message::DialogFinished(id, result)),
+            Step::Run(id, work) => {
+                work.map(move |result| Message::DialogFinished(id, result.map(Box::new)))
+            }
         }
     }
 
@@ -878,81 +974,80 @@ impl App {
 
     /// The page for the current route.
     fn page<'a>(&'a self, running: &'a Running) -> Element<'a, Message> {
-        let title = match &self.route {
+        match &self.route {
             Route::Devices => {
                 // Drops arrive with the share step, which highlights the
                 // card under them.
-                return devices::view(
+                devices::view(
                     running.ctx.store(),
                     &running.plugins,
                     None,
                     Message::Navigate,
                     Message::Reload,
-                );
+                )
             }
             Route::Plugin {
                 plugin,
                 device,
                 page,
-            } => return self.plugin_page(running, plugin, device, page),
-            Route::Device(id) => {
-                return device::view(
-                    running.ctx.store(),
-                    &running.plugins,
-                    id,
-                    self.unpairing.as_deref() == Some(id.as_str()),
-                    &device::Actions {
-                        navigate: Message::Navigate,
-                        plugin: Message::Plugin,
-                        unpair: |device| Message::Unpair {
-                            device_id: device.device_id.clone(),
-                            name: device.device_name.clone(),
-                        },
-                        transfer: TRANSFER_ACTIONS,
+            } => self.plugin_page(running, plugin, device, page),
+            Route::Device(id) => device::view(
+                running.ctx.store(),
+                &running.plugins,
+                id,
+                self.unpairing.as_deref() == Some(id.as_str()),
+                &device::Actions {
+                    navigate: Message::Navigate,
+                    plugin: Message::Plugin,
+                    unpair: |device| Message::Unpair {
+                        device_id: device.device_id.clone(),
+                        name: device.device_name.clone(),
                     },
-                );
-            }
-            Route::AddDevice => {
-                return add_device::view(
-                    running.ctx.store(),
-                    self.searching,
-                    self.starting.as_deref(),
-                    add_device::Actions {
-                        back: Message::Back,
-                        scan: Message::Scan,
-                        add_by_address: Message::AddByAddress,
-                        retry: Message::Reload,
-                        pair: Message::Pair,
-                    },
-                );
-            }
-            Route::Pairing(id) => {
-                return pairing::view(
-                    running.ctx.store(),
-                    *id,
-                    self.starting.is_some() || self.cancelling == Some(*id),
-                    pairing::Actions {
-                        navigate: Message::Navigate,
-                        cancel: Message::CancelPairing,
-                        retry: Message::Pair,
-                    },
-                );
-            }
-            Route::Transfers => {
-                return transfers::view(
-                    running.ctx.store(),
-                    &TRANSFER_ACTIONS,
-                    Message::Back,
-                    Message::Reload,
-                );
-            }
-            Route::Settings => "Settings",
-        };
-        // The other pages the core owns arrive in later steps.
-        widgets::page(
-            widgets::page_header(title, Some(Message::Back), vec![]),
-            widgets::empty_state(lucide::construction, "Not here yet", None, None),
-        )
+                    transfer: TRANSFER_ACTIONS,
+                },
+            ),
+            Route::AddDevice => add_device::view(
+                running.ctx.store(),
+                self.searching,
+                self.starting.as_deref(),
+                add_device::Actions {
+                    back: Message::Back,
+                    scan: Message::Scan,
+                    add_by_address: Message::AddByAddress,
+                    retry: Message::Reload,
+                    pair: Message::Pair,
+                },
+            ),
+            Route::Pairing(id) => pairing::view(
+                running.ctx.store(),
+                *id,
+                self.starting.is_some() || self.cancelling == Some(*id),
+                pairing::Actions {
+                    navigate: Message::Navigate,
+                    cancel: Message::CancelPairing,
+                    retry: Message::Pair,
+                },
+            ),
+            Route::Transfers => transfers::view(
+                running.ctx.store(),
+                &TRANSFER_ACTIONS,
+                Message::Back,
+                Message::Reload,
+            ),
+            Route::Settings => settings::view(
+                running.ctx.store(),
+                &running.plugins,
+                &self.options.version,
+                settings::Actions {
+                    back: Message::Back,
+                    retry: Message::Reload,
+                    rename: Message::Rename,
+                    choose_download_dir: Message::ChooseDownloadDir,
+                    set_close_to_tray: Message::SetCloseToTray,
+                    plugin: Message::Plugin,
+                },
+            ),
+        }
     }
 
     fn plugin_page<'a>(
@@ -1065,6 +1160,7 @@ mod tests {
             UiOptions {
                 runtime,
                 demo: false,
+                version: "1.2.3 (test)".into(),
             },
             start,
             ServiceSlot::default(),
@@ -1082,14 +1178,19 @@ mod tests {
     fn running_with_commands(
         plugins: Vec<Box<dyn ErasedUiPlugin>>,
     ) -> (App, tokio::sync::mpsc::Receiver<LanCommand>) {
-        let runtime = tokio::runtime::Handle::current();
         let (core, commands) = handle();
+        (running_on(core, plugins), commands)
+    }
+
+    /// An app running `plugins` over `core`.
+    fn running_on(core: Core, plugins: Vec<Box<dyn ErasedUiPlugin>>) -> App {
+        let runtime = tokio::runtime::Handle::current();
         let mut app = app(runtime.clone());
         app.phase = Phase::Running(Box::new(Running {
             ctx: UiContext::new(core, runtime),
             plugins,
         }));
-        (app, commands)
+        app
     }
 
     fn core(app: &App) -> Core {
@@ -1615,6 +1716,169 @@ mod tests {
         );
     }
 
+    /// Click `target` (a text or widget id) in the window, and settle what
+    /// that sends.
+    async fn click<S>(app: &mut App, target: S)
+    where
+        S: iced_test::selector::Selector + Send + fmt::Debug + Clone,
+        S::Output: iced_test::selector::Bounded + Clone + Send + Sync + 'static,
+    {
+        let mut ui = Simulator::new(app.view(app.window));
+        ui.click(target.clone())
+            .unwrap_or_else(|error| panic!("{target:?}: {error:?}"));
+        let clicked: Vec<_> = ui.into_messages().collect();
+        for message in clicked {
+            settle(app, message).await;
+        }
+    }
+
+    fn shows(app: &App, text: &str) -> bool {
+        Simulator::new(app.view(app.window)).find(text).is_ok()
+    }
+
+    fn settings(app: &App) -> &SettingsSnapshot {
+        store(app).settings().loaded().expect("settings loaded")
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn renaming_shows_the_new_name_and_a_bad_one_says_why() {
+        let mut app = running(Vec::new());
+        settle(&mut app, Message::Reload).await;
+        settle(&mut app, Message::Navigate(Route::Settings)).await;
+        click(&mut app, "Device name").await;
+        let dialog = app.dialogs.current().expect("the name dialog");
+        assert_eq!(dialog.title, "Device name");
+        assert_eq!(dialog.value(), "MyConnect");
+
+        settle(
+            &mut app,
+            Message::Dialog(DialogEvent::Input("Bad.Name".into())),
+        )
+        .await;
+        settle(&mut app, Message::Dialog(DialogEvent::Submit)).await;
+        let dialog = app.dialogs.current().expect("the dialog stays open");
+        assert!(dialog.error().unwrap().contains("1 to 32 characters"));
+        assert!(!dialog.is_busy());
+        assert_eq!(settings(&app).device_name, "MyConnect");
+
+        settle(
+            &mut app,
+            Message::Dialog(DialogEvent::Input("Studio".into())),
+        )
+        .await;
+        click(&mut app, "Save").await;
+        assert!(app.dialogs.current().is_none());
+        assert_eq!(core(&app).settings().unwrap().device_name, "Studio");
+        // Without waiting for the event.
+        assert!(shows(&app, "Studio"));
+
+        click(&mut app, widget::Id::from("Back")).await;
+        assert!(shows(&app, "This computer: Studio"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn switches_save_their_setting() {
+        let (core, plugin, _commands) = crate::core::testing::handle_with_plugin(
+            crate::plugins::clipboard::ClipboardPlugin::new(
+                crate::plugins::clipboard::InMemoryClipboard::shared(),
+            ),
+        );
+        let clipboard = crate::plugins::clipboard::ui::ClipboardUi::new(plugin);
+        let mut app = running_on(core.clone(), vec![Box::new(clipboard)]);
+        settle(&mut app, Message::Reload).await;
+        settle(&mut app, Message::Navigate(Route::Settings)).await;
+        let sync_enabled = |settings: &SettingsSnapshot| {
+            crate::plugins::clipboard::ClipboardSettings::of(settings).sync_enabled
+        };
+        assert!(sync_enabled(settings(&app)));
+
+        // The plugin's own section.
+        click(&mut app, "Sync clipboard").await;
+        assert!(!sync_enabled(&core.settings().unwrap()));
+        settle(&mut app, Message::Reload).await;
+        assert!(
+            !sync_enabled(settings(&app)),
+            "its event updates the switch"
+        );
+
+        // The shell's.
+        assert!(settings(&app).close_to_tray, "on by default");
+        click(&mut app, "Keep running when the window is closed").await;
+        assert!(!core.settings().unwrap().close_to_tray);
+        assert!(
+            !settings(&app).close_to_tray,
+            "without waiting for the event"
+        );
+        assert!(app.toasts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_version_is_shown() {
+        let mut app = running(Vec::new());
+        settle(&mut app, Message::Reload).await;
+        settle(&mut app, Message::Navigate(Route::Settings)).await;
+        assert!(shows(&app, "Version"));
+        assert!(shows(&app, "1.2.3 (test)"));
+    }
+
+    /// Picks what it is told to, and records where it started.
+    struct FakePicker {
+        answer: Option<PathBuf>,
+        asked: Mutex<Vec<PathBuf>>,
+    }
+
+    impl Pick for FakePicker {
+        fn pick_folder(&self, _title: &str, start: &std::path::Path) -> picking::Picked<PathBuf> {
+            self.asked.lock().unwrap().push(start.into());
+            let answer = self.answer.clone();
+            Box::pin(async move { answer })
+        }
+    }
+
+    fn picker(answer: Option<PathBuf>) -> Arc<FakePicker> {
+        Arc::new(FakePicker {
+            answer,
+            asked: Mutex::default(),
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_download_folder_is_picked_from_the_current_one() {
+        let mut app = running(Vec::new());
+        settle(&mut app, Message::Reload).await;
+        settle(&mut app, Message::Navigate(Route::Settings)).await;
+        let current = settings(&app).download_dir.clone();
+        let folder = tempfile::tempdir().unwrap();
+
+        // Cancelled: nothing changes.
+        let cancelled = picker(None);
+        app.picker = cancelled.clone();
+        click(&mut app, "Save received files in").await;
+        assert_eq!(
+            *cancelled.asked.lock().unwrap(),
+            std::slice::from_ref(&current)
+        );
+        assert_eq!(settings(&app).download_dir, current);
+
+        let chosen = picker(Some(folder.path().into()));
+        app.picker = chosen.clone();
+        click(&mut app, "Save received files in").await;
+        assert_eq!(*chosen.asked.lock().unwrap(), [current]);
+        assert_eq!(core(&app).settings().unwrap().download_dir, folder.path());
+        assert_eq!(settings(&app).download_dir, folder.path());
+        assert!(shows(&app, &folder.path().display().to_string()));
+        assert!(app.toasts.is_empty());
+
+        // A folder the daemon refuses: say why, and keep the old one.
+        app.picker = picker(Some("relative/folder".into()));
+        click(&mut app, "Save received files in").await;
+        assert_eq!(
+            app.toasts.items()[0].text,
+            "That folder can’t be used for downloads."
+        );
+        assert_eq!(settings(&app).download_dir, folder.path());
+    }
+
     #[test]
     fn a_failed_start_shows_why_and_retry_starts_again() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -1630,6 +1894,7 @@ mod tests {
             UiOptions {
                 runtime: runtime.handle().clone(),
                 demo: false,
+                version: "1.2.3 (test)".into(),
             },
             start,
             ServiceSlot::default(),

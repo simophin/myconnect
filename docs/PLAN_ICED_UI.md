@@ -6,7 +6,7 @@ early steps build the ground the later ones stand on. Steps marked
 *independent* can run in parallel worktrees once their prerequisites have
 landed.
 
-Status (2026-09-25): decided by the owner. Steps 1 to 8 are done: `gui/`
+Status (2026-09-26): decided by the owner. Steps 1 to 9 are done: `gui/`
 is the thin composition root, the spike's device list lives in `src/ui/`,
 features plug in through the `UiPlugin` seam (battery first), the shell
 has routing, toasts, dialogs, startup screens and error wording, the
@@ -14,9 +14,10 @@ store caches devices, pairings, transfers and settings for the pages, the
 devices page is finished, the device page has ping, ring, send
 clipboard, recent transfers and unpair, and Add device, the pairing page
 and the incoming pairing prompt pair in both directions, and the
-Transfers page shows progress, cancels, and opens received files. Next is
-step 9. Each finished step says so under its heading, with what differs
-from the plan.
+Transfers page shows progress, cancels, and opens received files, and
+Settings renames this computer, picks the download folder and flips its
+switches, the clipboard plugin's included. Next is step 10. Each finished
+step says so under its heading, with what differs from the plan.
 
 ## Read first
 
@@ -770,7 +771,8 @@ dark.
 - "Add by IP address" is a shell `Dialog` with `Submit::Run`: the address
   is parsed in the UI (worded as `invalid_address`), then
   `Core::announce_to`. The new `Dialog::on_success` message
-  (`ShowSearching`) restarts the searching bar once it closes.
+  (`ShowSearching`) restarts the searching bar once it closes (step 9
+  made it the work's result instead).
 - The incoming prompt is `overlay::incoming::view`, drawn over the page,
   toasts and dialogs by `dialog::modal`, whose click-outside message is
   now optional (none here). Escape does nothing while it shows. Drops are
@@ -894,6 +896,55 @@ dark.
   mid-way from the UI.
 
 ### 9. Settings
+
+**Done (2026-09-26).** Where it differs from the text below:
+- `pages::settings::view(store, plugins, version, Actions)`. Each setting
+  is a card from the new `widgets::setting` (icon, name, value, a trailing
+  widget, the whole card pressable) or `widgets::switch_setting` (a
+  switch, toggled by the switch or anywhere on the card); plugins use the
+  same two, so their sections look like the shell's. Plugin sections go
+  after the download folder, as Flutter's clipboard switch did. The
+  device cards' hover style is now `widgets::card_button`.
+- Rename is a shell `Dialog` with `Submit::Run`. `Submit::Run` work now
+  returns the message to send on success (`Work<M>`, `Result<M, String>`),
+  which replaced `Dialog::on_success`: rename sends the settings the core
+  answered, so the page shows the new name without waiting for the event;
+  add by IP sends `ShowSearching`. The daemon's objection shows under the
+  field, as in Flutter.
+- Download folder, close-to-tray and rename run `Core::update_settings` on
+  the daemon's runtime (it writes `settings.json`) and apply the answer
+  through `Store::apply_settings`; a failure toasts in the core's words.
+  The clipboard plugin's switch patches its own section from its `ui.rs`
+  and relies on the `settings.changed` event, since plugins don't change
+  the store.
+- The picker is `ui::desktop::dialogs`: a `Pick` trait (`pick_folder`,
+  step 11 adds files), the `System` one through `rfd`'s
+  `AsyncFileDialog` (it needs no runtime: its portal backend blocks on a
+  thread of its own), and a fake in tests. rfd can't relabel the confirm
+  button, so Flutter's "Choose" is the platform's own word. The row isn't
+  disabled while the picker is open (Flutter didn't either): a portal that
+  never answers would otherwise lock the setting until a restart.
+- The version is built by `gui/build.rs`: `MYCONNECT_VERSION` if the build
+  sets it (for step 15's releases), otherwise
+  `CARGO_PKG_VERSION (git describe --tags --always)`, e.g.
+  `0.1.0 (v1.1.0-19-geeba428)`. `UiOptions` carries it.
+- The CLI couldn't set `closeToTray`, which the page now does: `myconnect
+  settings --close-to-tray <BOOL>` sets it, and `settings` prints it.
+- Tests: the page (every setting and its value, each control's message,
+  loading and Retry) and the shell against a real core: renaming with a
+  bad name keeps the dialog open with the daemon's reason, a good one
+  shows on the page and as "This computer: …" at home; the clipboard
+  switch and close-to-tray save; the version shows; the picker starts at
+  the current folder, a cancel changes nothing, a chosen folder is saved,
+  and a refused one toasts. The clipboard plugin's switch is also tested
+  on its own. Snapshot `settings`.
+- Checked in the real app (loopback, Xvfb, private bus): a bad name shows
+  the reason under the field, a good one saves and the CLI reads it; the
+  switches save; `myconnect settings --device-name … --clipboard-sync …`
+  from the CLI shows on the page live. The folder picker could not be
+  shown there: `xdg-desktop-portal-gtk` on the private bus never answered,
+  not even a direct `gdbus` call to it, so the real picker still needs a
+  look on a desktop session (steps 10 or 11).
 
 **Build:** the page from Appendix A §9:
 - **Device name:** the name dialog with max 32, a counter, the helper text,
@@ -1292,12 +1343,12 @@ Dropping applies on X11, macOS and Windows, not on Wayland (see Owner decisions)
 - [ ] Empty folder: "This folder is empty. Drop files here to upload them."
 
 ### §9 Settings (`features/settings/`)
-- [ ] Device name dialog: max 32 with counter, helper text, error in the field from the daemon, Save disabled while saving
-- [ ] Download folder picker (starts at current, "Choose")
-- [ ] Sync clipboard switch (from the clipboard plugin's slot)
-- [ ] Keep running when the window is closed switch
-- [ ] Version
-- [ ] Loading; error + Retry; toast on save error
+- [x] Device name dialog: max 32 with counter, helper text, error in the field from the daemon, Save disabled while saving
+- [x] Download folder picker (starts at current; the confirm label is the platform's, see step 9)
+- [x] Sync clipboard switch (from the clipboard plugin's slot)
+- [x] Keep running when the window is closed switch
+- [x] Version
+- [x] Loading; error + Retry; toast on save error
 
 ### §10 Background (`features/background/background_host.dart`, `core/desktop/`)
 - [ ] Close hides when `closeToTray` (or settings unavailable), else quits

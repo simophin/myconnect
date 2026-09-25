@@ -5,7 +5,7 @@
 use iced::{
     Alignment, Background, Border, Element, Font, Length, Theme, font,
     widget::{
-        self, Space, Text, button, column, container, row, text, text_input, tooltip,
+        self, Space, Text, button, column, container, row, text, text_input, toggler, tooltip,
         tooltip::Position,
     },
 };
@@ -135,6 +135,73 @@ pub fn card_style(theme: &Theme) -> container::Style {
             .color(palette.background.weak.color),
         ..container::Style::default()
     }
+}
+
+/// A card that is a button: lighter under the pointer, darker while
+/// pressed.
+pub fn card_button(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+    let card = card_style(theme);
+    let background = match status {
+        button::Status::Hovered => palette.background.weak.color,
+        button::Status::Pressed => palette.background.strong.color,
+        _ => palette.background.weakest.color,
+    };
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color: palette.background.base.text,
+        border: card.border,
+        ..button::Style::default()
+    }
+}
+
+/// A setting on the settings page, the core's or a plugin's: its icon,
+/// name and current value (or what it does), and a widget at the end (a
+/// pencil, a switch). The whole card sends `on_press`, if given.
+pub fn setting<'a, M: Clone + 'a>(
+    icon: Icon,
+    title: impl text::IntoFragment<'a>,
+    detail: impl text::IntoFragment<'a>,
+    trailing: Option<Element<'a, M>>,
+    on_press: Option<M>,
+) -> Element<'a, M> {
+    let mut content = row![
+        icon().size(20).style(text::secondary),
+        column![
+            text(title).size(15),
+            text(detail).size(13).style(text::secondary),
+        ]
+        .spacing(2)
+        .width(Length::Fill),
+    ]
+    .spacing(14)
+    .align_y(Alignment::Center);
+    if let Some(trailing) = trailing {
+        content = content.push(trailing);
+    }
+    match on_press {
+        Some(on_press) => button(content)
+            .padding([12, 14])
+            .width(Length::Fill)
+            .style(card_button)
+            .on_press(on_press)
+            .into(),
+        None => card(content).into(),
+    }
+}
+
+/// A setting that is on or off: a [`setting`] with a switch, toggled by
+/// the switch or anywhere on the card.
+pub fn switch_setting<'a, M: Clone + 'a>(
+    icon: Icon,
+    title: impl text::IntoFragment<'a>,
+    detail: impl text::IntoFragment<'a>,
+    on: bool,
+    on_toggle: impl Fn(bool) -> M + 'a,
+) -> Element<'a, M> {
+    let flip = on_toggle(!on);
+    let switch = toggler(on).size(22).on_toggle(on_toggle);
+    setting(icon, title, detail, Some(switch.into()), Some(flip))
 }
 
 /// A centred icon, title, optional detail and optional text button (its

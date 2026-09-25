@@ -84,7 +84,7 @@ first needs one adds it to the `gui` feature.
 | Headless UI tests | `iced_test` 0.14 | iced's own simulator: finds and clicks widgets, and renders snapshots to PNG with no display. |
 | Running tasks in tests | `iced_runtime` 0.14 (dev) | Already in iced's tree; its `task::into_stream` lets a unit test see what a `Task` produces, which `iced` doesn't re-export. |
 | Arguments | `clap` | Already the CLI's parser; `env` reads each flag's environment variable. |
-| File and folder dialogs | `rfd` (step 9) | The standard native dialog crate: GTK or the XDG portal on Linux, AppKit, Win32. |
+| File and folder dialogs | `rfd` (step 9) | The standard native dialog crate: the XDG portal on Linux (zenity if there is none), AppKit, Win32. Its async dialogs need no runtime of their own. |
 | Notifications | `notify-rust` (step 13) | freedesktop notifications over D-Bus, macOS and Windows toasts. |
 | Opening files and folders | `opener` (step 8) | Opens with the default app and reveals in the file manager on each platform. |
 | Single instance | `interprocess` (step 13) | Cross-platform local sockets, named from the data dir, so isolated instances never collide. |

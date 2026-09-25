@@ -1,15 +1,17 @@
-//! The clipboard feature's UI half: the *Send clipboard* action.
+//! The clipboard feature's UI half: the *Send clipboard* action, and the
+//! "Sync clipboard" setting.
 
 use std::sync::Arc;
 
 use iced_fonts::lucide;
 
-use super::{ClipboardPlugin, ClipboardSyncError, PACKET_TYPE};
+use super::{ClipboardPlugin, ClipboardSettings, ClipboardSyncError, PACKET_TYPE};
 use crate::{
-    core::{DeviceReachability, DeviceSnapshot},
+    core::{DeviceReachability, DeviceSnapshot, SettingsSnapshot},
     ui::{
-        error::describe_code,
+        error::{describe_code, describe_error as describe_core_error},
         plugin::{Command, DeviceAction, ShellRequest, UiContext, UiPlugin},
+        widgets,
     },
 };
 
@@ -31,6 +33,11 @@ pub enum Message {
     Send { device_id: String, name: String },
     /// How sending went: the toast to show.
     Sent(String),
+    /// Turn syncing on or off.
+    SetSync(bool),
+    /// Why changing the setting failed, if it did. Its event updates the
+    /// switch.
+    SyncSaved(Option<String>),
 }
 
 impl UiPlugin for ClipboardUi {
@@ -84,7 +91,30 @@ impl UiPlugin for ClipboardUi {
                 )
             }
             Message::Sent(text) => Command::shell(ShellRequest::toast(text)),
+            Message::SetSync(enabled) => {
+                let core = ctx.core().clone();
+                // Writes the settings file.
+                ctx.spawn(
+                    async move { core.update_settings(ClipboardSettings::sync_enabled_patch(enabled)) },
+                    |result| Message::SyncSaved(result.err().map(|error| describe_core_error(&error))),
+                )
+            }
+            Message::SyncSaved(None) => Command::none(),
+            Message::SyncSaved(Some(error)) => Command::shell(ShellRequest::toast(error)),
         }
+    }
+
+    fn view_settings<'a>(
+        &'a self,
+        settings: &'a SettingsSnapshot,
+    ) -> Option<iced::Element<'a, Message>> {
+        Some(widgets::switch_setting(
+            lucide::clipboard_copy,
+            "Sync clipboard",
+            "Share copied text with paired devices",
+            ClipboardSettings::of(settings).sync_enabled,
+            Message::SetSync,
+        ))
     }
 }
 
@@ -105,8 +135,13 @@ fn describe(code: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iced_test::simulator::Simulator;
+
     use crate::{
-        core::{CoreError, testing::handle},
+        core::{
+            CoreError,
+            testing::{handle, handle_with_plugin},
+        },
         plugins::clipboard::{ClipboardService, InMemoryClipboard},
         ui::{plugin::Outcome, testing},
     };
@@ -166,6 +201,51 @@ mod tests {
             send(&mut ui(""), &ctx, &device).await,
             "There is no text on the clipboard to send."
         );
+    }
+
+    #[tokio::test]
+    async fn the_sync_switch_shows_and_saves_the_setting() {
+        let (core, plugin, _commands) =
+            handle_with_plugin(ClipboardPlugin::new(InMemoryClipboard::shared()));
+        let ctx = UiContext::new(core.clone(), tokio::runtime::Handle::current());
+        let mut ui = ClipboardUi::new(plugin);
+        let settings = core.settings().unwrap();
+        assert!(
+            ClipboardSettings::of(&settings).sync_enabled,
+            "on by default"
+        );
+
+        let mut section = Simulator::new(ui.view_settings(&settings).unwrap());
+        section.click("Sync clipboard").unwrap();
+        let clicked: Vec<_> = section.into_messages().collect();
+        let [Message::SetSync(false)] = &clicked[..] else {
+            panic!("unexpected messages: {clicked:?}");
+        };
+
+        let outcomes = testing::outputs(ui.update(&ctx, clicked[0].clone()).into_task()).await;
+        assert!(matches!(
+            outcomes[..],
+            [Outcome::Plugin(Message::SyncSaved(None))]
+        ));
+        assert!(!ClipboardSettings::of(&core.settings().unwrap()).sync_enabled);
+    }
+
+    #[tokio::test]
+    async fn a_setting_that_cant_be_saved_says_why() {
+        // This core doesn't run the clipboard plugin, so it has no section.
+        let (core, _commands) = handle();
+        let ctx = UiContext::new(core, tokio::runtime::Handle::current());
+        let mut ui = ui("");
+        let mut outcomes =
+            testing::outputs(ui.update(&ctx, Message::SetSync(false)).into_task()).await;
+        let Some(Outcome::Plugin(saved)) = outcomes.pop() else {
+            panic!("unexpected outcomes: {outcomes:?}");
+        };
+        let outcomes = testing::outputs(ui.update(&ctx, saved).into_task()).await;
+        let [Outcome::Shell(ShellRequest::Toast { text, .. })] = &outcomes[..] else {
+            panic!("unexpected outcomes: {outcomes:?}");
+        };
+        assert_eq!(text, &describe_code("invalid_settings"));
     }
 
     /// The clipboard codes `ui/lib/src/core/api/api_exception.dart` words.
