@@ -20,7 +20,7 @@ use crate::{
 ///
 /// Every slot has a default that fills nothing, so a feature implements
 /// only the ones it uses.
-pub trait UiPlugin: 'static {
+pub trait UiPlugin: Send + 'static {
     type Message: Clone + fmt::Debug + Send + Sync + 'static;
 
     /// The same id as the core plugin ("ping").
@@ -88,7 +88,7 @@ pub trait UiPlugin: 'static {
 /// A [`UiPlugin`] as the shell stores it: its messages are
 /// [`PluginMessage`]s. Implemented for every `UiPlugin`; don't implement it
 /// yourself.
-pub trait ErasedUiPlugin {
+pub trait ErasedUiPlugin: Send {
     fn id(&self) -> &'static str;
     fn device_status(&self, device: &DeviceSnapshot) -> Option<DeviceStatus>;
     fn device_actions(&self, device: &DeviceSnapshot) -> Vec<DeviceAction<PluginMessage>>;
@@ -198,7 +198,7 @@ pub struct PluginMessage {
 }
 
 impl PluginMessage {
-    fn new<M: Any + fmt::Debug + Send + Sync>(plugin: &'static str, message: M) -> Self {
+    pub(crate) fn new<M: Any + fmt::Debug + Send + Sync>(plugin: &'static str, message: M) -> Self {
         Self {
             plugin,
             message: Arc::new(message),
@@ -344,6 +344,7 @@ pub enum ShellRequest<M> {
         title: String,
         label: String,
         initial: String,
+        confirm_label: String,
         validate: Validator,
         then: Callback<String, M>,
     },
@@ -388,12 +389,14 @@ impl<M: 'static> ShellRequest<M> {
                 title,
                 label,
                 initial,
+                confirm_label,
                 validate,
                 then,
             } => ShellRequest::Prompt {
                 title,
                 label,
                 initial,
+                confirm_label,
                 validate,
                 then: Arc::new(move |text| f(then(text))),
             },
@@ -549,10 +552,6 @@ impl UiContext {
 
     pub fn window_focused(&self) -> bool {
         self.window_focused
-    }
-
-    pub(crate) fn runtime(&self) -> &tokio::runtime::Handle {
-        &self.runtime
     }
 
     pub(crate) fn set_window_focused(&mut self, focused: bool) {

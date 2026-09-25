@@ -6,10 +6,11 @@ early steps build the ground the later ones stand on. Steps marked
 *independent* can run in parallel worktrees once their prerequisites have
 landed.
 
-Status (2026-09-25): decided by the owner. Steps 1 and 2 are done: `gui/`
+Status (2026-09-25): decided by the owner. Steps 1 to 3 are done: `gui/`
 is the thin composition root, the spike's device list lives in `src/ui/`,
-and features plug in through the `UiPlugin` seam, with battery as the
-first. Next is step 3. Each finished step says so under its heading, with what differs
+features plug in through the `UiPlugin` seam (battery first), and the shell
+has routing, toasts, dialogs, startup screens and error wording. Next is
+step 4. Each finished step says so under its heading, with what differs
 from the plan.
 
 ## Read first
@@ -31,9 +32,12 @@ from the plan.
 
 ## Decisions (made by the owner)
 
-- **The UI is Rust and iced.** The Flutter app stays in the tree and keeps
-  working until the last step deletes it. Both apps build side by side
-  until then.
+- **The UI is Rust and iced.** The Flutter app stays in the tree as the
+  spec until the last step deletes it.
+- **The Flutter app is no longer maintained** (owner, 2026-09-25: nobody
+  relies on it). Its checks aren't run any more, and a step may break it.
+  The same goes for `ffi/`: if it gets in a step's way, drop it from the
+  workspace early rather than keep it building.
 - **The UI runs the daemon in-process and talks to the core directly:**
   snapshots from `Core`, events from `core.subscribe()`, and actions through
   typed Rust functions. It does **not** go through HTTP.
@@ -293,9 +297,8 @@ git diff --check
 
 Also look at the result. Render snapshots headlessly (see *Seeing the UI*)
 and read the PNGs, and for anything involving windows, the tray, drops or
-notifications, run the real app. Until step 16, the Flutter checks in
-HANDOFF still have to pass too, because nothing may break the Flutter app
-before then.
+notifications, run the real app. The Flutter checks in HANDOFF are not
+part of "done" any more (see Decisions).
 
 ### Seeing the UI
 
@@ -464,6 +467,45 @@ daemon's module split started (research/feature-modules.md, phase 0).
 - There's a unit test of the erased plugin round trip.
 
 ### 3. Shell foundations
+
+**Done (2026-09-25).** Where it differs from the text below:
+- `gui/` hands `ui::run(options, start)` a start function that returns
+  `ui::Started { service, plugins }`. The UI runs it on the daemon's
+  runtime, keeps the service, and shuts it down after the UI exits.
+  `RunRequest` is `Clone` so each attempt gets its own; `UiPlugin` must be
+  `Send`, since the UI halves are built inside the start future.
+- Error codes have one source: `CoreError::code()`, `BrowseError::code()`
+  and `ClipboardSyncError::code()`, which `api.rs` and the plugins'
+  `http.rs` now use. `ui::error::describe_code` words the core's codes; a
+  plugin words its own in its `ui.rs` (`browse::ui::describe_error`,
+  `clipboard::ui::describe_error`) and hands the rest to the core. Unknown
+  codes read "Something went wrong ({code})."
+- Dialogs (`ui/overlay/dialog.rs`) submit one of two ways:
+  `Submit::Close` closes at once and sends the message (what plugins'
+  `Confirm` and `Prompt` get, as Flutter's file dialogs did);
+  `Submit::Run` stays open and busy while its task runs and shows its
+  error in the dialog (for rename and add by IP, steps 7 and 9). Others
+  queue behind the one showing. A click outside or Escape cancels.
+  `ShellRequest::Prompt` gained `confirm_label`. The field has a label,
+  hint, helper text, a length limit with a counter, and a validator.
+- Toasts (`ui/overlay/toast.rs`) show at most three; the action button
+  navigates and dismisses its toast.
+- Routes whose page isn't ported yet show a header with Back and "Not here
+  yet".
+- Shortcuts: Escape cancels the dialog, Ctrl/Cmd+W closes the window,
+  Ctrl/Cmd+Q quits.
+- `ui/widgets.rs`: `page_header`, `icon_button`, `page`, `card`,
+  `empty_state`, `error_view`, `loading`, `verification_code` (hair spaces
+  stand in for letter spacing; selectable text is step 7's call) and
+  `format_bytes` (halves round away from zero, as Dart's did).
+  `format_timestamp` moves to step 12: local time needs a time-zone crate,
+  to be chosen there.
+- Snapshots: `header`, `toasts`, `dialog-confirm`, `dialog-prompt-error`,
+  `error-view`, `empty-state`, `startup-starting`, `startup-failed`.
+- Checked in the real app: an unusable data dir shows the error screen,
+  fixing it and pressing Retry starts the daemon, and Ctrl+Q exits after
+  shutting it down. Under Xvfb with no window manager the window gets no
+  keyboard focus until something calls `XSetInputFocus` on it.
 
 **Why:** pages need navigation, dialogs, toasts and error handling before
 they can be ported faithfully.
@@ -955,7 +997,7 @@ Tick as you go (`[x]`), in the same commit as the work. File references
 are to the Flutter app under `ui/lib/src/`.
 
 ### §0 Startup and configuration
-- [ ] Starting screen while the daemon starts; error screen with Retry that retries the start (`core/daemon/daemon_gate.dart`)
+- [x] Starting screen while the daemon starts; error screen with Retry that retries the start (`core/daemon/daemon_gate.dart`)
 - [ ] Tray and close-to-tray work even when the daemon failed to start
 - [ ] Flags/env: data dir, download dir, device name, discovery loopback, system clipboard (default on), API port/token; `window.json` goes to the data dir when one is given
 - [ ] Version in Settings

@@ -32,7 +32,7 @@ use crate::{
 };
 
 /// Options for starting the MyConnect service.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunRequest {
     /// Bearer token API clients must present. `None` leaves the control API
     /// unauthenticated.

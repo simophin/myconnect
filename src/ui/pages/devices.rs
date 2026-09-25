@@ -1,7 +1,7 @@
 //! The home page: this computer's paired devices.
 
 use iced::{
-    Alignment, Background, Border, Color, Element, Font, Length, Theme, font,
+    Alignment, Background, Border, Color, Element, Length, Theme,
     widget::{Space, column, container, row, scrollable, space, text},
 };
 use iced_fonts::lucide;
@@ -9,7 +9,7 @@ use iced_fonts::lucide;
 use crate::{
     core::{DeviceReachability, DeviceSnapshot, EventData},
     protocol::DeviceType,
-    ui::{plugin::ErasedUiPlugin, sync::Update},
+    ui::{plugin::ErasedUiPlugin, sync::Update, widgets},
 };
 
 /// The home screen: this computer's paired devices.
@@ -78,31 +78,24 @@ impl DeviceList {
     }
 
     /// The page, with each device's status from `plugins`.
-    pub fn view<'a, Message: 'a>(
+    pub fn view<'a, Message: Clone + 'a>(
         &'a self,
         plugins: &'a [Box<dyn ErasedUiPlugin>],
     ) -> Element<'a, Message> {
-        let header = column![
-            text("Devices").size(26).font(Font {
-                weight: font::Weight::Semibold,
-                ..Font::DEFAULT
-            }),
-            row![
-                lucide::monitor().size(13).style(text::secondary),
-                text(&self.local_name).size(13).style(text::secondary),
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center),
+        let this_computer = row![
+            lucide::monitor().size(13).style(text::secondary),
+            text(&self.local_name).size(13).style(text::secondary),
         ]
-        .spacing(4);
+        .spacing(6)
+        .align_y(Alignment::Center);
 
         let body: Element<'a, Message> = match &self.devices {
-            None => placeholder(lucide::loader().into(), "Starting…", None),
+            None => widgets::loading("Loading devices…"),
             Some(devices) => {
                 let mut paired: Vec<_> = devices.iter().filter(|d| d.paired).collect();
                 if paired.is_empty() {
-                    placeholder(
-                        lucide::monitor_smartphone().size(40).into(),
+                    widgets::empty_state(
+                        lucide::monitor_smartphone,
                         "No paired devices yet",
                         Some("Devices you pair with appear here."),
                     )
@@ -120,11 +113,10 @@ impl DeviceList {
             }
         };
 
-        container(column![header, body].spacing(20))
-            .padding(20)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        widgets::page(
+            column![widgets::page_header("Devices", None, vec![]), this_computer].spacing(4),
+            body,
+        )
     }
 }
 
@@ -181,21 +173,7 @@ fn device_card<'a, Message: 'a>(
     .spacing(14)
     .align_y(Alignment::Center);
 
-    container(card)
-        .padding([12, 14])
-        .width(Length::Fill)
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(Background::Color(palette.background.weakest.color)),
-                border: Border::default()
-                    .rounded(10)
-                    .width(1)
-                    .color(palette.background.weak.color),
-                ..container::Style::default()
-            }
-        })
-        .into()
+    widgets::card(card).into()
 }
 
 fn status_dot<'a, Message: 'a>(reachability: DeviceReachability) -> Element<'a, Message> {
@@ -216,20 +194,6 @@ fn status_dot<'a, Message: 'a>(reachability: DeviceReachability) -> Element<'a, 
             }
         })
         .into()
-}
-
-fn placeholder<'a, Message: 'a>(
-    icon: Element<'a, Message>,
-    title: &'a str,
-    detail: Option<&'a str>,
-) -> Element<'a, Message> {
-    let mut content = column![icon, text(title).size(16)]
-        .spacing(10)
-        .align_x(Alignment::Center);
-    if let Some(detail) = detail {
-        content = content.push(text(detail).size(13).style(text::secondary));
-    }
-    container(content).center(Length::Fill).into()
 }
 
 fn device_icon<'a>(device_type: DeviceType) -> iced::widget::Text<'a> {

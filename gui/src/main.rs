@@ -1,7 +1,8 @@
 //! The MyConnect desktop app: the composition root for the daemon and its
-//! UI in one process. It reads the flags, starts the daemon with every
-//! plugin and its UI half, runs the UI (`myconnect::ui`), and shuts the
-//! daemon down when the UI exits.
+//! UI in one process. It reads the flags and runs the UI
+//! (`myconnect::ui`) with a way to start the daemon with every plugin and
+//! its UI half; the UI starts it (again on Retry) and shuts it down on
+//! exit.
 
 use std::{
     net::{IpAddr, Ipv4Addr},
@@ -84,28 +85,35 @@ fn main() -> Result<()> {
         api_host: IpAddr::V4(Ipv4Addr::LOCALHOST),
         api_port: args.api_port,
     };
-    let mut ui_plugins = Vec::new();
-    let service = runtime.block_on(RunningService::start_with(request, |clipboard| {
-        let builtin = plugins::builtin_with_ui(clipboard);
-        ui_plugins = builtin.ui;
-        builtin.core
-    }))?;
-    tracing::info!(
-        device_id = service.core().local_device_id(),
-        api = %service.api_addr(),
-        "daemon started"
-    );
+    let start = move || -> ui::StartFuture {
+        let request = request.clone();
+        Box::pin(async move {
+            let mut ui_plugins = Vec::new();
+            let service = RunningService::start_with(request, |clipboard| {
+                let builtin = plugins::builtin_with_ui(clipboard);
+                ui_plugins = builtin.ui;
+                builtin.core
+            })
+            .await?;
+            tracing::info!(
+                device_id = service.core().local_device_id(),
+                api = %service.api_addr(),
+                "daemon started"
+            );
+            Ok(ui::Started {
+                service,
+                plugins: ui_plugins,
+            })
+        })
+    };
 
     let result = ui::run(
-        &service,
         UiOptions {
             runtime: runtime.handle().clone(),
             demo: args.demo,
         },
-        ui_plugins,
+        start,
     );
-
-    runtime.block_on(service.shutdown())?;
     runtime.shutdown_timeout(Duration::from_secs(2));
     result
 }

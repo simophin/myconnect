@@ -76,3 +76,39 @@ pub enum CoreError {
     #[error("internal core error")]
     Internal,
 }
+
+impl CoreError {
+    /// The code clients see for this error: the HTTP API's `problem+json`
+    /// `code`, and what the UI words its message from.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::CommandQueueFull => "command_queue_full",
+            Self::CommandQueueClosed => "application_unavailable",
+            Self::UnknownDevice => "device_not_found",
+            Self::InvalidDiscoveryAddress => "invalid_address",
+            Self::UnknownPairing => "pairing_not_found",
+            Self::AlreadyPaired => "already_paired",
+            Self::PairingInProgress => "pairing_in_progress",
+            Self::DeviceNotConnected => "device_not_connected",
+            Self::InvalidPairingDirection => "invalid_pairing_direction",
+            Self::InvalidPairingState | Self::InvalidTransition(_) => "invalid_pairing_state",
+            Self::NotPaired => "device_not_paired",
+            Self::UnsupportedByPeer => "unsupported_by_peer",
+            Self::InvalidFileName => "invalid_file_name",
+            Self::TransferTooLarge { .. } => "transfer_too_large",
+            Self::UnknownTransfer => "transfer_not_found",
+            Self::TransferExists => "transfer_exists",
+            Self::InvalidDeviceName => "invalid_device_name",
+            Self::InvalidDownloadDir => "invalid_download_dir",
+            Self::InvalidSettings => "invalid_settings",
+            Self::InvalidTransferState => "invalid_transfer_state",
+            Self::InvalidCommandCapacity
+            | Self::StateUnavailable
+            | Self::EventBus(_)
+            | Self::InvalidPeerCertificate
+            | Self::Trust(_)
+            | Self::Settings(_)
+            | Self::Internal => "internal_error",
+        }
+    }
+}

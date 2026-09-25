@@ -1,0 +1,338 @@
+//! Widgets the pages share, the core's and the plugins': the page header,
+//! cards, the error and empty views, the verification code, and how sizes
+//! read.
+
+use iced::{
+    Alignment, Background, Border, Element, Font, Length, Theme, font,
+    widget::{Space, Text, button, column, container, row, text, tooltip, tooltip::Position},
+};
+use iced_fonts::lucide;
+
+use crate::ui::plugin::Icon;
+
+/// A button in a page header: an icon with a tooltip, disabled without a
+/// message.
+pub struct HeaderAction<M> {
+    pub icon: Icon,
+    pub tooltip: String,
+    pub on_press: Option<M>,
+}
+
+impl<M> HeaderAction<M> {
+    pub fn new(icon: Icon, tooltip: impl Into<String>, on_press: M) -> Self {
+        Self {
+            icon,
+            tooltip: tooltip.into(),
+            on_press: Some(on_press),
+        }
+    }
+}
+
+/// The top of a page: a back button when `back` is given, the title, and
+/// icon buttons at the end.
+pub fn page_header<'a, M: Clone + 'a>(
+    title: impl text::IntoFragment<'a>,
+    back: Option<M>,
+    actions: Vec<HeaderAction<M>>,
+) -> Element<'a, M> {
+    let mut header = row![].spacing(4).align_y(Alignment::Center);
+    if let Some(back) = back {
+        header = header.push(icon_button(lucide::arrow_left, "Back", Some(back)));
+    }
+    // The title takes what the buttons leave, and is cut off if longer.
+    header = header.push(
+        container(
+            text(title)
+                .size(22)
+                .font(semibold())
+                .wrapping(text::Wrapping::None),
+        )
+        .padding([0, 4])
+        .width(Length::Fill)
+        .clip(true),
+    );
+    for action in actions {
+        header = header.push(icon_button(action.icon, action.tooltip, action.on_press));
+    }
+    header.height(40).into()
+}
+
+/// An icon button with a tooltip, disabled without `on_press`.
+pub fn icon_button<'a, M: Clone + 'a>(
+    icon: Icon,
+    tip: impl Into<String>,
+    on_press: Option<M>,
+) -> Element<'a, M> {
+    let icon: Element<'a, M> = Element::from(icon().size(18));
+    let button = button(container(icon).center(20))
+        .padding(8)
+        .style(|theme: &Theme, status| {
+            let base = button::text(theme, status);
+            let palette = theme.extended_palette();
+            let background = match status {
+                button::Status::Hovered => Some(palette.background.weak.color),
+                button::Status::Pressed => Some(palette.background.strong.color),
+                _ => None,
+            };
+            button::Style {
+                background: background.map(Background::Color),
+                text_color: if status == button::Status::Disabled {
+                    palette.background.strong.color
+                } else {
+                    palette.background.base.text
+                },
+                border: Border::default().rounded(20),
+                ..base
+            }
+        })
+        .on_press_maybe(on_press);
+    let tip: Text<'a> = text(tip.into()).size(12);
+    tooltip(
+        button,
+        container(tip).padding([4, 8]).style(container::dark),
+        Position::Bottom,
+    )
+    .gap(4)
+    .into()
+}
+
+/// A page's content under its header, with the usual padding.
+pub fn page<'a, M: 'a>(
+    header: impl Into<Element<'a, M>>,
+    body: impl Into<Element<'a, M>>,
+) -> Element<'a, M> {
+    container(column![header.into(), body.into()].spacing(16))
+        .padding([16, 20])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+/// Content on a raised surface with a hairline border.
+pub fn card<'a, M: 'a>(content: impl Into<Element<'a, M>>) -> container::Container<'a, M> {
+    container(content)
+        .padding([12, 14])
+        .width(Length::Fill)
+        .style(card_style)
+}
+
+pub fn card_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+    container::Style {
+        background: Some(Background::Color(palette.background.weakest.color)),
+        border: Border::default()
+            .rounded(10)
+            .width(1)
+            .color(palette.background.weak.color),
+        ..container::Style::default()
+    }
+}
+
+/// A centred icon, title and optional detail, for a page with nothing to
+/// list.
+pub fn empty_state<'a, M: 'a>(
+    icon: Icon,
+    title: impl text::IntoFragment<'a>,
+    detail: Option<&'a str>,
+) -> Element<'a, M> {
+    let mut content = column![
+        icon().size(40).style(text::secondary),
+        text(title).size(16).center()
+    ]
+    .spacing(10)
+    .align_x(Alignment::Center);
+    if let Some(detail) = detail {
+        content = content.push(text(detail).size(13).style(text::secondary).center());
+    }
+    container(content.max_width(360))
+        .center(Length::Fill)
+        .padding(24)
+        .into()
+}
+
+/// A centred error, with Retry when `on_retry` is given.
+pub fn error_view<'a, M: Clone + 'a>(
+    message: impl text::IntoFragment<'a>,
+    on_retry: Option<M>,
+) -> Element<'a, M> {
+    let mut content = column![
+        lucide::circle_alert().size(48).style(text::danger),
+        text(message).center(),
+    ]
+    .spacing(16)
+    .align_x(Alignment::Center);
+    if let Some(on_retry) = on_retry {
+        content = content.push(
+            button(text("Retry"))
+                .padding([8, 20])
+                .style(button::secondary)
+                .on_press(on_retry),
+        );
+    }
+    container(content.max_width(420))
+        .center(Length::Fill)
+        .padding(24)
+        .into()
+}
+
+/// A centred loading icon with a line of text.
+pub fn loading<'a, M: 'a>(label: impl text::IntoFragment<'a>) -> Element<'a, M> {
+    container(
+        column![
+            lucide::loader().size(28).style(text::secondary),
+            text(label).style(text::secondary),
+        ]
+        .spacing(12)
+        .align_x(Alignment::Center),
+    )
+    .center(Length::Fill)
+    .into()
+}
+
+/// A pairing verification code, large and monospace so it is easy to
+/// compare with the code on the other device.
+pub fn verification_code<'a, M: 'a>(code: &'a str) -> Element<'a, M> {
+    // iced has no letter spacing; a hair space between characters stands in.
+    let spaced: String = code
+        .chars()
+        .map(String::from)
+        .collect::<Vec<_>>()
+        .join("\u{200A}");
+    container(text(spaced).size(30).font(Font {
+        weight: font::Weight::Semibold,
+        ..Font::MONOSPACE
+    }))
+    .padding([12, 24])
+    .style(|theme: &Theme| {
+        let palette = theme.extended_palette();
+        container::Style {
+            background: Some(Background::Color(palette.background.weak.color)),
+            text_color: Some(palette.background.weak.text),
+            border: Border::default().rounded(12),
+            ..container::Style::default()
+        }
+    })
+    .into()
+}
+
+/// A gap of `size` pixels in a row or column.
+pub fn gap(size: impl Into<Length> + Copy) -> Space {
+    Space::new().width(size).height(size)
+}
+
+/// The app's semibold font, for titles.
+pub fn semibold() -> Font {
+    Font {
+        weight: font::Weight::Semibold,
+        ..Font::DEFAULT
+    }
+}
+
+/// A byte count in the largest unit that keeps it at or above 1, as the
+/// Flutter app wrote it (`transfer_tile.dart`).
+pub fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["bytes", "KB", "MB", "GB", "TB"];
+    #[allow(clippy::cast_precision_loss)]
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        return format!("{bytes} bytes");
+    }
+    // Dart's `toStringAsFixed` rounds halves away from zero; Rust's
+    // formatting rounds them to even.
+    if value < 10.0 {
+        format!("{:.1} {}", (value * 10.0).round() / 10.0, UNITS[unit])
+    } else {
+        format!("{:.0} {}", value.round(), UNITS[unit])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iced::widget::column;
+
+    use super::*;
+    use crate::ui::testing;
+
+    #[test]
+    fn bytes_read_like_the_flutter_app() {
+        for (bytes, expected) in [
+            (0, "0 bytes"),
+            (1, "1 bytes"),
+            (1023, "1023 bytes"),
+            (1024, "1.0 KB"),
+            (1280, "1.3 KB"),
+            (1536, "1.5 KB"),
+            (10 * 1024 - 1, "10.0 KB"),
+            (10 * 1024, "10 KB"),
+            (1_048_575, "1024 KB"),
+            (1_048_576, "1.0 MB"),
+            (3 * 1024 * 1024 * 1024 / 2, "1.5 GB"),
+            (5 * 1024 * 1024 * 1024 * 1024, "5.0 TB"),
+            (2048 * 1024 * 1024 * 1024 * 1024, "2048 TB"),
+        ] {
+            assert_eq!(format_bytes(bytes), expected, "{bytes}");
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    enum Message {
+        Back,
+        Refresh,
+    }
+
+    #[test]
+    fn snapshot_page_header() {
+        testing::snapshot("header", (440.0, 220.0), || {
+            column![
+                page_header::<Message>("Devices", None, vec![]),
+                page_header(
+                    "Transfers",
+                    Some(Message::Back),
+                    vec![
+                        HeaderAction::new(lucide::refresh_cw, "Refresh", Message::Refresh),
+                        HeaderAction {
+                            icon: lucide::folder_plus,
+                            tooltip: "New folder".into(),
+                            on_press: None,
+                        },
+                    ],
+                ),
+                page_header::<Message>(
+                    "Files on a device with a rather long name that doesn’t fit",
+                    Some(Message::Back),
+                    vec![HeaderAction::new(
+                        lucide::refresh_cw,
+                        "Refresh",
+                        Message::Refresh
+                    )],
+                ),
+                verification_code("A1B2C3D4"),
+            ]
+            .spacing(12)
+            .padding(16)
+            .into()
+        });
+    }
+
+    #[test]
+    fn snapshot_error_and_empty() {
+        testing::snapshot("error-view", (440.0, 320.0), || {
+            error_view(
+                "The device is not connected right now.",
+                Some(Message::Refresh),
+            )
+        });
+        testing::snapshot("empty-state", (440.0, 320.0), || {
+            empty_state::<Message>(
+                lucide::monitor_smartphone,
+                "No paired devices yet",
+                Some("Find a device to pair"),
+            )
+        });
+    }
+}

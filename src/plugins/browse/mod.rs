@@ -18,6 +18,8 @@ mod http;
 pub mod packet;
 mod session;
 mod ssh;
+#[cfg(feature = "gui")]
+pub mod ui;
 
 use std::{
     sync::Arc,
@@ -133,6 +135,25 @@ pub enum BrowseError {
     Failed,
     #[error("the device took too long to answer")]
     TimedOut,
+}
+
+impl BrowseError {
+    /// The code clients see for this error, as [`CoreError::code`].
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Core(error) => error.code(),
+            Self::InvalidPath => "invalid_path",
+            Self::Unavailable { .. } => "files_unavailable",
+            Self::NotFound => "file_not_found",
+            Self::Exists => "file_exists",
+            Self::PermissionDenied => "file_permission_denied",
+            Self::NotADirectory => "not_a_directory",
+            Self::IsADirectory => "is_a_directory",
+            Self::HostKeyMismatch => "files_host_key_mismatch",
+            Self::Failed => "files_failed",
+            Self::TimedOut => "files_timed_out",
+        }
+    }
 }
 
 impl BrowsePlugin {

@@ -57,8 +57,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --all-targets     # also builds and tests the native UI
 cargo build -p myconnect                 # the CLI alone, without iced
 cargo tree -p myconnect -e normal --prefix none | grep -c '^iced'   # prints 0
-(cd ui && dart run build_runner build --delete-conflicting-outputs \
-       && flutter analyze && flutter test && tool/integration_test.sh)
 git diff --check
 ```
 
@@ -91,8 +89,9 @@ Arch Linux PKGBUILD; Windows is built only locally.
 
 **Replacing the Flutter UI with a native Rust UI (iced).** Decided by the
 owner on 2026-09-25. Follow [`PLAN_ICED_UI.md`](PLAN_ICED_UI.md) step by
-step. Until its last step, the Flutter app below keeps working and its
-checks still have to pass.
+step. The Flutter app is no longer maintained (owner, 2026-09-25): its
+checks aren't part of "done", and it stays only as the spec until the
+plan's last step deletes it.
 
 Other items still open:
 

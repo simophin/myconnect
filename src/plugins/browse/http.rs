@@ -56,37 +56,26 @@ pub(super) fn streaming_routes(plugin: Arc<BrowsePlugin>, ctx: PluginContext) ->
 
 impl From<BrowseError> for ApiProblem {
     fn from(error: BrowseError) -> Self {
+        let code = error.code();
         match error {
             BrowseError::Core(error) => error.into(),
-            BrowseError::InvalidPath => ApiProblem::bad_request("invalid_path"),
+            BrowseError::InvalidPath => ApiProblem::bad_request(code),
             BrowseError::Unavailable { reason } => {
-                ApiProblem::new(StatusCode::CONFLICT, "Conflict", "files_unavailable")
-                    .with_detail(reason)
+                ApiProblem::new(StatusCode::CONFLICT, "Conflict", code).with_detail(reason)
             }
-            BrowseError::NotFound => ApiProblem::not_found("file_not_found"),
-            BrowseError::Exists => ApiProblem::new(StatusCode::CONFLICT, "Conflict", "file_exists"),
+            BrowseError::NotFound => ApiProblem::not_found(code),
+            BrowseError::Exists | BrowseError::NotADirectory | BrowseError::IsADirectory => {
+                ApiProblem::new(StatusCode::CONFLICT, "Conflict", code)
+            }
             BrowseError::PermissionDenied => {
-                ApiProblem::new(StatusCode::FORBIDDEN, "Forbidden", "file_permission_denied")
+                ApiProblem::new(StatusCode::FORBIDDEN, "Forbidden", code)
             }
-            BrowseError::NotADirectory => {
-                ApiProblem::new(StatusCode::CONFLICT, "Conflict", "not_a_directory")
+            BrowseError::HostKeyMismatch | BrowseError::Failed => {
+                ApiProblem::new(StatusCode::BAD_GATEWAY, "Bad gateway", code)
             }
-            BrowseError::IsADirectory => {
-                ApiProblem::new(StatusCode::CONFLICT, "Conflict", "is_a_directory")
+            BrowseError::TimedOut => {
+                ApiProblem::new(StatusCode::GATEWAY_TIMEOUT, "Gateway timeout", code)
             }
-            BrowseError::HostKeyMismatch => ApiProblem::new(
-                StatusCode::BAD_GATEWAY,
-                "Bad gateway",
-                "files_host_key_mismatch",
-            ),
-            BrowseError::Failed => {
-                ApiProblem::new(StatusCode::BAD_GATEWAY, "Bad gateway", "files_failed")
-            }
-            BrowseError::TimedOut => ApiProblem::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "Gateway timeout",
-                "files_timed_out",
-            ),
         }
     }
 }

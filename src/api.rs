@@ -555,58 +555,33 @@ async fn not_found() -> ApiProblem {
 }
 
 fn map_error(error: CoreError) -> ApiProblem {
+    let code = error.code();
     match error {
-        CoreError::CommandQueueFull => ApiProblem::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Service unavailable",
-            "command_queue_full",
-        ),
-        CoreError::CommandQueueClosed => ApiProblem::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Service unavailable",
-            "application_unavailable",
-        ),
-        CoreError::UnknownDevice => ApiProblem::not_found("device_not_found"),
-        CoreError::InvalidDiscoveryAddress => ApiProblem::bad_request("invalid_address"),
-        CoreError::UnknownPairing => ApiProblem::not_found("pairing_not_found"),
-        CoreError::AlreadyPaired => {
-            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "already_paired")
+        CoreError::CommandQueueFull | CoreError::CommandQueueClosed => {
+            ApiProblem::new(StatusCode::SERVICE_UNAVAILABLE, "Service unavailable", code)
         }
-        CoreError::PairingInProgress => {
-            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "pairing_in_progress")
+        CoreError::UnknownDevice | CoreError::UnknownPairing | CoreError::UnknownTransfer => {
+            ApiProblem::not_found(code)
         }
-        CoreError::DeviceNotConnected => {
-            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "device_not_connected")
+        CoreError::InvalidDiscoveryAddress
+        | CoreError::InvalidFileName
+        | CoreError::InvalidDeviceName
+        | CoreError::InvalidDownloadDir
+        | CoreError::InvalidSettings => ApiProblem::bad_request(code),
+        CoreError::AlreadyPaired
+        | CoreError::PairingInProgress
+        | CoreError::DeviceNotConnected
+        | CoreError::InvalidPairingDirection
+        | CoreError::InvalidPairingState
+        | CoreError::InvalidTransition(_)
+        | CoreError::NotPaired
+        | CoreError::UnsupportedByPeer
+        | CoreError::TransferExists
+        | CoreError::InvalidTransferState => {
+            ApiProblem::new(StatusCode::CONFLICT, "Conflict", code)
         }
-        CoreError::InvalidPairingDirection => ApiProblem::new(
-            StatusCode::CONFLICT,
-            "Conflict",
-            "invalid_pairing_direction",
-        ),
-        CoreError::InvalidPairingState | CoreError::InvalidTransition(_) => {
-            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "invalid_pairing_state")
-        }
-        CoreError::NotPaired => {
-            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "device_not_paired")
-        }
-        CoreError::UnsupportedByPeer => {
-            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "unsupported_by_peer")
-        }
-        CoreError::InvalidFileName => ApiProblem::bad_request("invalid_file_name"),
-        CoreError::TransferTooLarge { .. } => ApiProblem::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "Payload too large",
-            "transfer_too_large",
-        ),
-        CoreError::UnknownTransfer => ApiProblem::not_found("transfer_not_found"),
-        CoreError::TransferExists => {
-            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "transfer_exists")
-        }
-        CoreError::InvalidDeviceName => ApiProblem::bad_request("invalid_device_name"),
-        CoreError::InvalidDownloadDir => ApiProblem::bad_request("invalid_download_dir"),
-        CoreError::InvalidSettings => ApiProblem::bad_request("invalid_settings"),
-        CoreError::InvalidTransferState => {
-            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "invalid_transfer_state")
+        CoreError::TransferTooLarge { .. } => {
+            ApiProblem::new(StatusCode::PAYLOAD_TOO_LARGE, "Payload too large", code)
         }
         _ => ApiProblem::internal(),
     }
