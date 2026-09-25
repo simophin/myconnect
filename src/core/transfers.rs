@@ -168,6 +168,11 @@ pub enum TransferStatus {
 }
 
 impl TransferStatus {
+    /// Whether the transfer has ended, one way or another.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Cancelled | Self::Failed)
+    }
+
     fn can_transition_to(self, next: Self) -> bool {
         matches!(
             (self, next),
@@ -456,7 +461,7 @@ impl Transfers {
             .get(&id)
             .map(Transfer::snapshot)
             .ok_or(CoreError::UnknownTransfer)?;
-        if is_terminal(snapshot.status) {
+        if snapshot.status.is_terminal() {
             return Err(CoreError::InvalidTransferState);
         }
         if let Some(active) = state.active.get(&id) {
@@ -726,7 +731,7 @@ impl TransferHandle {
             };
             match ended {
                 Ok(snapshot) => snapshot,
-                Err(_) if !is_terminal(record.snapshot().status) => {
+                Err(_) if !record.snapshot().status.is_terminal() => {
                     match record.transition(
                         TransferStatus::Failed,
                         now,
@@ -764,13 +769,6 @@ impl Drop for TransferHandle {
             );
         }
     }
-}
-
-fn is_terminal(status: TransferStatus) -> bool {
-    matches!(
-        status,
-        TransferStatus::Completed | TransferStatus::Cancelled | TransferStatus::Failed
-    )
 }
 
 fn unix_millis() -> u64 {

@@ -6,11 +6,12 @@ early steps build the ground the later ones stand on. Steps marked
 *independent* can run in parallel worktrees once their prerequisites have
 landed.
 
-Status (2026-09-25): decided by the owner. Steps 1 to 3 are done: `gui/`
+Status (2026-09-25): decided by the owner. Steps 1 to 4 are done: `gui/`
 is the thin composition root, the spike's device list lives in `src/ui/`,
-features plug in through the `UiPlugin` seam (battery first), and the shell
-has routing, toasts, dialogs, startup screens and error wording. Next is
-step 4. Each finished step says so under its heading, with what differs
+features plug in through the `UiPlugin` seam (battery first), the shell
+has routing, toasts, dialogs, startup screens and error wording, and the
+store caches devices, pairings, transfers and settings for the pages. Next
+are steps 5 to 9. Each finished step says so under its heading, with what differs
 from the plan.
 
 ## Read first
@@ -546,6 +547,37 @@ unit tests of `describe_error` for every code in `api_exception.dart`.
 
 ### 4. The store: devices, pairings, transfers, settings
 
+**Done (2026-09-25).** Where it differs from the text below:
+- The store lives in `UiContext`: plugins read it with `ctx.store()`, and
+  `ctx.device(id)` and `ctx.transfers(device)` (newest first, optionally
+  for one device) read it rather than the core. Only the shell changes
+  it. Plugins don't need to yet: in-process, a mutation's event arrives
+  right behind its answer. If a plugin page ever needs its answer applied
+  sooner, add a `ShellRequest` for it.
+- Each resource is a `Load<T>`: `Loading`, `Failed(words)` or `Loaded`.
+  A failed read keeps what was loaded, as Flutter's refresh did. The sync
+  message is `Update::Snapshot(Box<store::Snapshot>)`;
+  `Snapshot::take(core)` reads all four. `Message::Reload` takes one in
+  `update` (the devices page's Retry); events already queued apply after
+  it, as after the subscription's own snapshot.
+- Events go to the store first, then to every plugin's `on_event`, so
+  plugins see them applied. Resources not loaded yet ignore events.
+- "This computer" comes from the settings snapshot (shown once loaded), not
+  `Core::local_device_name`.
+- `PairingStatus::is_terminal` and `TransferStatus::is_terminal` are now
+  public in the core; `client.rs` and `core::transfers` use them.
+- A transfer answer with the same `updated_at` as the held one replaces it
+  unless the held one has ended, as in `transfers_controller.dart`.
+- Tests (`ui::store`, `ui::sync`) port the controller scenarios with
+  hand-fed snapshots and events, plus two against a real core: events
+  around a snapshot (one it includes, one it misses) and a settings patch
+  with its event. `core::testing::handle_with_event_capacity` gives a core
+  whose bus holds more than one event. The sync test drives the real
+  stream: snapshot, event, and a fresh snapshot after a lag. Flutter's
+  "refetch on reconnect" is that lag test.
+- Checked in the real app with `--demo`: renaming and unpairing through
+  the CLI (`--api-port`) show up live.
+
 **Why:** all pages read from it. Getting the sync rules right once is
 cheaper than per page.
 
@@ -1039,7 +1071,7 @@ are to the Flutter app under `ui/lib/src/`.
 - [ ] Buttons: Cancel (pending), Done (accepted → device), Close / Try again (other terminal states); disabled while busy
 - [ ] Verification code: large, monospace, letter-spaced, selectable, on a rounded surface
 - [ ] Incoming prompt over every screen while requests are pending; modal; "{n} more request(s) waiting"; Accept/Reject; inline error keeps it open; disappears when resolved elsewhere
-- [ ] Guard: a non-terminal pairing snapshot never replaces a terminal one
+- [x] Guard: a non-terminal pairing snapshot never replaces a terminal one
 
 ### §6 Send files and drop (`features/send/`)
 Dropping applies on X11, macOS and Windows, not on Wayland (see Owner decisions).
@@ -1058,7 +1090,7 @@ Dropping applies on X11, macOS and Windows, not on Wayland (see Owner decisions)
 - [ ] Cancel while active; toast on error
 - [ ] Open file / Open folder on completed with `savedPath`; toast "Couldn't open {path}"
 - [ ] `format_bytes` as in `transfer_tile.dart:107-118`
-- [ ] Guard: newer / terminal wins
+- [x] Guard: newer / terminal wins
 
 ### §8 File browser (`features/files/`)
 - [ ] Title "Files on {name}"; Upload files, New folder (both only inside a folder), Refresh, Show hidden files

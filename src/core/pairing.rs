@@ -43,6 +43,14 @@ pub enum PairingStatus {
 }
 
 impl PairingStatus {
+    /// Whether the pairing has ended, one way or another.
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Accepted | Self::Rejected | Self::Expired | Self::Failed
+        )
+    }
+
     fn can_transition_to(self, next: Self) -> bool {
         matches!(
             (self, next),

@@ -13,7 +13,7 @@ use iced::{Element, Subscription, Task, widget::Text};
 use crate::{
     core::{Core, CoreEvent, DeviceSnapshot, PluginContext, SettingsSnapshot, TransferSnapshot},
     protocol::Packet,
-    ui::route::Route,
+    ui::{route::Route, store::Store},
 };
 
 /// A feature's UI half. Lives in `src/plugins/<name>/ui.rs`.
@@ -491,10 +491,10 @@ impl<M: Send + 'static> Command<M> {
 }
 
 /// What a plugin gets from the shell while it handles a message or event.
-#[derive(Clone)]
 pub struct UiContext {
     core: Core,
     runtime: tokio::runtime::Handle,
+    store: Store,
     window_focused: bool,
 }
 
@@ -503,12 +503,22 @@ impl UiContext {
         Self {
             core,
             runtime,
+            store: Store::default(),
             window_focused: true,
         }
     }
 
     pub fn core(&self) -> &Core {
         &self.core
+    }
+
+    /// What the core owns, as the UI last heard.
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
+    pub(crate) fn store_mut(&mut self) -> &mut Store {
+        &mut self.store
     }
 
     /// The core as the plugin's own module sees it, to call its typed API.
@@ -540,14 +550,18 @@ impl UiContext {
         }))
     }
 
-    /// The device as the core knows it now.
-    pub fn device(&self, device_id: &str) -> Option<DeviceSnapshot> {
-        self.core.device(device_id)
+    /// A device, from the store.
+    pub fn device(&self, device_id: &str) -> Option<&DeviceSnapshot> {
+        self.store.device(device_id)
     }
 
-    /// Every file transfer.
-    pub fn transfers(&self) -> Vec<TransferSnapshot> {
-        self.core.transfers().list()
+    /// File transfers from the store, newest first: all of them, or only
+    /// those with one device. Empty until they have loaded.
+    pub fn transfers(&self, device_id: Option<&str>) -> Vec<&TransferSnapshot> {
+        self.store
+            .transfers(device_id)
+            .into_loaded()
+            .unwrap_or_default()
     }
 
     pub fn window_focused(&self) -> bool {

@@ -9,16 +9,16 @@ use iced::{
 };
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::core::{Core, CoreEvent, DeviceSnapshot};
+use crate::{
+    core::{Core, CoreEvent},
+    ui::store::Snapshot,
+};
 
 /// What the core reports to the UI.
 #[derive(Debug, Clone)]
 pub enum Update {
     /// The whole state, sent first and again after a lag.
-    Snapshot {
-        devices: Vec<DeviceSnapshot>,
-        local_name: String,
-    },
+    Snapshot(Box<Snapshot>),
     /// One change since the last snapshot.
     Event(Box<CoreEvent>),
 }
@@ -43,10 +43,7 @@ fn stream(watched: &Watched) -> impl Stream<Item = Update> + use<> {
     iced::stream::channel(64, async move |mut output| {
         loop {
             let mut events = core.subscribe();
-            let snapshot = Update::Snapshot {
-                devices: core.devices().unwrap_or_default(),
-                local_name: core.local_device_name(),
-            };
+            let snapshot = Update::Snapshot(Box::new(Snapshot::take(&core)));
             if output.send(snapshot).await.is_err() {
                 return;
             }
@@ -63,4 +60,54 @@ fn stream(watched: &Watched) -> impl Stream<Item = Update> + use<> {
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use iced::futures::{StreamExt, executor::block_on};
+
+    use super::*;
+    use crate::core::{
+        EventData, SettingsPatch,
+        testing::{handle, make_identity},
+    };
+
+    fn rename(core: &Core, name: &str) {
+        core.update_settings(SettingsPatch {
+            device_name: Some(Some(name.into())),
+            ..SettingsPatch::default()
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn sends_a_snapshot_then_events_and_a_fresh_snapshot_after_a_lag() {
+        // The test core's event bus holds one event.
+        let (core, _commands) = handle();
+        let mut updates = Box::pin(stream(&Watched(core.clone())));
+
+        let Some(Update::Snapshot(first)) = block_on(updates.next()) else {
+            panic!("expected a snapshot first");
+        };
+        assert_eq!(first.devices, Ok(vec![]));
+
+        rename(&core, "Renamed");
+        let Some(Update::Event(event)) = block_on(updates.next()) else {
+            panic!("expected an event");
+        };
+        assert!(matches!(
+            &event.event,
+            EventData::SettingsChanged(settings) if settings.device_name == "Renamed"
+        ));
+
+        // Two changes overflow the bus: the stream starts over.
+        core.discover_device(&make_identity(&"a".repeat(32), vec![]), true, 1)
+            .unwrap();
+        rename(&core, "Renamed again");
+        let Some(Update::Snapshot(fresh)) = block_on(updates.next()) else {
+            panic!("expected a fresh snapshot");
+        };
+        assert_eq!(fresh.devices.unwrap().len(), 1);
+        assert_eq!(fresh.settings.unwrap().device_name, "Renamed again");
+    }
 }

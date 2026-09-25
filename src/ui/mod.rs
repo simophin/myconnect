@@ -18,6 +18,7 @@ pub mod overlay;
 pub mod pages;
 pub mod plugin;
 pub mod route;
+pub mod store;
 pub mod sync;
 #[cfg(test)]
 pub(crate) mod testing;
@@ -47,9 +48,10 @@ use overlay::{
     dialog::{Dialog, DialogEvent, Dialogs, Field, Step, Submit},
     toast::{self, Toasts},
 };
-use pages::{devices::DeviceList, startup};
+use pages::{devices, startup};
 use plugin::{Command, ErasedUiPlugin, Outcome, PluginMessage, ShellRequest, UiContext};
 use route::Route;
+use store::Snapshot;
 
 /// How the UI runs, besides the service it shows.
 #[derive(Clone)]
@@ -140,6 +142,9 @@ enum Message {
     /// Start the daemon again after it failed.
     Retry,
     Sync(sync::Update),
+    /// Read the core again after a snapshot failed. Events already queued
+    /// are applied after it, as after the subscription's own snapshot.
+    Reload,
     /// A message for the plugin it names.
     Plugin(PluginMessage),
     /// A plugin's request to the shell.
@@ -195,7 +200,6 @@ struct Running {
     ctx: UiContext,
     /// Every feature's UI half, in `plugins::builtin_with_ui` order.
     plugins: Vec<Box<dyn ErasedUiPlugin>>,
-    devices: DeviceList,
 }
 
 impl App {
@@ -246,7 +250,6 @@ impl App {
         let mut ctx = UiContext::new(core, self.options.runtime.clone());
         ctx.set_window_focused(self.window_focused);
         self.phase = Phase::Running(Box::new(Running {
-            devices: DeviceList::new(ctx.core().local_device_name()),
             ctx,
             plugins: started.plugins,
         }));
@@ -285,14 +288,29 @@ impl App {
                 let Some(running) = self.running() else {
                     return Task::none();
                 };
-                let mut tasks = Vec::new();
-                if let sync::Update::Event(event) = &update {
-                    for plugin in &mut running.plugins {
-                        tasks.push(shell_task(plugin.on_event(&running.ctx, event)));
+                match update {
+                    sync::Update::Snapshot(snapshot) => {
+                        running.ctx.store_mut().apply_snapshot(*snapshot);
+                        Task::none()
+                    }
+                    // The store first, so plugins see the event applied.
+                    sync::Update::Event(event) => {
+                        running.ctx.store_mut().apply_event(&event.event);
+                        Task::batch(
+                            running
+                                .plugins
+                                .iter_mut()
+                                .map(|plugin| shell_task(plugin.on_event(&running.ctx, &event))),
+                        )
                     }
                 }
-                running.devices.update(update);
-                Task::batch(tasks)
+            }
+            Message::Reload => {
+                if let Some(running) = self.running() {
+                    let snapshot = Snapshot::take(running.ctx.core());
+                    running.ctx.store_mut().apply_snapshot(snapshot);
+                }
+                Task::none()
             }
             Message::Plugin(message) => {
                 let Some(running) = self.running() else {
@@ -453,14 +471,16 @@ impl App {
     /// The page for the current route.
     fn page<'a>(&'a self, running: &'a Running) -> Element<'a, Message> {
         let title = match &self.route {
-            Route::Devices => return running.devices.view(&running.plugins),
+            Route::Devices => {
+                return devices::view(running.ctx.store(), &running.plugins, Message::Reload);
+            }
             Route::Plugin {
                 plugin,
                 device,
                 page,
             } => return self.plugin_page(running, plugin, device, page),
             Route::Device(id) => running
-                .devices
+                .ctx
                 .device(id)
                 .map_or("Device", |device| device.device_name.as_str()),
             Route::AddDevice => "Add device",
@@ -486,7 +506,7 @@ impl App {
             .plugins
             .iter()
             .find(|plugin| plugin.id() == id)
-            .zip(running.devices.device(device))
+            .zip(running.ctx.device(device))
             .and_then(|(plugin, device)| plugin.view_page(&running.ctx, device, page))
             .map_or_else(
                 || {
@@ -575,7 +595,6 @@ mod tests {
         let (core, _commands) = handle();
         let mut app = app(runtime.clone());
         app.phase = Phase::Running(Box::new(Running {
-            devices: DeviceList::new(core.local_device_name()),
             ctx: UiContext::new(core, runtime),
             plugins,
         }));

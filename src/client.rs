@@ -20,7 +20,7 @@ use crate::{
     config::ApiToken,
     core::{
         CoreEvent, DeviceSnapshot, EventData, PairingSnapshot, PluginEventKind, SettingsPatch,
-        SettingsSnapshot, TransferSnapshot, TransferStatus,
+        SettingsSnapshot, TransferSnapshot,
     },
     plugins::{
         browse::{DirectoryListing, FileEntry},
@@ -524,7 +524,7 @@ impl ApiClient {
             || self.transfer(transfer_id),
             |update| match update {
                 Watched::Snapshot(transfer) => {
-                    let terminal = transfer_is_terminal(transfer.status);
+                    let terminal = transfer.status.is_terminal();
                     on_update(TransferWatchUpdate::Snapshot(transfer));
                     terminal
                 }
@@ -534,7 +534,7 @@ impl ApiClient {
                     else {
                         return false;
                     };
-                    let terminal = transfer_is_terminal(transfer.status);
+                    let terminal = transfer.status.is_terminal();
                     on_update(TransferWatchUpdate::Event(event));
                     terminal
                 }
@@ -690,13 +690,6 @@ fn transfer_from_event(event: &EventData) -> Option<&TransferSnapshot> {
         | EventData::TransferFailed(transfer) => Some(transfer),
         _ => None,
     }
-}
-
-fn transfer_is_terminal(status: TransferStatus) -> bool {
-    matches!(
-        status,
-        TransferStatus::Completed | TransferStatus::Cancelled | TransferStatus::Failed
-    )
 }
 
 fn find_sse_frame(bytes: &[u8]) -> Option<(usize, usize)> {

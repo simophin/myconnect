@@ -6,8 +6,9 @@ use iced::{Element, Settings, Size, Task, Theme, futures::StreamExt};
 use iced_test::simulator::Simulator;
 
 use crate::{
-    core::{DeviceReachability, DeviceSnapshot},
+    core::{DeviceReachability, DeviceSnapshot, SettingsSnapshot},
     protocol::DeviceType,
+    ui::store::{Snapshot, Store},
 };
 
 /// A paired, connected phone named `name`, with no capabilities.
@@ -25,6 +26,24 @@ pub fn device(name: &str) -> DeviceSnapshot {
         last_seen_at: 0,
         plugins: Default::default(),
     }
+}
+
+/// A store holding `devices`, on a computer named `local_name`, with no
+/// pairings or transfers.
+pub fn store(local_name: &str, devices: Vec<DeviceSnapshot>) -> Store {
+    let mut store = Store::default();
+    store.apply_snapshot(Snapshot {
+        devices: Ok(devices),
+        pairings: Ok(Vec::new()),
+        transfers: Vec::new(),
+        settings: Ok(SettingsSnapshot {
+            device_name: local_name.into(),
+            download_dir: "/home/me/Downloads".into(),
+            close_to_tray: true,
+            plugins: Default::default(),
+        }),
+    });
+    store
 }
 
 /// Run `task` to the end and return what it produced. Only for tasks that

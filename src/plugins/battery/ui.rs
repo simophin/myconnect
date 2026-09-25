@@ -87,7 +87,7 @@ mod tests {
     use super::*;
     use crate::{
         core::DeviceReachability,
-        ui::{pages::devices::DeviceList, plugin::ErasedUiPlugin, testing},
+        ui::{pages::devices, plugin::ErasedUiPlugin, testing},
     };
 
     fn device(name: &str, battery: Option<BatteryStatus>) -> DeviceSnapshot {
@@ -162,7 +162,7 @@ mod tests {
         let mut laptop = device("Work laptop", None);
         laptop.device_type = DeviceType::Laptop;
         laptop.reachability = DeviceReachability::Unavailable;
-        let list = DeviceList::loaded(
+        let store = testing::store(
             "Demo desktop",
             vec![
                 device(
@@ -178,7 +178,7 @@ mod tests {
         );
         let plugins: Vec<Box<dyn ErasedUiPlugin>> = vec![Box::new(BatteryUi)];
         testing::snapshot("devices-battery", (440.0, 400.0), || {
-            list.view::<()>(&plugins)
+            devices::view(&store, &plugins, ())
         });
     }
 }
