@@ -21,6 +21,9 @@ const browseCapability = 'kdeconnect.sftp.request';
 /// The capability a peer lists when it accepts pings.
 const pingCapability = 'kdeconnect.ping';
 
+/// The capability a peer lists when it accepts clipboard text.
+const clipboardCapability = 'kdeconnect.clipboard';
+
 /// Mirror of the daemon's `BatteryStatus`: a peer's last battery report.
 @freezed
 abstract class BatteryStatus with _$BatteryStatus {
@@ -68,4 +71,11 @@ abstract class Device with _$Device {
   /// Whether a ping sent now would be accepted.
   bool get acceptsPings =>
       isConnected && incomingCapabilities.contains(pingCapability);
+
+  /// Whether the device takes clipboard text at all, connected or not.
+  bool get supportsClipboard =>
+      incomingCapabilities.contains(clipboardCapability);
+
+  /// Whether clipboard text sent now would be accepted.
+  bool get acceptsClipboard => paired && isConnected && supportsClipboard;
 }

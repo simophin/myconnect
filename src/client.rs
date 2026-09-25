@@ -194,6 +194,20 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Send this machine's clipboard text to a paired, connected device.
+    pub async fn send_clipboard(&self, device_id: &str) -> Result<(), ClientError> {
+        let response = self
+            .authorized(
+                self.http
+                    .post(self.url(&format!("api/v1/devices/{device_id}/clipboard"))?),
+            )
+            .send()
+            .await
+            .map_err(map_transport)?;
+        checked(response, "device").await?;
+        Ok(())
+    }
+
     pub async fn send_file(
         &self,
         device_id: &str,

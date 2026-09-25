@@ -61,7 +61,8 @@ work: pairing, unpairing, clipboard, file transfer both ways, and browsing
 the phone's files. Nothing has been checked against KDE Connect on a
 desktop yet. Paired devices are listed even while offline (the daemon
 restores them from their trust records). The tray menu lists each connected
-paired device (send files, ping, browse files, show details), with its
+paired device (send files, ping, send clipboard, browse files, show
+details), with its
 battery; the device list and details
 page show the battery too (`kdeconnect.battery`, read-only); on Linux it needs a patched `cnativeapi`, vendored in
 `ui/third_party/`. Releases (`.github/workflows/build.yml`) build the

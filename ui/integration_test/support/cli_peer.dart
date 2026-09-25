@@ -87,6 +87,15 @@ class CliPeer {
   Future<Object?> post(String path, [Object? body]) =>
       _request('POST', path, body);
 
+  Future<Object?> put(String path, Object? body) => _request('PUT', path, body);
+
+  Future<Object?> patch(String path, Object? body) =>
+      _request('PATCH', path, body);
+
+  /// The peer's clipboard text.
+  Future<String> clipboardText() async =>
+      ((await get('/clipboard'))! as Map)['text']! as String;
+
   /// Announce, and wait until [deviceName] is connected. Returns its id.
   Future<String> discover(String deviceName) async {
     String? id;

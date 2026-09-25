@@ -173,8 +173,15 @@ enum FilesAction {
 #[derive(Debug, PartialEq, Eq, Subcommand)]
 enum ClipboardAction {
     Get,
-    Set { text: String },
+    Set {
+        text: String,
+    },
     Watch,
+    /// Send the clipboard text to one paired device now, e.g. one that
+    /// missed an automatic sync.
+    Send {
+        device_id: String,
+    },
 }
 
 impl Cli {
@@ -382,6 +389,16 @@ impl Cli {
             Command::Clipboard {
                 action: ClipboardAction::Set { text },
             } => print_clipboard(&client.set_clipboard(&text).await?, json),
+            Command::Clipboard {
+                action: ClipboardAction::Send { device_id },
+            } => {
+                client.send_clipboard(&device_id).await?;
+                if json {
+                    println!("{}", json!({"deviceId": device_id, "status": "sent"}));
+                } else {
+                    println!("Clipboard sent to {device_id}");
+                }
+            }
             Command::Clipboard {
                 action: ClipboardAction::Watch,
             } => {
@@ -711,6 +728,7 @@ mod tests {
             vec!["myconnect", "clipboard", "get"],
             vec!["myconnect", "clipboard", "set", "hello"],
             vec!["myconnect", "clipboard", "watch"],
+            vec!["myconnect", "clipboard", "send", "device-id"],
             vec!["myconnect", "settings"],
             vec![
                 "myconnect",

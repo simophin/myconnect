@@ -70,6 +70,12 @@ class MyConnectApi {
     () => _dio.post<void>('devices/${Uri.encodeComponent(deviceId)}/ping'),
   );
 
+  /// Send this computer's clipboard text to a paired, connected device, for
+  /// when automatic sync missed it.
+  Future<void> sendClipboard(String deviceId) => _send(
+    () => _dio.post<void>('devices/${Uri.encodeComponent(deviceId)}/clipboard'),
+  );
+
   Future<List<Pairing>> pairings() async =>
       (await _get<List<Object?>>('pairings'))
           .map((json) => Pairing.fromJson(json! as _Json))

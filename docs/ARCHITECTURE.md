@@ -184,6 +184,13 @@ States: `queued → connecting → transferring → completed | cancelled | fail
   nothing bounces back. Text already on the clipboard at start, empty text
   and non-text content (images) are not reported, and copies made while
   `clipboardSyncEnabled` is off are dropped.
+- Sending to one device on request (`POST /devices/{deviceId}/clipboard`,
+  `myconnect clipboard send`, "Send clipboard" in the app and tray) covers
+  what automatic sync can miss, e.g. text already on the clipboard at start
+  or a peer that dropped an update. It reads the clipboard itself (falling
+  back to the snapshot), sends a plain `kdeconnect.clipboard` even if the
+  text is unchanged, and works while `clipboardSyncEnabled` is off. It does
+  not change the snapshot.
 
 ## 7. Settings
 
@@ -251,6 +258,7 @@ event stream.
 | `DELETE` | `/devices/{deviceId}/files` | `?path=`: delete a file, or a directory and everything in it. Storage roots can't be moved or deleted (`400 invalid_path`). |
 | `GET` | `/clipboard` | Current synchronized text and metadata. |
 | `PUT` | `/clipboard` | Set text and send to eligible paired devices. |
+| `POST` | `/devices/{deviceId}/clipboard` | Send this machine's clipboard text to one paired, connected device now; `202`. `409 clipboard_empty` when there is no text, `409 unsupported_by_peer` without `kdeconnect.clipboard`. §6. |
 | `GET` | `/settings` | The settings in effect (§7). |
 | `PATCH` | `/settings` | Change the fields present in the JSON body; `null` resets one to its default, unknown fields are rejected. `400 invalid_device_name` / `invalid_download_dir` for bad values. Returns the new settings. |
 | `GET` | `/events` | Server-Sent Events: `device.discovered/connected/updated/disconnected/forgotten`, `pairing.requested/updated`, `transfer.started/progress/completed/failed`, `clipboard.changed`, `settings.changed`, `ping.received` (`{deviceId, deviceName, message?}` from a paired device; a one-off notification with no snapshot endpoint, so one missed during a gap is simply lost). Not durable — clients refetch a snapshot after a gap or reconnect. |

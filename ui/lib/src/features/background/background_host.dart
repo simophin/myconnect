@@ -155,6 +155,13 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
                     ? () => unawaited(_ping(device))
                     : null,
               ),
+              if (device.supportsClipboard)
+                TrayMenuItem(
+                  'Send clipboard',
+                  onSelected: device.acceptsClipboard
+                      ? () => unawaited(_sendClipboard(device))
+                      : null,
+                ),
               if (device.incomingCapabilities.contains(browseCapability))
                 TrayMenuItem(
                   'Browse files',
@@ -219,6 +226,19 @@ class _BackgroundHostState extends ConsumerState<BackgroundHost> {
       await (await ref.read(apiProvider.future)).ping(device.deviceId);
     } on Object catch (error) {
       await _report("Couldn't ping ${device.deviceName}", describeError(error));
+    }
+  }
+
+  /// Send the clipboard to [device] without showing the window; only a
+  /// failure is reported.
+  Future<void> _sendClipboard(Device device) async {
+    try {
+      await (await ref.read(apiProvider.future)).sendClipboard(device.deviceId);
+    } on Object catch (error) {
+      await _report(
+        "Couldn't send the clipboard to ${device.deviceName}",
+        describeError(error),
+      );
     }
   }
 

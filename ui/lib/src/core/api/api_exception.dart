@@ -44,6 +44,8 @@ class ApiException implements Exception {
     'invalid_pairing_direction' => 'That pairing request is no longer active.',
     'device_not_paired' => 'The device is not paired.',
     'unsupported_by_peer' => 'The device doesn’t support that.',
+    'clipboard_empty' => 'There is no text on the clipboard to send.',
+    'clipboard_text_too_large' => 'The clipboard text is too long to send.',
     'invalid_file_name' => 'That file name can’t be sent.',
     'transfer_too_large' ||
     'payload_too_large' => 'The file is too large to send.',

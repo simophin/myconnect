@@ -240,6 +240,10 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
         )
         .route("/devices/{device_id}/ping", post(post_ping))
         .route(
+            "/devices/{device_id}/clipboard",
+            post(post_device_clipboard),
+        )
+        .route(
             "/devices/{device_id}/files",
             get(get_files).delete(delete_file),
         )
@@ -463,6 +467,19 @@ async fn post_ping(
     state
         .application
         .send_ping(&device_id, message)
+        .map_err(map_error)?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Send this machine's clipboard text to a paired, connected device, for
+/// when automatic sync missed it. Takes no body.
+async fn post_device_clipboard(
+    State(state): State<ApiState>,
+    Path(device_id): Path<String>,
+) -> Result<StatusCode, ApiProblem> {
+    state
+        .application
+        .send_clipboard(&device_id)
         .map_err(map_error)?;
     Ok(StatusCode::ACCEPTED)
 }
@@ -1049,6 +1066,9 @@ fn map_error(error: ApplicationError) -> ApiProblem {
             "Payload too large",
             "clipboard_text_too_large",
         ),
+        ApplicationError::ClipboardEmpty => {
+            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "clipboard_empty")
+        }
         ApplicationError::NotPaired => {
             ApiProblem::new(StatusCode::CONFLICT, "Conflict", "device_not_paired")
         }
