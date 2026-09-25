@@ -32,6 +32,25 @@ pub fn builtin(
     ]
 }
 
+/// The plugins [`builtin_with_ui`] builds: the core's list, and the UI
+/// halves of the same instances.
+#[cfg(feature = "gui")]
+pub struct Builtin {
+    pub core: Vec<Arc<dyn Plugin>>,
+    pub ui: Vec<Box<dyn crate::ui::plugin::ErasedUiPlugin>>,
+}
+
+/// Every plugin in this build, as [`builtin`] lists them, plus the UI half
+/// of each feature that has one, built from the same instance the core
+/// runs. No feature has a UI half yet.
+#[cfg(feature = "gui")]
+pub fn builtin_with_ui(clipboard: Arc<dyn clipboard::ClipboardService + Send + Sync>) -> Builtin {
+    Builtin {
+        core: builtin(clipboard),
+        ui: Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

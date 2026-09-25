@@ -17,14 +17,21 @@ the detail behind each feature and the traps found along the way.
    embedding (§9), known gaps (§11), browsing a device's files (§12).
 2. [`../ui/README.md`](../ui/README.md): how to run the app, including two
    instances on one machine.
-3. [`../ui/docs/adr/`](../ui/docs/adr/README.md): why the UI is shaped the
-   way it is. ADR 0001 and 0003 are the ones you will lean on.
+3. [`../ui/docs/adr/`](../ui/docs/adr/README.md): why the Flutter UI is
+   shaped the way it is. ADR 0001 and 0003 are the ones you will lean on.
+4. For the native UI that replaces it: [`PLAN_ICED_UI.md`](PLAN_ICED_UI.md)
+   (the steps, its own ground rules, and how to see the UI) and
+   [`adr/`](adr/README.md), whose 0001 is the decision and says which
+   Flutter records still apply. The app is `gui/` (`myconnect-gui`), the UI
+   core is `src/ui/`, both behind the `gui` cargo feature.
 
 ## Ground rules (set by the project owner)
 
 - **The UI is dumb.** It persists nothing but the main window's placement
-  (ADR 0009), and reads/writes only through the
-  HTTP API. If a feature needs data the API doesn't have, add the endpoint
+  (ADR 0009). The Flutter UI reads and writes only through the
+  HTTP API; the native UI calls the core and the plugins' typed Rust
+  functions in-process instead (`adr/0001`), and anything it does, the
+  CLI can do too. If a feature needs data the API doesn't have, add the endpoint
   (and, if the data changes over time, an event) in Rust first.
 - **Every resource needs a snapshot endpoint and events.** The UI loads a
   snapshot, patches it from `/events`, and refetches after any reconnect
@@ -47,11 +54,18 @@ Done means all of these pass:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --all-targets
+cargo test --workspace --all-targets     # also builds and tests the native UI
+cargo build -p myconnect                 # the CLI alone, without iced
+cargo tree -p myconnect -e normal --prefix none | grep -c '^iced'   # prints 0
 (cd ui && dart run build_runner build --delete-conflicting-outputs \
        && flutter analyze && flutter test && tool/integration_test.sh)
 git diff --check
 ```
+
+Run `cargo test` under a private display and bus with
+`ICED_BACKEND=tiny-skia` (CLAUDE.md). With `SNAPSHOT_DIR` set, the native
+UI's snapshot tests write PNGs of each page there; look at them after a UI
+change.
 
 Also run the real app for any UI change (see "Verifying in the real app"
 below). Unit tests with a fake daemon host missed two real bugs in the

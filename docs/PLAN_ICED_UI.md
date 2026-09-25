@@ -6,9 +6,10 @@ early steps build the ground the later ones stand on. Steps marked
 *independent* can run in parallel worktrees once their prerequisites have
 landed.
 
-Status (2026-09-25): decided by the owner. A spike of the device list exists
-in `gui/src/main.rs` and `gui/src/demo.rs`. Step 1 replaces it with the
-structure below.
+Status (2026-09-25): decided by the owner. Step 1 is done: `gui/` is the
+thin composition root and the spike's device list lives in `src/ui/`. Next
+is step 2. Each finished step says so under its heading, with what differs
+from the plan.
 
 ## Read first
 
@@ -324,6 +325,31 @@ before then.
 
 ### 1. Foundation: the feature, the crates, the ADR
 
+**Done (2026-09-25).** Where it differs from the text below:
+- The `gui` feature turns on only `iced` and `iced_fonts` for now. The
+  other UI crates are chosen in [`adr/0001`](adr/0001-native-ui-in-iced.md)'s
+  library table, and each is added to the feature by the step that first
+  uses it (rfd: 9, opener: 8, notify-rust, interprocess, ksni and
+  tray-icon: 13). `iced_test` is a dev-dependency of `myconnect`.
+- `ui::run(&RunningService, UiOptions, plugins)` borrows the service; the
+  `gui` binary shuts it down after the UI exits. `UiOptions` carries the
+  daemon's runtime handle (for `UiContext` in step 2) and `demo`.
+- `ui/plugin.rs` has a placeholder `ErasedUiPlugin` (just `id()`) so
+  `builtin_with_ui` has a type to return; step 2 replaces it with the full
+  seam.
+- `ui/testing.rs` has `snapshot(name, size, view)`, which writes
+  `$SNAPSHOT_DIR/<name>-<light|dark>-<backend>.png`, replacing old images
+  first (`matches_image` would otherwise compare against them).
+- Boolean env vars accept `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off`.
+- The `cargo tree` check is
+  `cargo tree -p myconnect -e normal --prefix none | grep -c '^iced'`: a bare
+  `grep iced` also matches a checkout path containing "iced".
+- Checked in the real app on Linux (Xvfb, private bus, tiny-skia): `--demo`
+  shows the list with live updates, only loopback sockets with
+  `--discovery-loopback`, the CLI lists the app's devices through
+  `--api-port`/`--api-token`, and closing the window quits and stops the
+  daemon.
+
 **Why:** everything after this assumes the layout above.
 
 **Build:**
@@ -361,7 +387,7 @@ before then.
 **Done when:**
 - `cargo run -p myconnect-gui -- --demo` shows the device list, as the
   spike did.
-- `cargo tree -p myconnect -e normal | grep -c iced` prints 0.
+- `cargo tree -p myconnect -e normal --prefix none | grep -c '^iced'` prints 0.
 - CI is green.
 
 **Traps:**

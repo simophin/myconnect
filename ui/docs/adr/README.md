@@ -5,6 +5,10 @@ decided, and what follows from it. Records are immutable once accepted; a
 later decision that changes course supersedes an earlier one rather than
 editing it.
 
+The Flutter app is being replaced by a native UI:
+[`docs/adr/0001`](../../../docs/adr/0001-native-ui-in-iced.md) says which of
+these records carry over to it.
+
 | # | Decision | Status |
 | --- | --- | --- |
 | [0001](0001-stateless-ui-over-the-http-api.md) | The UI is a stateless client of the daemon's HTTP API | Accepted; window placement excepted by 0009 |

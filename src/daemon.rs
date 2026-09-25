@@ -19,7 +19,7 @@ use crate::{
         ApiToken, FilesystemTrustStore, LocalIdentity, SettingsFile, StoredSettings, TrustStore,
         default_config_dir,
     },
-    core::{Core, LocalDeviceSnapshot, Settings, SettingsDefaults, TransferConfig},
+    core::{Core, LocalDeviceSnapshot, Plugin, Settings, SettingsDefaults, TransferConfig},
     plugins::{
         self,
         clipboard::{ClipboardService, InMemoryClipboard, SystemClipboard},
@@ -92,7 +92,18 @@ pub struct RunningService {
 }
 
 impl RunningService {
+    /// Start with the built-in plugins ([`plugins::builtin`]).
     pub async fn start(request: RunRequest) -> Result<Self> {
+        Self::start_with(request, plugins::builtin).await
+    }
+
+    /// Start with the plugins `plugins` builds from the clipboard this run
+    /// chose (the desktop's or an in-memory one). The desktop app uses this
+    /// to keep each plugin's UI half next to the instance the core runs.
+    pub async fn start_with(
+        request: RunRequest,
+        plugins: impl FnOnce(Arc<dyn ClipboardService + Send + Sync>) -> Vec<Arc<dyn Plugin>>,
+    ) -> Result<Self> {
         let config_dir = request
             .data_dir
             .clone()
@@ -149,7 +160,7 @@ impl RunningService {
             8,
             local_public_key_der,
             trust_store.clone(),
-            plugins::builtin(clipboard),
+            plugins(clipboard),
             32,
             256,
             identity.clone(),

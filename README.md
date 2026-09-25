@@ -63,7 +63,9 @@ development, `MYCONNECT_API_URL` overrides the API URL (superseded by
 ### Project structure
 
 MyConnect is a Cargo workspace — the main package with a shared library and a
-thin binary entry point, plus an FFI crate — and a Flutter desktop app:
+thin binary entry point, plus the native desktop app and an FFI crate — and
+the Flutter desktop app that the native one is replacing
+([`docs/PLAN_ICED_UI.md`](docs/PLAN_ICED_UI.md)):
 
 ```text
 src/
@@ -76,10 +78,12 @@ src/
 ├── daemon.rs         # composition root: core + built-in plugins + LAN + API
 ├── api.rs               # local HTTP control plane (optional token auth)
 ├── client.rs             # HTTP client used by the CLI
+├── ui/                   # native desktop UI in iced ("gui" feature)
 └── bin/
     └── myconnect/        # CLI binary
         ├── cli.rs
         └── main.rs
+gui/                      # myconnect-gui: the native desktop app (daemon + ui)
 ffi/                      # myconnect-ffi: C ABI to embed a daemon (start/stop)
 ui/                       # Flutter desktop app (see ui/README.md, ui/docs/adr/)
 ```

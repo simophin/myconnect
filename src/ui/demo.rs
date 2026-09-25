@@ -4,11 +4,12 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use myconnect::{
+use serde_json::json;
+
+use crate::{
     core::Core,
     protocol::{DeviceType, IdentityBody, Packet},
 };
-use serde_json::json;
 
 const PHONE: &str = "demo0phone00000000000000000000001";
 const TABLET: &str = "demo0tablet0000000000000000000002";

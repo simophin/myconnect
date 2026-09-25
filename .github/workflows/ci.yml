@@ -20,11 +20,22 @@ env:
   FLUTTER_VERSION: 3.47.1
 
 jobs:
+  # The workspace, which includes the native UI (gui/ turns on the "gui"
+  # feature), and the CLI on its own, which must build without iced.
   rust:
     name: Rust
     runs-on: ubuntu-24.04
+    env:
+      # No GPU on the runner: the UI's tests render in software.
+      ICED_BACKEND: tiny-skia
     steps:
       - uses: actions/checkout@v7
+      - name: Install the native UI's Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libxkbcommon-dev libwayland-dev libvulkan1 \
+            mesa-vulkan-drivers libdbus-1-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -34,6 +45,14 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --all-targets --locked
+      - name: The CLI builds without the UI
+        run: |
+          cargo build -p myconnect --locked
+          count=$(cargo tree -p myconnect -e normal --locked --prefix none | grep -c '^iced' || true)
+          if [ "$count" != 0 ]; then
+            echo "iced is in the CLI's dependency tree"
+            exit 1
+          fi
 
   flutter:
     name: Flutter
