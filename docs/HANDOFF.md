@@ -127,9 +127,6 @@ macOS app has only an ad-hoc signature. A Flutter build hook
   the last byte has been forwarded, so it ends on `transferring (N/N)`
   rather than `completed`. Waiting for the terminal state (or watching
   `/events`) would make the CLI report the real outcome.
-- `ApiClient::watch_transfer` fetches the transfer before subscribing to
-  `/events`, so one that ends in between leaves `myconnect send --watch`
-  waiting forever. Subscribing first would close the gap.
 - Cancelling an upload's transfer (`POST /devices/{id}/share` or
   `.../files/upload`) doesn't end the HTTP request at once: the handler
   reads the rest of the body looking for more parts, and a large upload
