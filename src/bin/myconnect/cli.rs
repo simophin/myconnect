@@ -8,15 +8,19 @@ use clap::{Parser, Subcommand};
 use myconnect::{
     api::DEFAULT_API_PORT,
     application::{
-        ApplicationEvent, ClipboardSnapshot, DirectoryListing, EventData, FileEntry, FileKind,
-        PairingSnapshot, RunRequest, SettingsPatch, SettingsSnapshot, TransferSnapshot,
+        ApplicationEvent, DirectoryListing, EventData, FileEntry, FileKind, PairingSnapshot,
+        RunRequest, SettingsPatch, SettingsSnapshot, TransferSnapshot,
     },
     client::{
         API_TOKEN_ENV, ApiClient, ClipboardWatchUpdate, DeviceWatchUpdate, TransferWatchUpdate,
     },
     config::ApiToken,
     device::DeviceSnapshot,
-    plugins::{battery::BatteryStatus, ping::ReceivedPing},
+    plugins::{
+        battery::BatteryStatus,
+        clipboard::{ClipboardSettings, ClipboardSnapshot},
+        ping::ReceivedPing,
+    },
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -430,8 +434,9 @@ impl Cli {
                 let patch = SettingsPatch {
                     device_name: device_name.map(Some),
                     download_dir: download_dir.map(Some),
-                    clipboard_sync_enabled: clipboard_sync.map(Some),
-                    close_to_tray: None,
+                    ..clipboard_sync
+                        .map(ClipboardSettings::sync_enabled_patch)
+                        .unwrap_or_default()
                 };
                 let settings = if patch == SettingsPatch::default() {
                     client.settings().await?
@@ -626,7 +631,10 @@ fn print_settings(settings: &SettingsSnapshot, json_output: bool) {
     } else {
         println!("Device name: {}", settings.device_name);
         println!("Download directory: {}", settings.download_dir.display());
-        println!("Clipboard sync: {}", settings.clipboard_sync_enabled);
+        println!(
+            "Clipboard sync: {}",
+            ClipboardSettings::of(settings).sync_enabled
+        );
     }
 }
 
@@ -651,7 +659,6 @@ fn print_event(event: &ApplicationEvent, json_output: bool) {
             EventData::DeviceForgotten(device) => {
                 println!("Device {}: forgotten", device.device_name)
             }
-            EventData::ClipboardChanged(clipboard) => println!("{}", clipboard.text),
             EventData::TransferStarted(transfer)
             | EventData::TransferProgress(transfer)
             | EventData::TransferCompleted(transfer)
@@ -660,15 +667,23 @@ fn print_event(event: &ApplicationEvent, json_output: bool) {
                 print_pairing(pairing, false)
             }
             EventData::SettingsChanged(settings) => print_settings(settings, false),
-            EventData::Plugin(event) => match event.decode::<ReceivedPing>() {
-                Some(ReceivedPing {
-                    device_name,
-                    message: Some(message),
-                    ..
-                }) => println!("Ping from {device_name}: {message}"),
-                Some(ReceivedPing { device_name, .. }) => println!("Ping from {device_name}"),
-                None => println!("{}", event.event_type()),
-            },
+            EventData::Plugin(event) => {
+                if let Some(clipboard) = event.decode::<ClipboardSnapshot>() {
+                    println!("{}", clipboard.text);
+                    return;
+                }
+                match event.decode::<ReceivedPing>() {
+                    Some(ReceivedPing {
+                        device_name,
+                        message: Some(message),
+                        ..
+                    }) => println!("Ping from {device_name}: {message}"),
+                    Some(ReceivedPing { device_name, .. }) => {
+                        println!("Ping from {device_name}")
+                    }
+                    None => println!("{}", event.event_type()),
+                }
+            }
         }
     }
 }

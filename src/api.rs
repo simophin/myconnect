@@ -37,7 +37,7 @@ use uuid::Uuid;
 
 use crate::{
     application::{
-        ApplicationError, ApplicationEvent, ApplicationService, ClipboardSnapshot, Command,
+        ApplicationError, ApplicationEvent, ApplicationService, Command,
         DEFAULT_MAX_TRANSFER_BYTES, DirectoryListing, FileEntry, PairingSnapshot, Query,
         QueryResult, SettingsPatch, SettingsSnapshot, StatusSnapshot, TransferSnapshot,
     },
@@ -241,10 +241,6 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
             get(get_device).delete(delete_device),
         )
         .route(
-            "/devices/{device_id}/clipboard",
-            post(post_device_clipboard),
-        )
-        .route(
             "/devices/{device_id}/files",
             get(get_files).delete(delete_file),
         )
@@ -269,7 +265,6 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
             "/transfers/{transfer_id}",
             get(get_transfer).delete(delete_transfer),
         )
-        .route("/clipboard", get(get_clipboard).put(put_clipboard))
         .route("/settings", get(get_settings).patch(patch_settings))
         .route("/events", get(get_events))
         .with_state(state)
@@ -453,19 +448,6 @@ async fn delete_device(
         .forget_device(&device_id)
         .map_err(map_error)?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-/// Send this machine's clipboard text to a paired, connected device, for
-/// when automatic sync missed it. Takes no body.
-async fn post_device_clipboard(
-    State(state): State<ApiState>,
-    Path(device_id): Path<String>,
-) -> Result<StatusCode, ApiProblem> {
-    state
-        .application
-        .send_clipboard(&device_id)
-        .map_err(map_error)?;
-    Ok(StatusCode::ACCEPTED)
 }
 
 #[derive(Deserialize)]
@@ -903,35 +885,6 @@ async fn delete_file(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn get_clipboard(
-    State(state): State<ApiState>,
-) -> Result<Json<ClipboardSnapshot>, ApiProblem> {
-    match state
-        .application
-        .query(Query::Clipboard)
-        .map_err(map_error)?
-    {
-        QueryResult::Clipboard(clipboard) => Ok(Json(clipboard)),
-        _ => Err(ApiProblem::internal()),
-    }
-}
-
-#[derive(Deserialize)]
-struct SetClipboardRequest {
-    text: String,
-}
-
-async fn put_clipboard(
-    State(state): State<ApiState>,
-    Json(request): Json<SetClipboardRequest>,
-) -> Result<Json<ClipboardSnapshot>, ApiProblem> {
-    let clipboard = state
-        .application
-        .set_clipboard(request.text)
-        .map_err(map_error)?;
-    Ok(Json(clipboard))
-}
-
 async fn get_settings(State(state): State<ApiState>) -> Result<Json<SettingsSnapshot>, ApiProblem> {
     match state
         .application
@@ -1045,14 +998,6 @@ fn map_error(error: ApplicationError) -> ApiProblem {
         ApplicationError::InvalidPairingState | ApplicationError::InvalidTransition(_) => {
             ApiProblem::new(StatusCode::CONFLICT, "Conflict", "invalid_pairing_state")
         }
-        ApplicationError::ClipboardTextTooLarge { .. } => ApiProblem::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "Payload too large",
-            "clipboard_text_too_large",
-        ),
-        ApplicationError::ClipboardEmpty => {
-            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "clipboard_empty")
-        }
         ApplicationError::NotPaired => {
             ApiProblem::new(StatusCode::CONFLICT, "Conflict", "device_not_paired")
         }
@@ -1068,6 +1013,7 @@ fn map_error(error: ApplicationError) -> ApiProblem {
         ApplicationError::UnknownTransfer => ApiProblem::not_found("transfer_not_found"),
         ApplicationError::InvalidDeviceName => ApiProblem::bad_request("invalid_device_name"),
         ApplicationError::InvalidDownloadDir => ApiProblem::bad_request("invalid_download_dir"),
+        ApplicationError::InvalidSettings => ApiProblem::bad_request("invalid_settings"),
         ApplicationError::InvalidTransferState => {
             ApiProblem::new(StatusCode::CONFLICT, "Conflict", "invalid_transfer_state")
         }

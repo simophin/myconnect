@@ -16,8 +16,10 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$DaemonSettings {
 
- String get deviceName; String get downloadDir; bool get clipboardSyncEnabled;/// Owned by the UI; the daemon only stores it.
- bool get closeToTray;
+ String get deviceName; String get downloadDir;/// Owned by the UI; the daemon only stores it.
+ bool get closeToTray;/// The daemon's plugins' settings, keyed by plugin id. Read through
+/// getters such as [clipboardSyncEnabled].
+ Map<String, Object?> get plugins;
 /// Create a copy of DaemonSettings
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -31,20 +33,20 @@ $DaemonSettingsCopyWith<DaemonSettings> get copyWith => _$DaemonSettingsCopyWith
 @override
 bool operator ==(Object other) {
   final _this = this as DaemonSettings;
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is DaemonSettings&&(identical(other.deviceName, _this.deviceName) || other.deviceName == _this.deviceName)&&(identical(other.downloadDir, _this.downloadDir) || other.downloadDir == _this.downloadDir)&&(identical(other.clipboardSyncEnabled, _this.clipboardSyncEnabled) || other.clipboardSyncEnabled == _this.clipboardSyncEnabled)&&(identical(other.closeToTray, _this.closeToTray) || other.closeToTray == _this.closeToTray));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is DaemonSettings&&(identical(other.deviceName, _this.deviceName) || other.deviceName == _this.deviceName)&&(identical(other.downloadDir, _this.downloadDir) || other.downloadDir == _this.downloadDir)&&(identical(other.closeToTray, _this.closeToTray) || other.closeToTray == _this.closeToTray)&&const DeepCollectionEquality().equals(other.plugins, _this.plugins));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
 int get hashCode {
   final _this = this as DaemonSettings;
-  return Object.hash(runtimeType,_this.deviceName,_this.downloadDir,_this.clipboardSyncEnabled,_this.closeToTray);
+  return Object.hash(runtimeType,_this.deviceName,_this.downloadDir,_this.closeToTray,const DeepCollectionEquality().hash(_this.plugins));
 }
 
 @override
 String toString() {
   final _this = this as DaemonSettings;
-  return 'DaemonSettings(deviceName: ${_this.deviceName}, downloadDir: ${_this.downloadDir}, clipboardSyncEnabled: ${_this.clipboardSyncEnabled}, closeToTray: ${_this.closeToTray})';
+  return 'DaemonSettings(deviceName: ${_this.deviceName}, downloadDir: ${_this.downloadDir}, closeToTray: ${_this.closeToTray}, plugins: ${_this.plugins})';
 }
 
 
@@ -55,7 +57,7 @@ abstract mixin class $DaemonSettingsCopyWith<$Res>  {
   factory $DaemonSettingsCopyWith(DaemonSettings value, $Res Function(DaemonSettings) _then) = _$DaemonSettingsCopyWithImpl;
 @useResult
 $Res call({
- String deviceName, String downloadDir, bool clipboardSyncEnabled, bool closeToTray
+ String deviceName, String downloadDir, bool closeToTray, Map<String, Object?> plugins
 });
 
 
@@ -72,13 +74,13 @@ class _$DaemonSettingsCopyWithImpl<$Res>
 
 /// Create a copy of DaemonSettings
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? deviceName = null,Object? downloadDir = null,Object? clipboardSyncEnabled = null,Object? closeToTray = null,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? deviceName = null,Object? downloadDir = null,Object? closeToTray = null,Object? plugins = null,}) {
   return _then(DaemonSettings(
 deviceName: null == deviceName ? _self.deviceName : deviceName // ignore: cast_nullable_to_non_nullable
 as String,downloadDir: null == downloadDir ? _self.downloadDir : downloadDir // ignore: cast_nullable_to_non_nullable
-as String,clipboardSyncEnabled: null == clipboardSyncEnabled ? _self.clipboardSyncEnabled : clipboardSyncEnabled // ignore: cast_nullable_to_non_nullable
-as bool,closeToTray: null == closeToTray ? _self.closeToTray : closeToTray // ignore: cast_nullable_to_non_nullable
-as bool,
+as String,closeToTray: null == closeToTray ? _self.closeToTray : closeToTray // ignore: cast_nullable_to_non_nullable
+as bool,plugins: null == plugins ? _self.plugins : plugins // ignore: cast_nullable_to_non_nullable
+as Map<String, Object?>,
   ));
 }
 
@@ -163,10 +165,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String deviceName,  String downloadDir,  bool clipboardSyncEnabled,  bool closeToTray)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String deviceName,  String downloadDir,  bool closeToTray,  Map<String, Object?> plugins)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _DaemonSettings() when $default != null:
-return $default(_that.deviceName,_that.downloadDir,_that.clipboardSyncEnabled,_that.closeToTray);case _:
+return $default(_that.deviceName,_that.downloadDir,_that.closeToTray,_that.plugins);case _:
   return orElse();
 
 }
@@ -184,10 +186,10 @@ return $default(_that.deviceName,_that.downloadDir,_that.clipboardSyncEnabled,_t
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String deviceName,  String downloadDir,  bool clipboardSyncEnabled,  bool closeToTray)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String deviceName,  String downloadDir,  bool closeToTray,  Map<String, Object?> plugins)  $default,) {final _that = this;
 switch (_that) {
 case _DaemonSettings():
-return $default(_that.deviceName,_that.downloadDir,_that.clipboardSyncEnabled,_that.closeToTray);case _:
+return $default(_that.deviceName,_that.downloadDir,_that.closeToTray,_that.plugins);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -204,10 +206,10 @@ return $default(_that.deviceName,_that.downloadDir,_that.clipboardSyncEnabled,_t
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String deviceName,  String downloadDir,  bool clipboardSyncEnabled,  bool closeToTray)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String deviceName,  String downloadDir,  bool closeToTray,  Map<String, Object?> plugins)?  $default,) {final _that = this;
 switch (_that) {
 case _DaemonSettings() when $default != null:
-return $default(_that.deviceName,_that.downloadDir,_that.clipboardSyncEnabled,_that.closeToTray);case _:
+return $default(_that.deviceName,_that.downloadDir,_that.closeToTray,_that.plugins);case _:
   return null;
 
 }
@@ -218,15 +220,25 @@ return $default(_that.deviceName,_that.downloadDir,_that.clipboardSyncEnabled,_t
 /// @nodoc
 @JsonSerializable()
 
-class _DaemonSettings implements DaemonSettings {
-  const _DaemonSettings({required this.deviceName, required this.downloadDir, required this.clipboardSyncEnabled, required this.closeToTray});
+class _DaemonSettings extends DaemonSettings {
+  const _DaemonSettings({required this.deviceName, required this.downloadDir, required this.closeToTray,  Map<String, Object?> plugins = const <String, Object?>{}}): _plugins = plugins,super._();
   factory _DaemonSettings.fromJson(Map<String, dynamic> json) => _$DaemonSettingsFromJson(json);
 
 @override final  String deviceName;
 @override final  String downloadDir;
-@override final  bool clipboardSyncEnabled;
 /// Owned by the UI; the daemon only stores it.
 @override final  bool closeToTray;
+/// The daemon's plugins' settings, keyed by plugin id. Read through
+/// getters such as [clipboardSyncEnabled].
+ final  Map<String, Object?> _plugins;
+/// The daemon's plugins' settings, keyed by plugin id. Read through
+/// getters such as [clipboardSyncEnabled].
+@override@JsonKey() Map<String, Object?> get plugins {
+  if (_plugins is EqualUnmodifiableMapView) return _plugins;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableMapView(_plugins);
+}
+
 
 /// Create a copy of DaemonSettings
 /// with the given fields replaced by the non-null parameter values.
@@ -241,18 +253,18 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-    return identical(this, other) || (other.runtimeType == runtimeType&&other is _DaemonSettings&&(identical(other.deviceName, deviceName) || other.deviceName == deviceName)&&(identical(other.downloadDir, downloadDir) || other.downloadDir == downloadDir)&&(identical(other.clipboardSyncEnabled, clipboardSyncEnabled) || other.clipboardSyncEnabled == clipboardSyncEnabled)&&(identical(other.closeToTray, closeToTray) || other.closeToTray == closeToTray));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is _DaemonSettings&&(identical(other.deviceName, deviceName) || other.deviceName == deviceName)&&(identical(other.downloadDir, downloadDir) || other.downloadDir == downloadDir)&&(identical(other.closeToTray, closeToTray) || other.closeToTray == closeToTray)&&const DeepCollectionEquality().equals(other.plugins, _plugins));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
 int get hashCode {
-    return Object.hash(runtimeType,deviceName,downloadDir,clipboardSyncEnabled,closeToTray);
+    return Object.hash(runtimeType,deviceName,downloadDir,closeToTray,const DeepCollectionEquality().hash(_plugins));
 }
 
 @override
 String toString() {
-    return 'DaemonSettings(deviceName: $deviceName, downloadDir: $downloadDir, clipboardSyncEnabled: $clipboardSyncEnabled, closeToTray: $closeToTray)';
+    return 'DaemonSettings(deviceName: $deviceName, downloadDir: $downloadDir, closeToTray: $closeToTray, plugins: $plugins)';
 }
 
 
@@ -263,7 +275,7 @@ abstract mixin class _$DaemonSettingsCopyWith<$Res> implements $DaemonSettingsCo
   factory _$DaemonSettingsCopyWith(_DaemonSettings value, $Res Function(_DaemonSettings) _then) = __$DaemonSettingsCopyWithImpl;
 @override @useResult
 $Res call({
- String deviceName, String downloadDir, bool clipboardSyncEnabled, bool closeToTray
+ String deviceName, String downloadDir, bool closeToTray, Map<String, Object?> plugins
 });
 
 
@@ -280,13 +292,13 @@ class __$DaemonSettingsCopyWithImpl<$Res>
 
 /// Create a copy of DaemonSettings
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? deviceName = null,Object? downloadDir = null,Object? clipboardSyncEnabled = null,Object? closeToTray = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? deviceName = null,Object? downloadDir = null,Object? closeToTray = null,Object? plugins = null,}) {
   return _then(_DaemonSettings(
 deviceName: null == deviceName ? _self.deviceName : deviceName // ignore: cast_nullable_to_non_nullable
 as String,downloadDir: null == downloadDir ? _self.downloadDir : downloadDir // ignore: cast_nullable_to_non_nullable
-as String,clipboardSyncEnabled: null == clipboardSyncEnabled ? _self.clipboardSyncEnabled : clipboardSyncEnabled // ignore: cast_nullable_to_non_nullable
-as bool,closeToTray: null == closeToTray ? _self.closeToTray : closeToTray // ignore: cast_nullable_to_non_nullable
-as bool,
+as String,closeToTray: null == closeToTray ? _self.closeToTray : closeToTray // ignore: cast_nullable_to_non_nullable
+as bool,plugins: null == plugins ? _self._plugins : plugins // ignore: cast_nullable_to_non_nullable
+as Map<String, Object?>,
   ));
 }
 

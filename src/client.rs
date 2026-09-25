@@ -18,11 +18,12 @@ use uuid::Uuid;
 use crate::{
     api::DEFAULT_API_PORT,
     application::{
-        ApplicationEvent, ClipboardSnapshot, DirectoryListing, EventData, FileEntry,
-        PairingSnapshot, SettingsPatch, SettingsSnapshot, TransferSnapshot, TransferStatus,
+        ApplicationEvent, DirectoryListing, EventData, FileEntry, PairingSnapshot, PluginEventKind,
+        SettingsPatch, SettingsSnapshot, TransferSnapshot, TransferStatus,
     },
     config::ApiToken,
     device::DeviceSnapshot,
+    plugins::clipboard::ClipboardSnapshot,
 };
 
 pub const API_URL_ENV: &str = "MYCONNECT_API_URL";
@@ -495,7 +496,7 @@ impl ApiClient {
                 tokio::select! {
                     _ = cancellation.cancelled() => return Ok(()),
                     event = events.next() => match event {
-                        Some(Ok(event @ ApplicationEvent { event: EventData::ClipboardChanged(_), .. })) => {
+                        Some(Ok(event)) if event.event.event_type() == ClipboardSnapshot::TYPE => {
                             on_update(ClipboardWatchUpdate::Event(event));
                         }
                         Some(Ok(_)) => {}

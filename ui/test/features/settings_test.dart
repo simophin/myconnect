@@ -26,7 +26,11 @@ void main() {
       await daemon.emit(SettingsChanged(renamed));
       expect(container.read(settingsProvider).value, renamed);
 
-      daemon.settings = daemon.settings.copyWith(clipboardSyncEnabled: false);
+      daemon.settings = daemon.settings.copyWith(
+        plugins: {
+          'clipboard': {'syncEnabled': false},
+        },
+      );
       await daemon.emit(const EventStreamConnected());
       expect(container.read(settingsProvider).value, daemon.settings);
     });
@@ -82,10 +86,19 @@ void main() {
 
   testWidgets('switches save their setting', (tester) async {
     final daemon = await pumpApp(tester, TestDaemon());
-    when(() => daemon.api.updateSettings({'clipboardSyncEnabled': false}))
-        .thenAnswer(
-          (_) async => daemon.settings.copyWith(clipboardSyncEnabled: false),
-        );
+    when(
+      () => daemon.api.updateSettings({
+        'plugins': {
+          'clipboard': {'syncEnabled': false},
+        },
+      }),
+    ).thenAnswer(
+      (_) async => daemon.settings.copyWith(
+        plugins: {
+          'clipboard': {'syncEnabled': false},
+        },
+      ),
+    );
 
     await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();

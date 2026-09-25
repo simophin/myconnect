@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::broadcast;
 
-use super::{ClipboardSnapshot, PairingSnapshot, PluginEvent, SettingsSnapshot, TransferSnapshot};
+use super::{PairingSnapshot, PluginEvent, SettingsSnapshot, TransferSnapshot};
 use crate::device::DeviceSnapshot;
 
 /// Data carried by an application event: one of the core's own, or a
@@ -40,8 +40,6 @@ pub enum EventData {
     TransferCompleted(TransferSnapshot),
     #[serde(rename = "transfer.failed")]
     TransferFailed(TransferSnapshot),
-    #[serde(rename = "clipboard.changed")]
-    ClipboardChanged(ClipboardSnapshot),
     #[serde(rename = "settings.changed")]
     SettingsChanged(SettingsSnapshot),
     /// Must stay last: variants are tried in order when deserializing.
@@ -63,7 +61,6 @@ impl EventData {
             Self::TransferProgress(_) => "transfer.progress",
             Self::TransferCompleted(_) => "transfer.completed",
             Self::TransferFailed(_) => "transfer.failed",
-            Self::ClipboardChanged(_) => "clipboard.changed",
             Self::SettingsChanged(_) => "settings.changed",
             Self::Plugin(event) => event.event_type(),
         }
@@ -163,11 +160,13 @@ pub enum EventBusError {
 mod tests {
     use super::*;
 
-    fn clipboard(text: &str) -> EventData {
-        EventData::ClipboardChanged(ClipboardSnapshot {
-            text: text.into(),
-            updated_at: 10,
-            source_device_id: None,
+    /// A core event: the settings, with this device named `name`.
+    fn renamed(name: &str) -> EventData {
+        EventData::SettingsChanged(SettingsSnapshot {
+            device_name: name.into(),
+            download_dir: "/downloads".into(),
+            close_to_tray: true,
+            plugins: Default::default(),
         })
     }
 
@@ -175,8 +174,8 @@ mod tests {
     async fn sequence_is_monotonic() {
         let bus = EventBus::new(4).unwrap();
         let mut receiver = bus.subscribe();
-        assert_eq!(bus.publish(clipboard("one")).unwrap().sequence, 1);
-        assert_eq!(bus.publish(clipboard("two")).unwrap().sequence, 2);
+        assert_eq!(bus.publish(renamed("one")).unwrap().sequence, 1);
+        assert_eq!(bus.publish(renamed("two")).unwrap().sequence, 2);
         assert_eq!(receiver.recv().await.unwrap().sequence, 1);
         assert_eq!(receiver.recv().await.unwrap().sequence, 2);
     }
@@ -186,7 +185,7 @@ mod tests {
         let bus = EventBus::new(2).unwrap();
         let mut receiver = bus.subscribe();
         for value in 0..10 {
-            bus.publish(clipboard(&value.to_string())).unwrap();
+            bus.publish(renamed(&value.to_string())).unwrap();
         }
 
         assert!(matches!(
@@ -200,11 +199,11 @@ mod tests {
     #[test]
     fn event_json_has_flat_type_and_data_fields() {
         let bus = EventBus::new(1).unwrap();
-        let value = serde_json::to_value(bus.publish(clipboard("hello")).unwrap()).unwrap();
+        let value = serde_json::to_value(bus.publish(renamed("hello")).unwrap()).unwrap();
         assert_eq!(value["sequence"], 1);
         assert!(value["timestamp"].is_u64());
-        assert_eq!(value["type"], "clipboard.changed");
-        assert_eq!(value["data"]["text"], "hello");
+        assert_eq!(value["type"], "settings.changed");
+        assert_eq!(value["data"]["deviceName"], "hello");
         assert!(value.get("event").is_none());
     }
 
@@ -238,9 +237,9 @@ mod tests {
         assert_eq!(plugin.decode::<Waved>(), Some(waved));
 
         // Core events still parse as their own variants.
-        let core = serde_json::to_value(bus.publish(clipboard("hi")).unwrap()).unwrap();
+        let core = serde_json::to_value(bus.publish(renamed("hi")).unwrap()).unwrap();
         let parsed: ApplicationEvent = serde_json::from_value(core).unwrap();
-        assert!(matches!(parsed.event, EventData::ClipboardChanged(_)));
+        assert!(matches!(parsed.event, EventData::SettingsChanged(_)));
     }
 
     #[test]

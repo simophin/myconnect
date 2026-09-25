@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:myconnect_ui/src/app.dart';
+import 'package:myconnect_ui/src/core/api/models/settings.dart';
 import 'package:myconnect_ui/src/core/daemon/native_daemon_host.dart';
 import 'package:myconnect_ui/src/core/desktop/desktop_notifications.dart';
 import 'package:myconnect_ui/src/core/desktop/window_placement.dart';
@@ -241,9 +242,15 @@ void main() {
     // packets reach the app in order over one connection, long before the
     // tap below.
     await peer.put('/clipboard', {'text': 'from the app'});
-    await peer.patch('/settings', {'clipboardSyncEnabled': false});
+    await peer.patch(
+      '/settings',
+      DaemonSettings.clipboardSyncPatch(enabled: false),
+    );
     await peer.put('/clipboard', {'text': 'only on the peer'});
-    await peer.patch('/settings', {'clipboardSyncEnabled': true});
+    await peer.patch(
+      '/settings',
+      DaemonSettings.clipboardSyncPatch(enabled: true),
+    );
 
     await tester.tap(find.text(peerName));
     final send = find.ancestor(

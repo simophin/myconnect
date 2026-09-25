@@ -1,7 +1,7 @@
 //! The daemon's features.
 //!
 //! A feature implements [`crate::application::Plugin`] and is listed in
-//! [`builtin`]; so far ping, find my phone and battery do. The others are still routed by
+//! [`builtin`]; so far ping, find my phone, battery and clipboard do. The others are still routed by
 //! the fixed table below ([`dispatch_incoming`], [`legacy_capabilities`])
 //! while they move over (see `docs/research/feature-modules.md`). The set
 //! is fixed at compile time; nothing is loaded at runtime.
@@ -22,12 +22,16 @@ use crate::{
     protocol::{BodyError, Packet},
 };
 
-/// Every plugin in this build.
-pub fn builtin() -> Vec<Arc<dyn Plugin>> {
+/// Every plugin in this build. `clipboard` is the clipboard that clipboard
+/// sync reads and writes: the desktop's, or an in-memory one.
+pub fn builtin(
+    clipboard: Arc<dyn clipboard::ClipboardService + Send + Sync>,
+) -> Vec<Arc<dyn Plugin>> {
     vec![
         Arc::new(ping::PingPlugin),
         Arc::new(findmyphone::FindMyPhonePlugin),
         Arc::new(battery::BatteryPlugin::default()),
+        Arc::new(clipboard::ClipboardPlugin::new(clipboard)),
     ]
 }
 
@@ -43,7 +47,7 @@ pub struct PluginCapabilities {
 /// The packet types this build can send and receive: those of the
 /// [`builtin`] plugins, then those still in the fixed table.
 pub fn capabilities() -> PluginCapabilities {
-    let registry = PluginRegistry::new(builtin());
+    let registry = PluginRegistry::new(builtin(clipboard::InMemoryClipboard::shared()));
     let legacy = legacy_capabilities();
     PluginCapabilities {
         incoming: registry
@@ -63,15 +67,8 @@ pub fn capabilities() -> PluginCapabilities {
 /// one-way: this build asks peers to serve files, but serves none.
 fn legacy_capabilities() -> PluginCapabilities {
     PluginCapabilities {
-        incoming: vec![
-            clipboard::PACKET_TYPE.to_owned(),
-            clipboard::CONNECT_PACKET_TYPE.to_owned(),
-            share::PACKET_TYPE.to_owned(),
-            sftp::PACKET_TYPE.to_owned(),
-        ],
+        incoming: vec![share::PACKET_TYPE.to_owned(), sftp::PACKET_TYPE.to_owned()],
         outgoing: vec![
-            clipboard::PACKET_TYPE.to_owned(),
-            clipboard::CONNECT_PACKET_TYPE.to_owned(),
             share::PACKET_TYPE.to_owned(),
             sftp::REQUEST_PACKET_TYPE.to_owned(),
         ],
@@ -81,8 +78,6 @@ fn legacy_capabilities() -> PluginCapabilities {
 /// A packet successfully routed to a registered plugin handler.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IncomingPluginPacket {
-    Clipboard(clipboard::ClipboardBody),
-    ClipboardConnect(clipboard::ClipboardConnectBody),
     ShareRequest(share::ShareRequestBody),
     ShareRequestUpdate(share::ShareRequestUpdateBody),
     Sftp(sftp::SftpBody),
@@ -104,10 +99,6 @@ pub enum PluginDispatchError {
 /// on the peer's advertised `incomingCapabilities`.
 pub fn dispatch_incoming(packet: &Packet) -> Result<IncomingPluginPacket, PluginDispatchError> {
     match packet.packet_type.as_str() {
-        clipboard::PACKET_TYPE => Ok(IncomingPluginPacket::Clipboard(packet.body_as()?)),
-        clipboard::CONNECT_PACKET_TYPE => {
-            Ok(IncomingPluginPacket::ClipboardConnect(packet.body_as()?))
-        }
         share::PACKET_TYPE => Ok(IncomingPluginPacket::ShareRequest(packet.body_as()?)),
         share::UPDATE_PACKET_TYPE => {
             Ok(IncomingPluginPacket::ShareRequestUpdate(packet.body_as()?))
@@ -197,21 +188,6 @@ mod tests {
         assert!(matches!(
             dispatch_incoming(&packet),
             Err(PluginDispatchError::Unrecognized(t)) if t == "kdeconnect.mock.echo"
-        ));
-    }
-
-    #[test]
-    fn clipboard_packets_dispatch_to_the_clipboard_handlers() {
-        let packet = clipboard::build_packet(1_u64, "hello".into()).unwrap();
-        assert!(matches!(
-            dispatch_incoming(&packet),
-            Ok(IncomingPluginPacket::Clipboard(_))
-        ));
-
-        let connect_packet = clipboard::build_connect_packet(1_u64, "hello".into(), 1).unwrap();
-        assert!(matches!(
-            dispatch_incoming(&connect_packet),
-            Ok(IncomingPluginPacket::ClipboardConnect(_))
         ));
     }
 }

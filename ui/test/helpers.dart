@@ -199,8 +199,10 @@ class TestDaemon {
   DaemonSettings settings = const DaemonSettings(
     deviceName: 'Desk',
     downloadDir: '/home/me/Downloads',
-    clipboardSyncEnabled: true,
     closeToTray: true,
+    plugins: {
+      'clipboard': {'syncEnabled': true},
+    },
   );
 
   List<Override> get overrides => [

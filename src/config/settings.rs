@@ -1,10 +1,12 @@
 use std::{
+    collections::BTreeMap,
     fs,
     io::Write,
     path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -19,11 +21,13 @@ pub struct StoredSettings {
     pub device_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub download_dir: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub clipboard_sync_enabled: Option<bool>,
     /// Owned by the UI; the daemon stores it without interpreting it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub close_to_tray: Option<bool>,
+    /// Plugins' settings sections, keyed by plugin id. Each holds only the
+    /// fields the user set.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins: BTreeMap<String, Map<String, Value>>,
 }
 
 /// `settings.json` under the configuration directory.
@@ -110,7 +114,10 @@ mod tests {
 
         let settings = StoredSettings {
             device_name: Some("Desk".into()),
-            clipboard_sync_enabled: Some(false),
+            plugins: BTreeMap::from([(
+                "wave".into(),
+                Map::from_iter([("enabled".into(), Value::Bool(false))]),
+            )]),
             ..Default::default()
         };
         file.save(&settings).unwrap();

@@ -139,8 +139,10 @@ void main() {
       'data': {
         'deviceName': 'Desk',
         'downloadDir': '/home/me/Downloads',
-        'clipboardSyncEnabled': false,
         'closeToTray': true,
+        'plugins': {
+          'clipboard': {'syncEnabled': false},
+        },
       },
     });
     expect(
@@ -151,8 +153,10 @@ void main() {
         const DaemonSettings(
           deviceName: 'Desk',
           downloadDir: '/home/me/Downloads',
-          clipboardSyncEnabled: false,
           closeToTray: true,
+          plugins: {
+            'clipboard': {'syncEnabled': false},
+          },
         ),
       ),
     );

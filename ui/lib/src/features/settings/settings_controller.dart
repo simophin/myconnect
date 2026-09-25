@@ -56,7 +56,7 @@ class SettingsController extends AsyncNotifier<DaemonSettings> {
       _update({'downloadDir': directory});
 
   Future<void> setClipboardSyncEnabled({required bool enabled}) =>
-      _update({'clipboardSyncEnabled': enabled});
+      _update(DaemonSettings.clipboardSyncPatch(enabled: enabled));
 
   Future<void> setCloseToTray({required bool enabled}) =>
       _update({'closeToTray': enabled});

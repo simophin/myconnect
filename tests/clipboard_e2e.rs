@@ -11,10 +11,12 @@ use std::{
 
 use myconnect::{
     application::{ApplicationHandle, ApplicationService, Command, LocalDeviceSnapshot},
-    clipboard::InMemoryClipboard,
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     device::DeviceReachability,
     plugins,
+    plugins::clipboard::{
+        ClipboardPlugin, ClipboardSnapshot, ClipboardSyncError, InMemoryClipboard,
+    },
     protocol::DeviceType,
     transport::{
         lan::{LanConfig, LanService, LocalDeviceInfo, TCP_PORT_RANGE},
@@ -46,7 +48,7 @@ fn peer(name: &str) -> Peer {
         8,
         public_key_der,
         trust_store.clone(),
-        InMemoryClipboard::shared(),
+        myconnect::plugins::builtin(InMemoryClipboard::shared()),
         32,
         128,
         identity.clone(),
@@ -135,14 +137,21 @@ async fn wait_for_paired(application: &ApplicationHandle, device_id: &str, expec
     .unwrap();
 }
 
+fn clipboard(application: &ApplicationHandle) -> Arc<ClipboardPlugin> {
+    application.plugin::<ClipboardPlugin>().unwrap()
+}
+
+fn set_clipboard(
+    application: &ApplicationHandle,
+    text: &str,
+) -> Result<ClipboardSnapshot, ClipboardSyncError> {
+    clipboard(application).set_text(&application.plugin_context(), text.into())
+}
+
 async fn wait_for_clipboard_text(application: &ApplicationHandle, expected_text: &str) {
     timeout(Duration::from_secs(3), async {
         loop {
-            if let myconnect::application::QueryResult::Clipboard(clipboard) = application
-                .query(myconnect::application::Query::Clipboard)
-                .unwrap()
-                && clipboard.text == expected_text
-            {
+            if clipboard(application).snapshot().text == expected_text {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -163,7 +172,8 @@ fn count_clipboard_events(
     while let Ok(event) = events.try_recv() {
         if matches!(
             event.event,
-            myconnect::application::EventData::ClipboardChanged(_)
+            myconnect::application::EventData::Plugin(ref event)
+                if event.decode::<ClipboardSnapshot>().is_some()
         ) {
             count += 1;
         }
@@ -229,12 +239,12 @@ async fn discovery_pairing_and_clipboard_sync_are_bidirectional() {
 
     // Local-to-remote: A sets its clipboard and B observes the same text
     // over the encrypted connection.
-    a.application.set_clipboard("hello from A".into()).unwrap();
+    set_clipboard(&a.application, "hello from A").unwrap();
     wait_for_clipboard_text(&b.application, "hello from A").await;
 
     // Remote-to-local: B sets its clipboard and A observes it, proving the
     // dispatch path is symmetric.
-    b.application.set_clipboard("hello from B".into()).unwrap();
+    set_clipboard(&b.application, "hello from B").unwrap();
     wait_for_clipboard_text(&a.application, "hello from B").await;
 
     // Setting the same text again on B must not disturb A (duplicate
@@ -242,8 +252,7 @@ async fn discovery_pairing_and_clipboard_sync_are_bidirectional() {
     // device lifecycle events from periodic discovery announcements, so
     // only clipboard events are counted.
     let mut a_events = a.application.subscribe();
-    b.application
-        .set_clipboard("hello from B".into())
+    set_clipboard(&b.application, "hello from B")
         .expect("setting identical text is a no-op, not an error");
     // Give any (unwanted) event a moment to arrive before asserting none did.
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -293,7 +302,7 @@ async fn remote_clipboard_update_is_not_echoed_back_to_its_source() {
     // without bouncing it straight back to A, which would otherwise be an
     // infinite feedback loop between exactly two paired peers.
     let mut a_events = a.application.subscribe();
-    a.application.set_clipboard("from A".into()).unwrap();
+    set_clipboard(&a.application, "from A").unwrap();
     wait_for_clipboard_text(&b.application, "from A").await;
 
     // A must not observe a second `clipboard.changed` event caused by its

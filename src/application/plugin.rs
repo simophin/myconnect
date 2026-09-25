@@ -10,19 +10,20 @@
 //! [`crate::plugins`]. See `docs/research/feature-modules.md`.
 
 use std::{
+    any::Any,
     collections::{BTreeMap, HashMap},
     sync::Arc,
 };
 
 use axum::Router;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{ApplicationError, ApplicationHandle, EventData};
 use crate::{device::DeviceSnapshot, protocol::Packet};
 
 /// A feature of the daemon, plugged into the core.
-pub trait Plugin: Send + Sync + 'static {
+pub trait Plugin: Any + Send + Sync {
     /// Stable identifier, e.g. `"ping"`.
     fn id(&self) -> &'static str;
 
@@ -55,6 +56,17 @@ pub trait Plugin: Send + Sync + 'static {
         None
     }
 
+    /// This plugin's section of the settings, if it has one: see
+    /// [`PluginSettings`].
+    fn settings(&self) -> Option<SettingsSection> {
+        None
+    }
+
+    /// A connection to the device was registered. Called after the core
+    /// publishes `device.connected`, never while holding its own lock. The
+    /// device may not be paired; [`PluginContext::send`] checks that.
+    fn connected(&self, _ctx: &PluginContext, _device: &DeviceSnapshot) {}
+
     /// The device's connection closed, or the device was forgotten while
     /// connected. Called before the core publishes the device's new state,
     /// so state cleared here needs no [`PluginContext::device_changed`].
@@ -81,6 +93,28 @@ impl PluginContext {
     /// advertised the packet's type in its incoming capabilities.
     pub fn send(&self, device_id: &str, packet: Packet) -> Result<(), ApplicationError> {
         self.core.send_to_capable(device_id, packet)
+    }
+
+    /// Whether [`Self::send`] would take a packet of `packet_type` for the
+    /// device now, and the error it would refuse it with if not; for a
+    /// plugin that has work to do before it can build the packet.
+    pub fn can_send(&self, device_id: &str, packet_type: &str) -> Result<(), ApplicationError> {
+        self.core.check_capable(device_id, packet_type)
+    }
+
+    /// Queue `packet` to every paired, connected device that has advertised
+    /// its type, except `except` (e.g. the device it came from).
+    pub fn broadcast(&self, packet: &Packet, except: Option<&str>) {
+        self.core.broadcast_to_capable(packet, except);
+    }
+
+    /// The plugin's settings section, as in effect now: stored values over
+    /// the section's defaults.
+    pub fn settings<T: PluginSettings>(&self) -> T {
+        self.core
+            .plugin_settings(T::ID)
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default()
     }
 
     /// Tell clients that what a plugin adds to a device's snapshot
@@ -133,6 +167,46 @@ impl PluginEvent {
     }
 }
 
+/// A plugin's settings: a section of `settings.json` and of
+/// `GET`/`PATCH /settings`, under `plugins.<ID>`.
+///
+/// Every field has a default (`#[serde(default)]` on the type), so a section
+/// stores only what the user changed. A `PATCH` merges fields into the
+/// stored section, `null` resetting one to its default; the result must
+/// deserialize as `Self` to be accepted, so `#[serde(deny_unknown_fields)]`
+/// is how a plugin rejects unknown fields. The plugin reads the settings in
+/// effect with [`PluginContext::settings`].
+pub trait PluginSettings: Serialize + DeserializeOwned + Default {
+    /// The plugin's [`Plugin::id`].
+    const ID: &'static str;
+}
+
+/// A settings section, as the core handles it: [`PluginSettings`] with the
+/// type erased.
+#[derive(Clone, Copy, Debug)]
+pub struct SettingsSection {
+    pub(super) id: &'static str,
+    resolve: fn(&Map<String, Value>) -> Option<Value>,
+}
+
+impl SettingsSection {
+    pub fn of<T: PluginSettings>() -> Self {
+        Self {
+            id: T::ID,
+            resolve: |stored| {
+                let settings: T = serde_json::from_value(Value::Object(stored.clone())).ok()?;
+                serde_json::to_value(settings).ok()
+            },
+        }
+    }
+
+    /// The section in effect given what is stored: every field, defaults
+    /// filled in. `None` if `stored` isn't valid.
+    pub(super) fn resolve(&self, stored: &Map<String, Value>) -> Option<Value> {
+        (self.resolve)(stored)
+    }
+}
+
 /// The plugins of this build, indexed by the packet types they handle.
 pub struct PluginRegistry {
     plugins: Vec<Arc<dyn Plugin>>,
@@ -152,6 +226,13 @@ impl PluginRegistry {
                 .any(|other| other.id() == plugin.id())
             {
                 panic!("two plugins are called {:?}", plugin.id());
+            }
+            if let Some(section) = plugin.settings() {
+                assert_eq!(
+                    section.id,
+                    plugin.id(),
+                    "a plugin's settings section is named after it"
+                );
             }
             for packet_type in plugin.incoming() {
                 if let Some(other) = by_packet_type.insert(*packet_type, index) {
@@ -199,6 +280,28 @@ impl PluginRegistry {
                 Some((plugin.id().to_owned(), state))
             })
             .collect()
+    }
+
+    /// The plugin of type `T`, if this build has one.
+    pub fn get<T: Plugin>(&self) -> Option<Arc<T>> {
+        self.plugins.iter().find_map(|plugin| {
+            let plugin: Arc<dyn Any + Send + Sync> = plugin.clone();
+            plugin.downcast::<T>().ok()
+        })
+    }
+
+    /// Every plugin's settings section.
+    pub fn settings_sections(&self) -> Vec<SettingsSection> {
+        self.plugins
+            .iter()
+            .filter_map(|plugin| plugin.settings())
+            .collect()
+    }
+
+    pub fn connected(&self, ctx: &PluginContext, device: &DeviceSnapshot) {
+        for plugin in &self.plugins {
+            plugin.connected(ctx, device);
+        }
     }
 
     pub fn disconnected(&self, ctx: &PluginContext, device_id: &str) {
@@ -357,6 +460,44 @@ mod tests {
         handle.discover_device(&accepting, true, 4).unwrap();
         Waver::wave(&ctx, device_id).unwrap();
         assert_eq!(rx.try_recv().unwrap().packet_type, Waver::PACKET_TYPE);
+    }
+
+    #[test]
+    fn broadcasts_reach_every_paired_connected_device_that_accepts_them_but_one() {
+        use tokio::sync::mpsc;
+        use tokio_util::sync::CancellationToken;
+
+        use crate::application::testing::{handle, make_identity};
+
+        let (handle, _commands) = handle();
+        let connect = |device_id: &str, paired: bool, accepts: bool| {
+            let capabilities = if accepts {
+                vec![Waver::PACKET_TYPE.into()]
+            } else {
+                Vec::new()
+            };
+            handle
+                .discover_device(&make_identity(device_id, capabilities), paired, 1)
+                .unwrap();
+            let (tx, rx) = mpsc::channel(4);
+            handle
+                .register_connection(device_id, vec![1], 8, tx, CancellationToken::new(), 1)
+                .unwrap();
+            rx
+        };
+        let mut source = connect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true, true);
+        let mut other = connect("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", true, true);
+        let mut unpaired = connect("cccccccccccccccccccccccccccccccc", false, true);
+        let mut refusing = connect("dddddddddddddddddddddddddddddddd", true, false);
+
+        let packet = Packet::from_body(1_u64, Waver::PACKET_TYPE, &serde_json::json!({})).unwrap();
+        handle
+            .plugin_context()
+            .broadcast(&packet, Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert_eq!(other.try_recv().unwrap(), packet);
+        assert!(source.try_recv().is_err());
+        assert!(unpaired.try_recv().is_err());
+        assert!(refusing.try_recv().is_err());
     }
 
     #[test]

@@ -1,12 +1,17 @@
 //! User settings: persisted preferences, layered under the start options of
 //! the current run and over built-in defaults. Kept free of sockets and
 //! application state so the precedence rules can be tested on their own.
+//!
+//! The core's own settings are typed fields. Each plugin with settings owns
+//! a section under `plugins.<id>` (see [`super::PluginSettings`]); the core
+//! stores, merges and publishes sections without knowing their fields.
 
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Map, Value};
 
-use super::ApplicationError;
+use super::{ApplicationError, plugin::SettingsSection};
 use crate::{
     config::{SettingsFile, StoredSettings},
     protocol::is_valid_device_name,
@@ -26,13 +31,18 @@ pub struct SettingsDefaults {
 pub struct SettingsSnapshot {
     pub device_name: String,
     pub download_dir: PathBuf,
-    pub clipboard_sync_enabled: bool,
     /// Owned by the UI; the daemon stores it without interpreting it.
     pub close_to_tray: bool,
+    /// Every plugin's settings section, keyed by plugin id, with defaults
+    /// filled in.
+    #[serde(default)]
+    pub plugins: BTreeMap<String, Value>,
 }
 
 /// A partial update, as accepted by `PATCH /settings`. An absent field is
-/// left alone; `null` resets it to its default.
+/// left alone; `null` resets it to its default. A plugin's section, under
+/// `plugins`, is an object of the fields to change in the same way, or
+/// `null` to reset the whole section.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct SettingsPatch {
@@ -41,9 +51,19 @@ pub struct SettingsPatch {
     #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     pub download_dir: Option<Option<PathBuf>>,
     #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
-    pub clipboard_sync_enabled: Option<Option<bool>>,
-    #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     pub close_to_tray: Option<Option<bool>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins: BTreeMap<String, Value>,
+}
+
+impl SettingsPatch {
+    /// A patch that changes `fields` of one plugin's section.
+    pub fn plugin(id: &str, fields: Map<String, Value>) -> Self {
+        Self {
+            plugins: BTreeMap::from([(id.to_owned(), Value::Object(fields))]),
+            ..Self::default()
+        }
+    }
 }
 
 /// Tells a field that is present but `null` (`Some(None)`) apart from one
@@ -68,6 +88,7 @@ pub(crate) struct Settings {
     stored: StoredSettings,
     overrides: StoredSettings,
     file: Option<SettingsFile>,
+    sections: Vec<SettingsSection>,
 }
 
 impl Settings {
@@ -78,7 +99,14 @@ impl Settings {
             stored: StoredSettings::default(),
             overrides: StoredSettings::default(),
             file: None,
+            sections: Vec::new(),
         }
+    }
+
+    /// Hold the plugins' sections.
+    pub(crate) fn with_sections(mut self, sections: Vec<SettingsSection>) -> Self {
+        self.sections = sections;
+        self
     }
 
     /// Persist changes to `file`, starting from what it already holds.
@@ -106,15 +134,33 @@ impl Settings {
                 .clone()
                 .or_else(|| stored.download_dir.clone())
                 .unwrap_or_else(|| self.defaults.download_dir.clone()),
-            clipboard_sync_enabled: overrides
-                .clipboard_sync_enabled
-                .or(stored.clipboard_sync_enabled)
-                .unwrap_or(true),
             close_to_tray: overrides
                 .close_to_tray
                 .or(stored.close_to_tray)
                 .unwrap_or(true),
+            plugins: self
+                .sections
+                .iter()
+                .map(|section| (section.id.to_owned(), self.resolve(section)))
+                .collect(),
         }
+    }
+
+    /// One plugin's section in effect, if it has one.
+    pub(crate) fn section(&self, id: &str) -> Option<Value> {
+        let section = self.sections.iter().find(|section| section.id == id)?;
+        Some(self.resolve(section))
+    }
+
+    fn resolve(&self, section: &SettingsSection) -> Value {
+        let empty = Map::new();
+        let stored = self.stored.plugins.get(section.id).unwrap_or(&empty);
+        section.resolve(stored).unwrap_or_else(|| {
+            // A hand-edited file may hold what the plugin can't read; fall
+            // back to the defaults until the user changes the section.
+            tracing::warn!(section = section.id, "ignoring invalid stored settings");
+            section.resolve(&empty).unwrap_or(Value::Null)
+        })
     }
 
     /// Validate and apply `patch`, persisting the result before it takes
@@ -148,13 +194,36 @@ impl Settings {
             stored.download_dir = value;
             overrides.download_dir = None;
         }
-        if let Some(value) = patch.clipboard_sync_enabled {
-            stored.clipboard_sync_enabled = value;
-            overrides.clipboard_sync_enabled = None;
-        }
         if let Some(value) = patch.close_to_tray {
             stored.close_to_tray = value;
             overrides.close_to_tray = None;
+        }
+        for (id, change) in patch.plugins {
+            let section = self
+                .sections
+                .iter()
+                .find(|section| section.id == id)
+                .ok_or(ApplicationError::InvalidSettings)?;
+            let mut fields = stored.plugins.remove(&id).unwrap_or_default();
+            match change {
+                Value::Null => fields.clear(),
+                Value::Object(changes) => {
+                    for (field, value) in changes {
+                        if value.is_null() {
+                            fields.remove(&field);
+                        } else {
+                            fields.insert(field, value);
+                        }
+                    }
+                }
+                _ => return Err(ApplicationError::InvalidSettings),
+            }
+            if section.resolve(&fields).is_none() {
+                return Err(ApplicationError::InvalidSettings);
+            }
+            if !fields.is_empty() {
+                stored.plugins.insert(id, fields);
+            }
         }
 
         if stored != self.stored
@@ -189,7 +258,6 @@ mod tests {
         let file = SettingsFile::new(directory.path());
         let stored = StoredSettings {
             device_name: Some("Stored".into()),
-            clipboard_sync_enabled: Some(false),
             ..Default::default()
         };
         let mut settings = Settings::new(defaults())
@@ -202,7 +270,6 @@ mod tests {
         let snapshot = settings.snapshot();
         assert_eq!(snapshot.device_name, "Flag");
         assert_eq!(snapshot.download_dir, PathBuf::from("/downloads"));
-        assert!(!snapshot.clipboard_sync_enabled);
         assert!(snapshot.close_to_tray);
 
         // Changing another setting keeps the override and doesn't persist it.
@@ -253,6 +320,98 @@ mod tests {
             assert_eq!(format!("{error:?}"), expected, "{body}");
         }
         assert_eq!(settings.snapshot(), Settings::new(defaults()).snapshot());
+    }
+
+    /// A plugin's settings, as a plugin would declare them.
+    #[derive(Serialize, Deserialize)]
+    #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+    struct Waving {
+        enabled: bool,
+        hand: String,
+    }
+
+    impl Default for Waving {
+        fn default() -> Self {
+            Self {
+                enabled: true,
+                hand: "left".into(),
+            }
+        }
+    }
+
+    impl super::super::PluginSettings for Waving {
+        const ID: &'static str = "wave";
+    }
+
+    #[test]
+    fn plugin_sections_merge_changes_and_reset_to_their_defaults() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = SettingsFile::new(directory.path());
+        let mut settings = Settings::new(defaults())
+            .with_file(
+                file.clone(),
+                StoredSettings {
+                    plugins: BTreeMap::from([(
+                        "wave".into(),
+                        Map::from_iter([("enabled".into(), false.into())]),
+                    )]),
+                    ..Default::default()
+                },
+            )
+            .with_sections(vec![SettingsSection::of::<Waving>()]);
+
+        let expected = serde_json::json!({"enabled": false, "hand": "left"});
+        assert_eq!(settings.snapshot().plugins["wave"], expected);
+        assert_eq!(settings.section("wave"), Some(expected));
+        assert_eq!(settings.section("other"), None);
+
+        let snapshot = settings
+            .update(patch(r#"{"plugins": {"wave": {"hand": "right"}}}"#))
+            .unwrap();
+        assert_eq!(
+            snapshot.plugins["wave"],
+            serde_json::json!({"enabled": false, "hand": "right"})
+        );
+        // Only what the user set is saved.
+        assert_eq!(
+            serde_json::to_value(&file.load().unwrap().plugins).unwrap(),
+            serde_json::json!({"wave": {"enabled": false, "hand": "right"}})
+        );
+
+        let snapshot = settings
+            .update(patch(r#"{"plugins": {"wave": {"enabled": null}}}"#))
+            .unwrap();
+        assert_eq!(
+            snapshot.plugins["wave"],
+            serde_json::json!({"enabled": true, "hand": "right"})
+        );
+
+        let snapshot = settings
+            .update(patch(r#"{"plugins": {"wave": null}}"#))
+            .unwrap();
+        assert_eq!(
+            snapshot.plugins["wave"],
+            serde_json::json!({"enabled": true, "hand": "left"})
+        );
+        assert!(file.load().unwrap().plugins.is_empty());
+    }
+
+    #[test]
+    fn invalid_plugin_sections_change_nothing() {
+        let mut settings =
+            Settings::new(defaults()).with_sections(vec![SettingsSection::of::<Waving>()]);
+        let before = settings.snapshot();
+        for body in [
+            r#"{"plugins": {"wave": {"hand": 1}}}"#,
+            r#"{"plugins": {"wave": {"foot": "left"}}}"#,
+            r#"{"plugins": {"wave": true}}"#,
+            r#"{"plugins": {"unknown": {}}}"#,
+            r#"{"closeToTray": false, "plugins": {"wave": {"enabled": "no"}}}"#,
+        ] {
+            let error = settings.update(patch(body)).unwrap_err();
+            assert_eq!(format!("{error:?}"), "InvalidSettings", "{body}");
+        }
+        assert_eq!(settings.snapshot(), before);
     }
 
     #[test]

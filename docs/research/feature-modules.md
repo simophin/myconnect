@@ -1,7 +1,7 @@
 # Research: one module per feature
 
 Status: proposal (2026-09-25), with phases 0 (ping, §7), 0b (find my
-phone) and 1 (battery) implemented.
+phone), 1 (battery) and 2 (clipboard) implemented.
 Once it is accepted, the target shape moves into `ARCHITECTURE.md` §2 and
 this file becomes the history behind it.
 
@@ -25,7 +25,8 @@ Set by the owner:
   their shape for now, though they follow wire changes.
 - **Wire contract:** free to change where that makes the design cleaner.
   The pilot didn't need any change; phase 1 moved `battery` under
-  `plugins` (§5.5).
+  `plugins` (§5.5), and phase 2 moved `clipboardSyncEnabled` to
+  `plugins.clipboard.syncEnabled` (§5.6).
 
 ## 2. Where we are
 
@@ -256,6 +257,10 @@ publishes one `settings.changed`. `clipboardSyncEnabled` moves to
 `clipboard.syncEnabled`. This is the one planned wire change, and the UI
 and CLI change with it in phase 2.
 
+Decided in phase 2: sections sit under a `plugins` object, as in device
+snapshots (§5.5), so the setting is `plugins.clipboard.syncEnabled`, in
+both `settings.json` and `/settings`. See §8.
+
 ### 5.7 Testing
 
 - A plugin is unit-tested against a real core built by a small test kit
@@ -276,7 +281,7 @@ takes one new trait feature at a time.
 | 0 (done, #16) | ping | trait, registry, dispatch, capabilities, routes, open plugin events, `ApiProblem` for plugins |
 | 0b (done) | find my phone (ring), added after the plan the old way | a send-only plugin: `incoming()` and `handle_packet()` got defaults |
 | 1 (done) | battery | `device_state` + `device_changed`, `disconnected`/`unpaired` hooks, `DeviceSnapshot` extension (UI change) |
-| 2 | clipboard | settings sections (UI + CLI change), `connected` hook, `broadcast`, plugin-owned global resource (`/clipboard`) |
+| 2 (done) | clipboard | settings sections (UI + CLI change), `connected` hook, `broadcast`, plugin-owned global resource (`/clipboard`) |
 | 3 | share | transfers extracted into a core service; `streaming_routes`; payload/TLS access through the context |
 | 4 | browse (sftp) | plugin-owned sessions, `shutdown` hook; `service/browse.rs` and `transport/sftp.rs` move into the plugin |
 | 5 | core cleanup | split what is left of `service.rs` into `devices`/`connections`/`pairing`; remove `ApplicationService`, `Query`, `Command`/`QueryResult` (the LAN command channel stays, as a core-internal type); rename `application` → `core`; move `RunningService` to a composition-root module; update ARCHITECTURE §2 and remove the "deliberately not a plugin system" notes |
@@ -409,3 +414,84 @@ Moving battery (phase 1) showed:
 - **Still to verify on a real phone,** as before the move: the checks
   here ran against the fake phone (unit tests, `browse_e2e`, and the app
   showing `Connected · 73%` and clearing it on disconnect).
+
+Moving clipboard (phase 2) showed:
+
+- **Settings sections are nested under `plugins`,** not top-level ids as
+  §5.6 first sketched: `{"deviceName": …, "closeToTray": …, "plugins":
+  {"clipboard": {"syncEnabled": true}}}`. The reasons from §5.5 hold
+  (a plugin id can't shadow a future core setting, a client can ignore
+  unknown plugins as a whole), clients already know the shape from device
+  snapshots, and the core patch keeps `deny_unknown_fields`, which serde
+  can't combine with a flattened map. The UI mirrors it as it does for
+  devices: `DaemonSettings.plugins` plus a `clipboardSyncEnabled` getter,
+  so the settings page didn't change.
+- **Typed in the plugin, opaque in the core.** A plugin declares a
+  `PluginSettings` type (serde defaults, `deny_unknown_fields`, its `ID`)
+  and returns `SettingsSection::of::<T>()` from `Plugin::settings`. The
+  core stores only the fields the user set, merges a patch into them
+  (`null` resets a field, a `null` section resets the section), accepts
+  the result only if it deserializes as `T`, and reports `400
+  invalid_settings` otherwise, or for an unknown section. `GET /settings`
+  lists every section with defaults filled in. No separate validation hook
+  was needed; one can be added when a plugin has a rule its type can't
+  express.
+- **Pull, not watch, for settings too.** The plugin reads its section when
+  it acts (`ctx.settings::<ClipboardSettings>()`), before taking its own
+  lock. §5.3's watch wasn't needed: nothing in clipboard has to react to a
+  change as it happens. A plugin that must (e.g. to stop a server) can get
+  a `settings_changed` hook then.
+- **No migration, by the owner's call.** The project is pre-release, so
+  a stored `clipboardSyncEnabled` is ignored like any unknown key (sync
+  falls back to its default, on) and dropped on the next save. A migration
+  was written and then removed in review; if a later plugin needs one, it
+  would need the file's unknown top-level keys kept in memory, which
+  `StoredSettings` doesn't do.
+- **`connected` runs after `device.connected` is published,** with the
+  device's snapshot, never under the core's lock. Clipboard offers its text
+  there as `kdeconnect.clipboard.connect` through `ctx.send`, so the
+  capability checked is now the connect packet's own type rather than
+  `kdeconnect.clipboard` (KDE Connect advertises both). The device may not
+  be paired yet; `send` refuses it then, as the old code did.
+- **`broadcast(packet, except)` lives in the core** and has its own test
+  in `plugin.rs`. Clipboard uses it both for local changes and to forward
+  text from one peer to the others. Also added: `ctx.can_send(device,
+  type)`, so "send clipboard" reports `device_not_found` or
+  `unsupported_by_peer` before `clipboard_empty`, as before, although it
+  reads the clipboard before building the packet.
+- **A plugin with a dependency moved `builtin()` out of the core.**
+  Clipboard needs its backend (desktop or in-memory), chosen at start. So
+  `ApplicationHandle::new` now takes the plugin list, and
+  `plugins::builtin(clipboard)` is called by `RunningService` and the tests.
+  That removes the phase 0 seam "`ApplicationHandle::new` calls
+  `plugins::builtin()`". `plugins::capabilities()` still builds a throwaway
+  registry, now with an in-memory clipboard (phase 5).
+- **The composition root needs its plugin back.** Following the desktop
+  clipboard is a task started with the daemon, and there is no start hook,
+  so `RunningService` fetches the plugin with `ApplicationHandle::
+  plugin::<ClipboardPlugin>()` (a downcast; `Plugin` now has `Any` as a
+  supertrait) and stops the backend on shutdown, as it did before. The
+  lookup is on the handle, not on `PluginContext`, so plugins still can't
+  reach each other. Phase 4's `shutdown` hook, and a matching start hook,
+  could move this into the plugin.
+- **Core files only lost clipboard code or gained shared code.**
+  `service.rs` lost 506 lines net (the state, the handlers, the
+  `ApplicationService` methods, ten tests, which moved to the plugin),
+  `api.rs` lost 54 (three routes and two error mappings), `state.rs` lost
+  `ClipboardSnapshot` and the clipboard query, `events.rs` lost
+  `ClipboardChanged`, and `ApplicationError` lost two clipboard variants
+  and gained the shared `InvalidSettings`. `settings.rs` gained sections.
+  The backends moved from `crate::clipboard` into `plugins/clipboard/
+  backend.rs` and `backend/system.rs`.
+- **Wire changes:** only the settings one. `/clipboard`,
+  `/devices/{id}/clipboard`, `clipboard.changed` (now published as a plugin
+  event, same JSON) and the error codes are unchanged. A `PATCH` still
+  sending `clipboardSyncEnabled` gets `422`, like any unknown field. Rust
+  callers change shape: `handle.set_clipboard(text)` became
+  `handle.plugin::<ClipboardPlugin>()?.set_text(&ctx, text)`, and the
+  client and CLI decode `clipboard.changed` with
+  `PluginEvent::decode::<ClipboardSnapshot>()`.
+- **Checked live** in the app under Xvfb against a CLI peer: text set on
+  the peer reached the app's X clipboard, a copy on the app's display
+  reached the peer, a restarted peer got the app's text from the
+  connect-time offer, and with the switch off neither direction synced.

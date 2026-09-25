@@ -37,7 +37,8 @@ recorded in [`ui/docs/adr/`](../ui/docs/adr/README.md).
 binary (src/bin/myconnect) → client → api
 ffi (myconnect-ffi) → application::RunningService
 api → application
-application → config, device, plugins::builtin, transport, clipboard
+application → config, device, transport
+application::RunningService → plugins::builtin (the composition root)
 plugins → application (the Plugin API), protocol
 device, transport → protocol
 ```
@@ -52,9 +53,8 @@ types — they know nothing about HTTP. A plugin reaches the core only through
 | `config` | `src/config/{mod,identity,settings,token,trust}.rs` | Local device identity (UUID + self-signed cert), the optional API bearer token (never persisted), filesystem-backed `TrustStore` of pinned peer certificates (one `trusted-devices/<id>.json` each, with the name, type and capabilities the peer last reported over an authenticated connection), and `settings.json` (user settings, written atomically). |
 | `transport` | `src/transport/{lan,tls,payload,sftp}.rs` | UDP discovery, TCP control-channel connect/accept, the real rustls TLS handshake and certificate pinning, the auxiliary TLS payload connection used for file transfer, and the SSH/SFTP client connection to a peer's file server (§12). |
 | `device` | `src/device.rs` | `DeviceSnapshot` (whose `plugins` map the core fills from each plugin's `device_state` when it hands a snapshot out), `DeviceReachability`, and the in-memory device registry keyed by device ID. It starts with every paired device from the `TrustStore`, as `unavailable`, so paired devices are listed while offline. |
-| `plugins` | `src/plugins/mod.rs`, `src/plugins/{ping,findmyphone}/{mod,packet,http}.rs`, `src/plugins/battery/{mod,packet}.rs`, `src/plugins/{clipboard,share,sftp}.rs` | The features. `builtin()` lists those that implement `application::Plugin` (so far ping, which owns its packet handling, `ping.received` event and `POST /devices/{id}/ping` route, find my phone, which only sends and owns `POST /devices/{id}/ring`, and battery, which adds `plugins.battery` to device snapshots and clears it through the `disconnected`/`unpaired` hooks). The rest are still routed by a fixed table (`dispatch_incoming`) into `application`. Advertises capability strings for the identity packet: ping, clipboard and share in both directions; `kdeconnect.sftp.request` outgoing and `kdeconnect.sftp` incoming only, since this build browses peers but serves no files; `kdeconnect.battery` incoming only, since it reads peers' batteries but reports none; `kdeconnect.findmyphone.request` outgoing only, since this build asks peers to ring but doesn't ring itself. |
-| `application` | `src/application.rs`, `src/application/{state,events,plugin,service,settings,transfer,files}.rs`, `src/application/service/browse.rs` | Orchestration: connection registry, pairing state machine, transfer state machine, clipboard sync, user settings, browse sessions with peers' files (§12), bounded event bus, and the plugin API (`Plugin`, `PluginContext`, `PluginRegistry`; plugin events travel as `EventData::Plugin` with the same `{type, data}` shape). `testing` is a real core for unit tests. `RunningService` starts/stops a whole daemon (LAN + API) for the CLI and embedders. |
-| `clipboard` | `src/clipboard.rs`, `src/clipboard/system.rs` | `ClipboardService` trait, the desktop clipboard (`SystemClipboard`, over `arboard`) and an in-memory implementation (§6). |
+| `plugins` | `src/plugins/mod.rs`, `src/plugins/{ping,findmyphone}/{mod,packet,http}.rs`, `src/plugins/battery/{mod,packet}.rs`, `src/plugins/clipboard/{mod,packet,http,backend}.rs`, `src/plugins/clipboard/backend/system.rs`, `src/plugins/{share,sftp}.rs` | The features. `builtin()` lists those that implement `application::Plugin` (so far ping, which owns its packet handling, `ping.received` event and `POST /devices/{id}/ping` route, find my phone, which only sends and owns `POST /devices/{id}/ring`, battery, which adds `plugins.battery` to device snapshots and clears it through the `disconnected`/`unpaired` hooks, and clipboard, which owns the synced text and `/clipboard`, the `plugins.clipboard` settings section, and its backends: the `ClipboardService` trait, the desktop clipboard `SystemClipboard` over `arboard`, and an in-memory one, §6). The rest are still routed by a fixed table (`dispatch_incoming`) into `application`. Advertises capability strings for the identity packet: ping, clipboard and share in both directions; `kdeconnect.sftp.request` outgoing and `kdeconnect.sftp` incoming only, since this build browses peers but serves no files; `kdeconnect.battery` incoming only, since it reads peers' batteries but reports none; `kdeconnect.findmyphone.request` outgoing only, since this build asks peers to ring but doesn't ring itself. |
+| `application` | `src/application.rs`, `src/application/{state,events,plugin,service,settings,transfer,files}.rs`, `src/application/service/browse.rs` | Orchestration: connection registry, pairing state machine, transfer state machine, user settings (with a section per plugin that has settings), browse sessions with peers' files (§12), bounded event bus, and the plugin API (`Plugin`, `PluginContext`, `PluginRegistry`; plugin events travel as `EventData::Plugin` with the same `{type, data}` shape). `testing` is a real core for unit tests. `RunningService` starts/stops a whole daemon (LAN + API) for the CLI and embedders. |
 | `api` | `src/api.rs` | Axum HTTP transport only — translates HTTP requests to `ApplicationService` calls and snapshots back to JSON. Optional bearer-token auth, body-size limits, SSE. |
 | `client` | `src/client.rs` | Typed HTTP client used by the CLI (and any future frontend) to talk to `api`. |
 | `src/bin/myconnect` | `cli.rs`, `main.rs` | Argument parsing and daemon bootstrap only. |
@@ -62,7 +62,8 @@ types — they know nothing about HTTP. A plugin reaches the core only through
 
 A new feature is a module under `plugins/` implementing `application::Plugin`
 (packet types, packet handler, routes, what it adds to a device snapshot,
-and `disconnected`/`unpaired` hooks) plus one line in `plugins::builtin()`.
+a settings section, and `connected`/`disconnected`/`unpaired` hooks) plus
+one line in `plugins::builtin()`.
 The set is fixed at compile time; nothing is loaded at runtime. The older
 features are moving over one at a time; see
 [`research/feature-modules.md`](research/feature-modules.md) for the plan.
@@ -165,6 +166,10 @@ States: `queued → connecting → transferring → completed | cancelled | fail
 - `kdeconnect.clipboard.connect` additionally carries a millisecond
   `timestamp`; it is applied only if strictly newer than the last known
   update, so stale or replayed packets are ignored.
+- Clipboard is a plugin (`src/plugins/clipboard/`): it holds the synced
+  text behind its own lock, reads `plugins.clipboard.syncEnabled` from the
+  core when it acts, offers its text to a device from the `connected` hook,
+  and sends to all other devices with `PluginContext::broadcast`.
 - A feedback-loop guard tracks the last-applied content/source so content
   just received from a peer is never rebroadcast back to that peer, and
   identical content is never resent.
@@ -181,29 +186,39 @@ States: `queued → connecting → transferring → completed | cancelled | fail
 - `SystemClipboard` owns the clipboard on its own thread: it applies writes
   as they arrive and polls every 500 ms (`POLL_INTERVAL`) for text copied by
   other applications, reporting it through a `watch` channel that
-  `ApplicationHandle::follow_local_clipboard` feeds into `set_clipboard`, the
+  `ClipboardPlugin::follow_local_changes` feeds into `set_text`, the
   same path as `PUT /clipboard`. Text it wrote itself (e.g. from a peer) is
-  not reported, and `set_clipboard` ignores unchanged text anyway, so
+  not reported, and `set_text` ignores unchanged text anyway, so
   nothing bounces back. Text already on the clipboard at start, empty text
   and non-text content (images) are not reported, and copies made while
-  `clipboardSyncEnabled` is off are dropped.
+  sync is off are dropped.
 - Sending to one device on request (`POST /devices/{deviceId}/clipboard`,
   `myconnect clipboard send`, "Send clipboard" in the app and tray) covers
   what automatic sync can miss, e.g. text already on the clipboard at start
   or a peer that dropped an update. It reads the clipboard itself (falling
   back to the snapshot), sends a plain `kdeconnect.clipboard` even if the
-  text is unchanged, and works while `clipboardSyncEnabled` is off. It does
-  not change the snapshot.
+  text is unchanged, and works while sync is off. It does not change the
+  snapshot.
 
 ## 7. Settings
 
 User preferences live in the daemon, in `settings.json` in the data
-directory, never in a client. Fields: `deviceName`, `downloadDir`,
-`clipboardSyncEnabled`, and `closeToTray` (owned by the UI; the daemon
-stores it without interpreting it). A field missing from the file uses its
-default: the host name (first label, trimmed to a valid KDE Connect name,
-else "MyConnect"), the platform download directory, `true`, `true`.
+directory, never in a client. Core fields: `deviceName`, `downloadDir`,
+and `closeToTray` (owned by the UI; the daemon stores it without
+interpreting it). A field missing from the file uses its default: the host
+name (first label, trimmed to a valid KDE Connect name, else "MyConnect"),
+the platform download directory, `true`.
 
+- **Plugin sections.** A plugin with settings owns a section under
+  `plugins.<id>`, in the file and in `GET`/`PATCH /settings`; so far only
+  `plugins.clipboard.syncEnabled` (default `true`). The plugin defines the
+  fields, their defaults and what is valid (`PluginSettings`); the core
+  stores only the fields the user set, merges a patch into them (`null`
+  resets a field, a `null` section resets the section) and answers `400
+  invalid_settings` for an unknown section or a value the plugin can't
+  read. `GET /settings` always lists every section, defaults filled in.
+  The old top-level `clipboardSyncEnabled` is not migrated: a file that
+  still has it is read as if it didn't, and it is dropped on the next save.
 - **Precedence.** A start option (`myconnect run --device-name` /
   `--download-dir`, or the FFI config's `deviceName` / `downloadDir`)
   overrides the stored value for that run only and is not saved. Changing
@@ -263,8 +278,8 @@ event stream.
 | `GET` | `/clipboard` | Current synchronized text and metadata. |
 | `PUT` | `/clipboard` | Set text and send to eligible paired devices. |
 | `POST` | `/devices/{deviceId}/clipboard` | Send this machine's clipboard text to one paired, connected device now; `202`. `409 clipboard_empty` when there is no text, `409 unsupported_by_peer` without `kdeconnect.clipboard`. §6. |
-| `GET` | `/settings` | The settings in effect (§7). |
-| `PATCH` | `/settings` | Change the fields present in the JSON body; `null` resets one to its default, unknown fields are rejected. `400 invalid_device_name` / `invalid_download_dir` for bad values. Returns the new settings. |
+| `GET` | `/settings` | The settings in effect (§7): `deviceName`, `downloadDir`, `closeToTray`, and `plugins`, an object keyed by plugin id holding each plugin's section (so far `{"clipboard": {"syncEnabled": bool}}`). |
+| `PATCH` | `/settings` | Change the fields present in the JSON body; `null` resets one to its default, unknown fields are rejected. A plugin's fields go under `plugins.<id>`, e.g. `{"plugins": {"clipboard": {"syncEnabled": false}}}`. `400 invalid_device_name` / `invalid_download_dir` / `invalid_settings` (a plugin section) for bad values. Returns the new settings. |
 | `GET` | `/events` | Server-Sent Events: `device.discovered/connected/updated/disconnected/forgotten`, `pairing.requested/updated`, `transfer.started/progress/completed/failed`, `clipboard.changed`, `settings.changed`, `ping.received` (`{deviceId, deviceName, message?}` from a paired device; a one-off notification with no snapshot endpoint, so one missed during a gap is simply lost). Not durable — clients refetch a snapshot after a gap or reconnect. |
 
 Mutation endpoints that require network round-trips return `202` and are

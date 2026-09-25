@@ -70,9 +70,8 @@ src/
 ├── config/          # persistent identity, optional API token, peer trust
 ├── transport/        # UDP discovery, TCP/TLS, auxiliary payload connections
 ├── device.rs         # device registry and snapshots
-├── plugins/           # features: ping, findmyphone, battery (plugins); clipboard, share, sftp (fixed table)
+├── plugins/           # features: ping, findmyphone, battery, clipboard (plugins); share, sftp (fixed table)
 ├── application(.rs/*) # orchestration: pairing/transfer state machines, event bus
-├── clipboard.rs        # clipboard service trait + in-memory implementation
 ├── api.rs               # local HTTP control plane (optional token auth)
 ├── client.rs             # HTTP client used by the CLI
 └── bin/

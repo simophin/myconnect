@@ -306,8 +306,10 @@ void main() {
       (_) => json({
         'deviceName': 'Desk',
         'downloadDir': '/home/me/Downloads',
-        'clipboardSyncEnabled': true,
         'closeToTray': true,
+        'plugins': {
+          'clipboard': {'syncEnabled': true},
+        },
       }),
     );
     final settings = await apiWith(adapter)

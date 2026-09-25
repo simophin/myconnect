@@ -264,25 +264,6 @@ pub enum TransferProgressError {
     },
 }
 
-/// Conservative upper bound on synchronized clipboard text, in UTF-8 bytes.
-/// Text clipboard content is small by nature; this bound exists to keep a
-/// misbehaving or malicious peer from forcing unbounded allocation or
-/// unbounded API payloads. Oversized content is rejected with a typed error
-/// rather than silently truncated or accepted. Kept below the API's default
-/// request body limit so the API surfaces the clipboard-specific error
-/// rather than a generic body-too-large rejection.
-pub const MAX_CLIPBOARD_TEXT_BYTES: usize = 32 * 1024;
-
-/// Immutable view of synchronized text clipboard state.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ClipboardSnapshot {
-    pub text: String,
-    pub updated_at: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_device_id: Option<String>,
-}
-
 /// Transport-independent mutations accepted by the application core.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -306,7 +287,6 @@ pub enum Query {
     Pairing { pairing_id: Uuid },
     Transfers,
     Transfer { transfer_id: Uuid },
-    Clipboard,
     Settings,
 }
 
@@ -320,7 +300,6 @@ pub enum QueryResult {
     Pairing(Option<PairingSnapshot>),
     Transfers(Vec<TransferSnapshot>),
     Transfer(Option<TransferSnapshot>),
-    Clipboard(ClipboardSnapshot),
     Settings(SettingsSnapshot),
 }
 
@@ -428,15 +407,5 @@ mod tests {
             serde_json::to_value(transfer(TransferStatus::Queued).snapshot()).unwrap();
         assert_eq!(transfer_json["fileName"], "photo.jpg");
         assert_eq!(transfer_json["totalBytes"], 10);
-
-        let clipboard = ClipboardSnapshot {
-            text: "hello".into(),
-            updated_at: 101,
-            source_device_id: Some("peer".into()),
-        };
-        assert_eq!(
-            serde_json::to_value(clipboard).unwrap(),
-            json!({"text": "hello", "updatedAt": 101, "sourceDeviceId": "peer"})
-        );
     }
 }

@@ -1,0 +1,649 @@
+//! Clipboard: keep this machine's text clipboard in sync with paired
+//! devices.
+//!
+//! The plugin holds the synced text (`GET`/`PUT /clipboard`, with
+//! `clipboard.changed` events) and mirrors it to a [`ClipboardService`]:
+//! the desktop clipboard ([`SystemClipboard`]) or an in-memory one. Text set
+//! here, copied locally (see [`ClipboardPlugin::follow_local_changes`]), or
+//! received from a peer is sent to every other paired, connected device
+//! that accepts `kdeconnect.clipboard`. On connecting, a device is sent the
+//! current text as `kdeconnect.clipboard.connect`, which it adopts only if
+//! it is newer than its own. `POST /devices/{id}/clipboard` sends the text
+//! to one device on request.
+//!
+//! Sync can be turned off with the `plugins.clipboard.syncEnabled` setting
+//! ([`ClipboardSettings`]). That only stops text going to and coming from
+//! peers; the clipboard stays readable and writable through the API, and a
+//! send on request still works.
+//!
+//! Never log clipboard text, only its length.
+
+mod backend;
+mod http;
+pub mod packet;
+
+use std::{
+    sync::{Arc, Mutex, PoisonError},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use axum::Router;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use tokio::{sync::watch, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
+
+pub use backend::{
+    ClipboardError, ClipboardService, InMemoryClipboard, POLL_INTERVAL, SystemClipboard,
+};
+pub use packet::{
+    CONNECT_PACKET_TYPE, ClipboardBody, ClipboardConnectBody, PACKET_TYPE, build_connect_packet,
+    build_packet,
+};
+
+use crate::{
+    application::{
+        ApplicationError, Plugin, PluginContext, PluginEventKind, PluginSettings, SettingsPatch,
+        SettingsSection, SettingsSnapshot,
+    },
+    device::DeviceSnapshot,
+    protocol::Packet,
+};
+
+/// The plugin's id, and the key of its settings section.
+pub const ID: &str = "clipboard";
+
+/// Conservative upper bound on synchronized clipboard text, in UTF-8 bytes.
+/// Text clipboard content is small by nature; this bound exists to keep a
+/// misbehaving or malicious peer from forcing unbounded allocation or
+/// unbounded API payloads. Oversized content is rejected with a typed error
+/// rather than silently truncated or accepted. Kept below the API's default
+/// request body limit so the API surfaces the clipboard-specific error
+/// rather than a generic body-too-large rejection.
+pub const MAX_CLIPBOARD_TEXT_BYTES: usize = 32 * 1024;
+
+/// The synced clipboard text: `GET /clipboard`, and the data of
+/// `clipboard.changed`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardSnapshot {
+    pub text: String,
+    pub updated_at: u64,
+    /// The device the text came from; absent when it was set or copied on
+    /// this machine.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_device_id: Option<String>,
+}
+
+impl PluginEventKind for ClipboardSnapshot {
+    const TYPE: &'static str = "clipboard.changed";
+}
+
+/// The plugin's settings: `plugins.clipboard` in `GET`/`PATCH /settings`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClipboardSettings {
+    /// Whether text is sent to, and taken from, paired devices.
+    pub sync_enabled: bool,
+}
+
+impl Default for ClipboardSettings {
+    fn default() -> Self {
+        Self { sync_enabled: true }
+    }
+}
+
+impl PluginSettings for ClipboardSettings {
+    const ID: &'static str = ID;
+}
+
+impl ClipboardSettings {
+    /// The clipboard's section of `settings`, or the defaults if it has
+    /// none this build can read.
+    pub fn of(settings: &SettingsSnapshot) -> Self {
+        settings
+            .plugins
+            .get(ID)
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default()
+    }
+
+    /// A settings change that turns sync on or off.
+    pub fn sync_enabled_patch(enabled: bool) -> SettingsPatch {
+        SettingsPatch::plugin(
+            ID,
+            serde_json::Map::from_iter([("syncEnabled".into(), enabled.into())]),
+        )
+    }
+}
+
+/// Why clipboard text wasn't set or sent.
+#[derive(Debug, Error)]
+pub enum ClipboardSyncError {
+    #[error("clipboard text exceeds the {limit}-byte limit")]
+    TextTooLarge { limit: usize },
+    #[error("the clipboard has no text to send")]
+    Empty,
+    #[error(transparent)]
+    Core(#[from] ApplicationError),
+}
+
+pub struct ClipboardPlugin {
+    backend: Arc<dyn ClipboardService + Send + Sync>,
+    snapshot: Mutex<ClipboardSnapshot>,
+}
+
+impl ClipboardPlugin {
+    pub fn new(backend: Arc<dyn ClipboardService + Send + Sync>) -> Self {
+        Self {
+            backend,
+            snapshot: Mutex::default(),
+        }
+    }
+
+    /// The synced clipboard text.
+    pub fn snapshot(&self) -> ClipboardSnapshot {
+        self.lock().clone()
+    }
+
+    /// Set the clipboard text and, while sync is on, send it to every
+    /// paired, connected device that accepts it. Setting the same text again
+    /// changes nothing: no event is published and nothing is resent.
+    pub fn set_text(
+        &self,
+        ctx: &PluginContext,
+        text: String,
+    ) -> Result<ClipboardSnapshot, ClipboardSyncError> {
+        if text.len() > MAX_CLIPBOARD_TEXT_BYTES {
+            return Err(ClipboardSyncError::TextTooLarge {
+                limit: MAX_CLIPBOARD_TEXT_BYTES,
+            });
+        }
+        let snapshot = {
+            let mut snapshot = self.lock();
+            if snapshot.text == text {
+                return Ok(snapshot.clone());
+            }
+            *snapshot = ClipboardSnapshot {
+                text: text.clone(),
+                updated_at: unix_millis(),
+                source_device_id: None,
+            };
+            snapshot.clone()
+        };
+        let _ = self.backend.set(&text);
+        ctx.publish(&snapshot)?;
+        if sync_enabled(ctx) {
+            broadcast(ctx, text, None);
+        }
+        Ok(snapshot)
+    }
+
+    /// Send this machine's clipboard text to one paired, connected device
+    /// as a plain `kdeconnect.clipboard` packet, on the user's request. It
+    /// complements automatic sync for when a device missed an update, e.g.
+    /// text that was already on the clipboard when the daemon started, so
+    /// it reads the clipboard itself rather than the synced text, and works
+    /// while sync is off. Refused, with a typed error, unless the device is
+    /// paired, connected, and has advertised `kdeconnect.clipboard`, or when
+    /// there is no text to send.
+    pub fn send_to(&self, ctx: &PluginContext, device_id: &str) -> Result<(), ClipboardSyncError> {
+        ctx.can_send(device_id, PACKET_TYPE)?;
+        let text = match self.backend.get() {
+            Ok(Some(text)) if !text.is_empty() => text,
+            _ => self.lock().text.clone(),
+        };
+        if text.is_empty() {
+            return Err(ClipboardSyncError::Empty);
+        }
+        if text.len() > MAX_CLIPBOARD_TEXT_BYTES {
+            return Err(ClipboardSyncError::TextTooLarge {
+                limit: MAX_CLIPBOARD_TEXT_BYTES,
+            });
+        }
+        let packet = build_packet(unix_millis(), text).map_err(|_| ApplicationError::Internal)?;
+        Ok(ctx.send(device_id, packet)?)
+    }
+
+    /// Sync text copied on this machine, as `changes` reports it (see
+    /// [`SystemClipboard::local_changes`]), the way [`Self::set_text`]
+    /// does. Copies made while sync is off are dropped rather than read into
+    /// the synced text. Runs until `changes` closes or `shutdown` is
+    /// cancelled.
+    pub fn follow_local_changes(
+        self: Arc<Self>,
+        ctx: PluginContext,
+        mut changes: watch::Receiver<Option<String>>,
+        shutdown: CancellationToken,
+    ) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    () = shutdown.cancelled() => return,
+                    changed = changes.changed() => if changed.is_err() {
+                        return;
+                    },
+                }
+                let Some(text) = changes.borrow_and_update().clone() else {
+                    continue;
+                };
+                if !sync_enabled(&ctx) {
+                    continue;
+                }
+                if let Err(error) = self.set_text(&ctx, text) {
+                    tracing::debug!(%error, "local clipboard change not synced");
+                }
+            }
+        })
+    }
+
+    /// Apply text received from a paired device. `timestamp`, sent only
+    /// with `kdeconnect.clipboard.connect`, gates staleness: text that is
+    /// not strictly newer than ours is ignored. Text we already have is
+    /// always ignored, which is also what keeps two devices from bouncing
+    /// text back and forth.
+    fn apply_remote(
+        &self,
+        ctx: &PluginContext,
+        device_id: &str,
+        content: String,
+        timestamp: Option<i64>,
+    ) {
+        if content.len() > MAX_CLIPBOARD_TEXT_BYTES {
+            tracing::debug!(
+                device_id,
+                length = content.len(),
+                "oversized clipboard packet ignored"
+            );
+            return;
+        }
+        if !sync_enabled(ctx) {
+            return;
+        }
+        let snapshot = {
+            let mut snapshot = self.lock();
+            if content == snapshot.text {
+                return;
+            }
+            if let Some(timestamp) = timestamp
+                && timestamp <= snapshot.updated_at as i64
+            {
+                return;
+            }
+            *snapshot = ClipboardSnapshot {
+                text: content.clone(),
+                updated_at: timestamp
+                    .map(|value| value.max(0) as u64)
+                    .unwrap_or_else(unix_millis),
+                source_device_id: Some(device_id.to_owned()),
+            };
+            snapshot.clone()
+        };
+        let _ = self.backend.set(&content);
+        let _ = ctx.publish(&snapshot);
+        // Forward to other paired devices, but never back to the one the
+        // text just came from.
+        broadcast(ctx, content, Some(device_id));
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, ClipboardSnapshot> {
+        self.snapshot.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Plugin for ClipboardPlugin {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn incoming(&self) -> &'static [&'static str] {
+        &[PACKET_TYPE, CONNECT_PACKET_TYPE]
+    }
+
+    fn outgoing(&self) -> &'static [&'static str] {
+        &[PACKET_TYPE, CONNECT_PACKET_TYPE]
+    }
+
+    fn handle_packet(&self, ctx: &PluginContext, device: &DeviceSnapshot, packet: &Packet) {
+        let device_id = &device.device_id;
+        let (content, timestamp) = match packet.packet_type.as_str() {
+            PACKET_TYPE => match packet.body_as::<ClipboardBody>() {
+                Ok(body) => (body.content, None),
+                Err(_) => {
+                    tracing::debug!(device_id, "dropping malformed clipboard packet");
+                    return;
+                }
+            },
+            _ => match packet.body_as::<ClipboardConnectBody>() {
+                Ok(body) => (body.content, Some(body.timestamp)),
+                Err(_) => {
+                    tracing::debug!(device_id, "dropping malformed clipboard packet");
+                    return;
+                }
+            },
+        };
+        self.apply_remote(ctx, device_id, content, timestamp);
+    }
+
+    fn routes(self: Arc<Self>, ctx: PluginContext) -> Router {
+        http::routes(self, ctx)
+    }
+
+    fn settings(&self) -> Option<SettingsSection> {
+        Some(SettingsSection::of::<ClipboardSettings>())
+    }
+
+    /// Offer the device our text, so it can adopt it if it is newer than
+    /// its own. Nothing is sent while sync is off or before there is text.
+    fn connected(&self, ctx: &PluginContext, device: &DeviceSnapshot) {
+        if !sync_enabled(ctx) {
+            return;
+        }
+        let snapshot = self.snapshot();
+        if snapshot.text.is_empty() {
+            return;
+        }
+        if let Ok(packet) =
+            build_connect_packet(unix_millis(), snapshot.text, snapshot.updated_at as i64)
+        {
+            let _ = ctx.send(&device.device_id, packet);
+        }
+    }
+}
+
+fn sync_enabled(ctx: &PluginContext) -> bool {
+    ctx.settings::<ClipboardSettings>().sync_enabled
+}
+
+/// Send `text` to every paired, connected device that accepts it, except
+/// `except`.
+fn broadcast(ctx: &PluginContext, text: String, except: Option<&str>) {
+    if let Ok(packet) = build_packet(unix_millis(), text) {
+        ctx.broadcast(&packet, except);
+    }
+}
+
+fn unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::application::{
+        ApplicationHandle, ApplicationService, EventData,
+        testing::{handle, make_identity},
+    };
+
+    const DEVICE_ID: &str = "740bd4b9b4184ee497d6caf1da8151be";
+    const OTHER_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    /// A core with the clipboard plugin, and the plugin's context.
+    fn clipboard() -> (ApplicationHandle, Arc<ClipboardPlugin>, PluginContext) {
+        let (handle, _commands) = handle();
+        let plugin = handle.plugin::<ClipboardPlugin>().unwrap();
+        let ctx = handle.plugin_context();
+        (handle, plugin, ctx)
+    }
+
+    fn connect_paired_peer(handle: &ApplicationHandle, device_id: &str) -> mpsc::Receiver<Packet> {
+        let identity = make_identity(
+            device_id,
+            vec![PACKET_TYPE.into(), CONNECT_PACKET_TYPE.into()],
+        );
+        handle.discover_device(&identity, true, 1).unwrap();
+        let (tx, rx) = mpsc::channel(4);
+        handle
+            .register_connection(device_id, vec![1, 2, 3], 8, tx, CancellationToken::new(), 1)
+            .unwrap();
+        rx
+    }
+
+    fn set_sync_enabled(handle: &ApplicationHandle, enabled: bool) {
+        handle
+            .update_settings(ClipboardSettings::sync_enabled_patch(enabled))
+            .unwrap();
+    }
+
+    fn content(packet: &Packet) -> String {
+        assert_eq!(packet.packet_type, PACKET_TYPE);
+        packet.body_as::<ClipboardBody>().unwrap().content
+    }
+
+    #[test]
+    fn setting_text_updates_the_snapshot_and_sends_it_to_paired_peers() {
+        let (handle, plugin, ctx) = clipboard();
+        // Empty clipboard: nothing is offered on connecting.
+        let mut rx = connect_paired_peer(&handle, DEVICE_ID);
+        assert!(rx.try_recv().is_err());
+        let mut events = handle.subscribe();
+
+        let snapshot = plugin.set_text(&ctx, "hello".into()).unwrap();
+        assert_eq!(snapshot.text, "hello");
+        assert_eq!(snapshot.source_device_id, None);
+        assert_eq!(plugin.snapshot(), snapshot);
+        assert_eq!(content(&rx.try_recv().unwrap()), "hello");
+
+        let EventData::Plugin(event) = events.try_recv().unwrap().event else {
+            panic!("expected a plugin event");
+        };
+        assert_eq!(event.event_type(), "clipboard.changed");
+        assert_eq!(event.decode::<ClipboardSnapshot>(), Some(snapshot));
+    }
+
+    #[test]
+    fn setting_identical_text_is_a_no_op() {
+        let (handle, plugin, ctx) = clipboard();
+        let mut rx = connect_paired_peer(&handle, DEVICE_ID);
+
+        plugin.set_text(&ctx, "hello".into()).unwrap();
+        rx.try_recv().unwrap();
+
+        let mut events = handle.subscribe();
+        plugin.set_text(&ctx, "hello".into()).unwrap();
+        assert!(rx.try_recv().is_err());
+        assert!(events.try_recv().is_err());
+    }
+
+    #[test]
+    fn oversized_text_is_rejected() {
+        let (_handle, plugin, ctx) = clipboard();
+        let oversized = "x".repeat(MAX_CLIPBOARD_TEXT_BYTES + 1);
+        assert!(matches!(
+            plugin.set_text(&ctx, oversized),
+            Err(ClipboardSyncError::TextTooLarge { limit }) if limit == MAX_CLIPBOARD_TEXT_BYTES
+        ));
+    }
+
+    #[test]
+    fn remote_text_is_applied_and_forwarded_but_not_echoed_back() {
+        let (handle, plugin, _ctx) = clipboard();
+        let mut sender_rx = connect_paired_peer(&handle, DEVICE_ID);
+        let mut other_rx = connect_paired_peer(&handle, OTHER_ID);
+
+        handle.handle_peer_packet(DEVICE_ID, build_packet(1_u64, "from peer".into()).unwrap());
+
+        let snapshot = plugin.snapshot();
+        assert_eq!(snapshot.text, "from peer");
+        assert_eq!(snapshot.source_device_id.as_deref(), Some(DEVICE_ID));
+        assert_eq!(plugin.backend.get().unwrap().as_deref(), Some("from peer"));
+        // Never straight back to the device it came from...
+        assert!(sender_rx.try_recv().is_err());
+        // ...but on to other paired, connected devices that accept it.
+        assert_eq!(content(&other_rx.try_recv().unwrap()), "from peer");
+    }
+
+    #[test]
+    fn text_from_unpaired_devices_is_ignored() {
+        let (handle, plugin, _ctx) = clipboard();
+        handle
+            .discover_device(&make_identity(DEVICE_ID, Vec::new()), false, 1)
+            .unwrap();
+        handle.handle_peer_packet(DEVICE_ID, build_packet(1_u64, "sneaky".into()).unwrap());
+        assert_eq!(plugin.snapshot().text, "");
+    }
+
+    #[test]
+    fn duplicate_remote_text_is_ignored() {
+        let (handle, plugin, ctx) = clipboard();
+        plugin.set_text(&ctx, "hello".into()).unwrap();
+        let mut rx = connect_paired_peer(&handle, DEVICE_ID);
+        // Offered on connecting, because the clipboard has text.
+        let offered = rx.try_recv().unwrap();
+        assert_eq!(offered.packet_type, CONNECT_PACKET_TYPE);
+        let body: ClipboardConnectBody = offered.body_as().unwrap();
+        assert_eq!(body.content, "hello");
+        assert_eq!(body.timestamp, plugin.snapshot().updated_at as i64);
+
+        let mut events = handle.subscribe();
+        handle.handle_peer_packet(DEVICE_ID, build_packet(1_u64, "hello".into()).unwrap());
+        assert!(rx.try_recv().is_err());
+        assert!(events.try_recv().is_err());
+    }
+
+    #[test]
+    fn connect_text_is_applied_only_when_newer() {
+        let (handle, plugin, ctx) = clipboard();
+        let newer = plugin.set_text(&ctx, "newer".into()).unwrap();
+        let _rx = connect_paired_peer(&handle, DEVICE_ID);
+
+        let stale =
+            build_connect_packet(1_u64, "older".into(), newer.updated_at as i64 - 1000).unwrap();
+        handle.handle_peer_packet(DEVICE_ID, stale);
+        assert_eq!(plugin.snapshot().text, "newer");
+
+        let fresh =
+            build_connect_packet(1_u64, "fresh".into(), newer.updated_at as i64 + 1000).unwrap();
+        handle.handle_peer_packet(DEVICE_ID, fresh);
+        let snapshot = plugin.snapshot();
+        assert_eq!(snapshot.text, "fresh");
+        assert_eq!(snapshot.updated_at, newer.updated_at + 1000);
+    }
+
+    #[test]
+    fn text_is_sent_on_request_to_one_capable_device() {
+        let (handle, plugin, ctx) = clipboard();
+        let mut rx = connect_paired_peer(&handle, DEVICE_ID);
+        let mut other_rx = connect_paired_peer(&handle, OTHER_ID);
+
+        assert!(matches!(
+            plugin.send_to(&ctx, DEVICE_ID),
+            Err(ClipboardSyncError::Empty)
+        ));
+
+        // Text that was on the clipboard before the daemon started never
+        // reaches the snapshot, but an explicit send still finds it.
+        plugin.backend.set("already there").unwrap();
+        plugin.send_to(&ctx, DEVICE_ID).unwrap();
+        assert_eq!(content(&rx.try_recv().unwrap()), "already there");
+        assert!(other_rx.try_recv().is_err());
+
+        // Unlike automatic sync, it resends unchanged text, and works while
+        // sync is off.
+        set_sync_enabled(&handle, false);
+        plugin.send_to(&ctx, DEVICE_ID).unwrap();
+        rx.try_recv().unwrap();
+    }
+
+    #[test]
+    fn text_is_not_sent_to_devices_without_the_capability() {
+        let (handle, plugin, ctx) = clipboard();
+        handle
+            .discover_device(&make_identity(DEVICE_ID, Vec::new()), true, 1)
+            .unwrap();
+        let (tx, mut rx) = mpsc::channel(4);
+        handle
+            .register_connection(DEVICE_ID, vec![1, 2, 3], 8, tx, CancellationToken::new(), 1)
+            .unwrap();
+        plugin.set_text(&ctx, "hello".into()).unwrap();
+        assert!(rx.try_recv().is_err(), "neither offered nor synced");
+
+        assert!(matches!(
+            plugin.send_to(&ctx, DEVICE_ID),
+            Err(ClipboardSyncError::Core(
+                ApplicationError::UnsupportedByPeer
+            ))
+        ));
+        assert!(matches!(
+            plugin.send_to(&ctx, "cccccccccccccccccccccccccccccccc"),
+            Err(ClipboardSyncError::Core(ApplicationError::UnknownDevice))
+        ));
+    }
+
+    #[test]
+    fn turning_sync_off_stops_sending_and_applying() {
+        let (handle, plugin, ctx) = clipboard();
+        let mut rx = connect_paired_peer(&handle, DEVICE_ID);
+        set_sync_enabled(&handle, false);
+        assert!(!ClipboardSettings::of(&handle.settings().unwrap()).sync_enabled);
+
+        // A local change no longer reaches the peer...
+        plugin.set_text(&ctx, "local only".into()).unwrap();
+        assert!(rx.try_recv().is_err());
+
+        // ...and text from the peer is not applied...
+        handle.handle_peer_packet(DEVICE_ID, build_packet(1_u64, "from peer".into()).unwrap());
+        assert_eq!(plugin.snapshot().text, "local only");
+
+        // ...nor offered to a device that connects.
+        let mut late_rx = connect_paired_peer(&handle, OTHER_ID);
+        assert!(late_rx.try_recv().is_err());
+
+        set_sync_enabled(&handle, true);
+        plugin.set_text(&ctx, "resumed".into()).unwrap();
+        assert_eq!(content(&rx.try_recv().unwrap()), "resumed");
+    }
+
+    #[test]
+    fn settings_show_the_section_with_its_default() {
+        let (handle, _plugin, _ctx) = clipboard();
+        let settings = handle.settings().unwrap();
+        assert_eq!(
+            serde_json::to_value(&settings).unwrap()["plugins"],
+            serde_json::json!({"clipboard": {"syncEnabled": true}})
+        );
+        assert!(matches!(
+            handle.update_settings(SettingsPatch::plugin(
+                ID,
+                serde_json::Map::from_iter([("syncEnabled".into(), "no".into())]),
+            )),
+            Err(ApplicationError::InvalidSettings)
+        ));
+    }
+
+    #[tokio::test]
+    async fn local_changes_are_synced_while_sync_is_on() {
+        let (handle, plugin, ctx) = clipboard();
+        let mut rx = connect_paired_peer(&handle, DEVICE_ID);
+        let (changes, receiver) = watch::channel(None);
+        let shutdown = CancellationToken::new();
+        let follower = plugin
+            .clone()
+            .follow_local_changes(ctx, receiver, shutdown.clone());
+
+        changes.send_replace(Some("copied".into()));
+        let sent = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(content(&sent), "copied");
+
+        set_sync_enabled(&handle, false);
+        changes.send_replace(Some("private".into()));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(plugin.snapshot().text, "copied");
+        assert!(rx.try_recv().is_err());
+
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(5), follower)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}

@@ -110,7 +110,7 @@ macOS app has only an ad-hoc signature. A Flutter build hook
   equivalent here is a daemon setting (a list of addresses in
   `settings.json`) that `LanService` announces to on its interval, plus a
   way to remove entries in the UI.
-- `clipboard::system::tests::clearing_the_clipboard_is_not_reported` failed
+- `plugins::clipboard::backend::system::tests::clearing_the_clipboard_is_not_reported` failed
   once under a full `cargo test --workspace` run and passed on every rerun
   and on its own; it looks timing-sensitive under load.
 - Snapshots carry no sequence number, so an event emitted just before a
