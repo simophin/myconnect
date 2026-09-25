@@ -289,9 +289,9 @@ as bool,
 /// @nodoc
 mixin _$Device {
 
- String get deviceId; String get deviceName;@JsonKey(unknownEnumValue: DeviceType.unknown) DeviceType get deviceType; int get protocolVersion; List<String> get incomingCapabilities; List<String> get outgoingCapabilities;@JsonKey(unknownEnumValue: DeviceReachability.unknown) DeviceReachability get reachability; bool get paired; bool get pairing; int get lastSeenAt;/// Known only while the device is paired and connected, once it has
-/// reported it.
- BatteryStatus? get battery;
+ String get deviceId; String get deviceName;@JsonKey(unknownEnumValue: DeviceType.unknown) DeviceType get deviceType; int get protocolVersion; List<String> get incomingCapabilities; List<String> get outgoingCapabilities;@JsonKey(unknownEnumValue: DeviceReachability.unknown) DeviceReachability get reachability; bool get paired; bool get pairing; int get lastSeenAt;/// What the daemon's plugins add to the device, keyed by plugin id.
+/// Read through getters such as [battery].
+ Map<String, Object?> get plugins;
 /// Create a copy of Device
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -305,20 +305,20 @@ $DeviceCopyWith<Device> get copyWith => _$DeviceCopyWithImpl<Device>(this as Dev
 @override
 bool operator ==(Object other) {
   final _this = this as Device;
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is Device&&(identical(other.deviceId, _this.deviceId) || other.deviceId == _this.deviceId)&&(identical(other.deviceName, _this.deviceName) || other.deviceName == _this.deviceName)&&(identical(other.deviceType, _this.deviceType) || other.deviceType == _this.deviceType)&&(identical(other.protocolVersion, _this.protocolVersion) || other.protocolVersion == _this.protocolVersion)&&const DeepCollectionEquality().equals(other.incomingCapabilities, _this.incomingCapabilities)&&const DeepCollectionEquality().equals(other.outgoingCapabilities, _this.outgoingCapabilities)&&(identical(other.reachability, _this.reachability) || other.reachability == _this.reachability)&&(identical(other.paired, _this.paired) || other.paired == _this.paired)&&(identical(other.pairing, _this.pairing) || other.pairing == _this.pairing)&&(identical(other.lastSeenAt, _this.lastSeenAt) || other.lastSeenAt == _this.lastSeenAt)&&(identical(other.battery, _this.battery) || other.battery == _this.battery));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is Device&&(identical(other.deviceId, _this.deviceId) || other.deviceId == _this.deviceId)&&(identical(other.deviceName, _this.deviceName) || other.deviceName == _this.deviceName)&&(identical(other.deviceType, _this.deviceType) || other.deviceType == _this.deviceType)&&(identical(other.protocolVersion, _this.protocolVersion) || other.protocolVersion == _this.protocolVersion)&&const DeepCollectionEquality().equals(other.incomingCapabilities, _this.incomingCapabilities)&&const DeepCollectionEquality().equals(other.outgoingCapabilities, _this.outgoingCapabilities)&&(identical(other.reachability, _this.reachability) || other.reachability == _this.reachability)&&(identical(other.paired, _this.paired) || other.paired == _this.paired)&&(identical(other.pairing, _this.pairing) || other.pairing == _this.pairing)&&(identical(other.lastSeenAt, _this.lastSeenAt) || other.lastSeenAt == _this.lastSeenAt)&&const DeepCollectionEquality().equals(other.plugins, _this.plugins));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
 int get hashCode {
   final _this = this as Device;
-  return Object.hash(runtimeType,_this.deviceId,_this.deviceName,_this.deviceType,_this.protocolVersion,const DeepCollectionEquality().hash(_this.incomingCapabilities),const DeepCollectionEquality().hash(_this.outgoingCapabilities),_this.reachability,_this.paired,_this.pairing,_this.lastSeenAt,_this.battery);
+  return Object.hash(runtimeType,_this.deviceId,_this.deviceName,_this.deviceType,_this.protocolVersion,const DeepCollectionEquality().hash(_this.incomingCapabilities),const DeepCollectionEquality().hash(_this.outgoingCapabilities),_this.reachability,_this.paired,_this.pairing,_this.lastSeenAt,const DeepCollectionEquality().hash(_this.plugins));
 }
 
 @override
 String toString() {
   final _this = this as Device;
-  return 'Device(deviceId: ${_this.deviceId}, deviceName: ${_this.deviceName}, deviceType: ${_this.deviceType}, protocolVersion: ${_this.protocolVersion}, incomingCapabilities: ${_this.incomingCapabilities}, outgoingCapabilities: ${_this.outgoingCapabilities}, reachability: ${_this.reachability}, paired: ${_this.paired}, pairing: ${_this.pairing}, lastSeenAt: ${_this.lastSeenAt}, battery: ${_this.battery})';
+  return 'Device(deviceId: ${_this.deviceId}, deviceName: ${_this.deviceName}, deviceType: ${_this.deviceType}, protocolVersion: ${_this.protocolVersion}, incomingCapabilities: ${_this.incomingCapabilities}, outgoingCapabilities: ${_this.outgoingCapabilities}, reachability: ${_this.reachability}, paired: ${_this.paired}, pairing: ${_this.pairing}, lastSeenAt: ${_this.lastSeenAt}, plugins: ${_this.plugins})';
 }
 
 
@@ -329,11 +329,11 @@ abstract mixin class $DeviceCopyWith<$Res>  {
   factory $DeviceCopyWith(Device value, $Res Function(Device) _then) = _$DeviceCopyWithImpl;
 @useResult
 $Res call({
- String deviceId, String deviceName,@JsonKey(unknownEnumValue: DeviceType.unknown) DeviceType deviceType, int protocolVersion, List<String> incomingCapabilities, List<String> outgoingCapabilities,@JsonKey(unknownEnumValue: DeviceReachability.unknown) DeviceReachability reachability, bool paired, bool pairing, int lastSeenAt, BatteryStatus? battery
+ String deviceId, String deviceName,@JsonKey(unknownEnumValue: DeviceType.unknown) DeviceType deviceType, int protocolVersion, List<String> incomingCapabilities, List<String> outgoingCapabilities,@JsonKey(unknownEnumValue: DeviceReachability.unknown) DeviceReachability reachability, bool paired, bool pairing, int lastSeenAt, Map<String, Object?> plugins
 });
 
 
-$BatteryStatusCopyWith<$Res>? get battery;
+
 
 }
 /// @nodoc
@@ -346,7 +346,7 @@ class _$DeviceCopyWithImpl<$Res>
 
 /// Create a copy of Device
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? deviceId = null,Object? deviceName = null,Object? deviceType = null,Object? protocolVersion = null,Object? incomingCapabilities = null,Object? outgoingCapabilities = null,Object? reachability = null,Object? paired = null,Object? pairing = null,Object? lastSeenAt = null,Object? battery = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? deviceId = null,Object? deviceName = null,Object? deviceType = null,Object? protocolVersion = null,Object? incomingCapabilities = null,Object? outgoingCapabilities = null,Object? reachability = null,Object? paired = null,Object? pairing = null,Object? lastSeenAt = null,Object? plugins = null,}) {
   return _then(Device(
 deviceId: null == deviceId ? _self.deviceId : deviceId // ignore: cast_nullable_to_non_nullable
 as String,deviceName: null == deviceName ? _self.deviceName : deviceName // ignore: cast_nullable_to_non_nullable
@@ -358,23 +358,11 @@ as List<String>,reachability: null == reachability ? _self.reachability : reacha
 as DeviceReachability,paired: null == paired ? _self.paired : paired // ignore: cast_nullable_to_non_nullable
 as bool,pairing: null == pairing ? _self.pairing : pairing // ignore: cast_nullable_to_non_nullable
 as bool,lastSeenAt: null == lastSeenAt ? _self.lastSeenAt : lastSeenAt // ignore: cast_nullable_to_non_nullable
-as int,battery: freezed == battery ? _self.battery : battery // ignore: cast_nullable_to_non_nullable
-as BatteryStatus?,
+as int,plugins: null == plugins ? _self.plugins : plugins // ignore: cast_nullable_to_non_nullable
+as Map<String, Object?>,
   ));
 }
-/// Create a copy of Device
-/// with the given fields replaced by the non-null parameter values.
-@override
-@pragma('vm:prefer-inline')
-$BatteryStatusCopyWith<$Res>? get battery {
-    if (_self.battery == null) {
-    return null;
-  }
 
-  return $BatteryStatusCopyWith<$Res>(_self.battery!, (value) {
-    return _then(_self.copyWith(battery: value));
-  });
-}
 }
 
 
@@ -456,10 +444,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String deviceId,  String deviceName, @JsonKey(unknownEnumValue: DeviceType.unknown)  DeviceType deviceType,  int protocolVersion,  List<String> incomingCapabilities,  List<String> outgoingCapabilities, @JsonKey(unknownEnumValue: DeviceReachability.unknown)  DeviceReachability reachability,  bool paired,  bool pairing,  int lastSeenAt,  BatteryStatus? battery)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String deviceId,  String deviceName, @JsonKey(unknownEnumValue: DeviceType.unknown)  DeviceType deviceType,  int protocolVersion,  List<String> incomingCapabilities,  List<String> outgoingCapabilities, @JsonKey(unknownEnumValue: DeviceReachability.unknown)  DeviceReachability reachability,  bool paired,  bool pairing,  int lastSeenAt,  Map<String, Object?> plugins)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _Device() when $default != null:
-return $default(_that.deviceId,_that.deviceName,_that.deviceType,_that.protocolVersion,_that.incomingCapabilities,_that.outgoingCapabilities,_that.reachability,_that.paired,_that.pairing,_that.lastSeenAt,_that.battery);case _:
+return $default(_that.deviceId,_that.deviceName,_that.deviceType,_that.protocolVersion,_that.incomingCapabilities,_that.outgoingCapabilities,_that.reachability,_that.paired,_that.pairing,_that.lastSeenAt,_that.plugins);case _:
   return orElse();
 
 }
@@ -477,10 +465,10 @@ return $default(_that.deviceId,_that.deviceName,_that.deviceType,_that.protocolV
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String deviceId,  String deviceName, @JsonKey(unknownEnumValue: DeviceType.unknown)  DeviceType deviceType,  int protocolVersion,  List<String> incomingCapabilities,  List<String> outgoingCapabilities, @JsonKey(unknownEnumValue: DeviceReachability.unknown)  DeviceReachability reachability,  bool paired,  bool pairing,  int lastSeenAt,  BatteryStatus? battery)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String deviceId,  String deviceName, @JsonKey(unknownEnumValue: DeviceType.unknown)  DeviceType deviceType,  int protocolVersion,  List<String> incomingCapabilities,  List<String> outgoingCapabilities, @JsonKey(unknownEnumValue: DeviceReachability.unknown)  DeviceReachability reachability,  bool paired,  bool pairing,  int lastSeenAt,  Map<String, Object?> plugins)  $default,) {final _that = this;
 switch (_that) {
 case _Device():
-return $default(_that.deviceId,_that.deviceName,_that.deviceType,_that.protocolVersion,_that.incomingCapabilities,_that.outgoingCapabilities,_that.reachability,_that.paired,_that.pairing,_that.lastSeenAt,_that.battery);case _:
+return $default(_that.deviceId,_that.deviceName,_that.deviceType,_that.protocolVersion,_that.incomingCapabilities,_that.outgoingCapabilities,_that.reachability,_that.paired,_that.pairing,_that.lastSeenAt,_that.plugins);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -497,10 +485,10 @@ return $default(_that.deviceId,_that.deviceName,_that.deviceType,_that.protocolV
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String deviceId,  String deviceName, @JsonKey(unknownEnumValue: DeviceType.unknown)  DeviceType deviceType,  int protocolVersion,  List<String> incomingCapabilities,  List<String> outgoingCapabilities, @JsonKey(unknownEnumValue: DeviceReachability.unknown)  DeviceReachability reachability,  bool paired,  bool pairing,  int lastSeenAt,  BatteryStatus? battery)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String deviceId,  String deviceName, @JsonKey(unknownEnumValue: DeviceType.unknown)  DeviceType deviceType,  int protocolVersion,  List<String> incomingCapabilities,  List<String> outgoingCapabilities, @JsonKey(unknownEnumValue: DeviceReachability.unknown)  DeviceReachability reachability,  bool paired,  bool pairing,  int lastSeenAt,  Map<String, Object?> plugins)?  $default,) {final _that = this;
 switch (_that) {
 case _Device() when $default != null:
-return $default(_that.deviceId,_that.deviceName,_that.deviceType,_that.protocolVersion,_that.incomingCapabilities,_that.outgoingCapabilities,_that.reachability,_that.paired,_that.pairing,_that.lastSeenAt,_that.battery);case _:
+return $default(_that.deviceId,_that.deviceName,_that.deviceType,_that.protocolVersion,_that.incomingCapabilities,_that.outgoingCapabilities,_that.reachability,_that.paired,_that.pairing,_that.lastSeenAt,_that.plugins);case _:
   return null;
 
 }
@@ -512,7 +500,7 @@ return $default(_that.deviceId,_that.deviceName,_that.deviceType,_that.protocolV
 @JsonSerializable()
 
 class _Device extends Device {
-  const _Device({required this.deviceId, required this.deviceName, @JsonKey(unknownEnumValue: DeviceType.unknown) required this.deviceType, required this.protocolVersion, required  List<String> incomingCapabilities, required  List<String> outgoingCapabilities, @JsonKey(unknownEnumValue: DeviceReachability.unknown) required this.reachability, required this.paired, required this.pairing, required this.lastSeenAt, this.battery}): _incomingCapabilities = incomingCapabilities,_outgoingCapabilities = outgoingCapabilities,super._();
+  const _Device({required this.deviceId, required this.deviceName, @JsonKey(unknownEnumValue: DeviceType.unknown) required this.deviceType, required this.protocolVersion, required  List<String> incomingCapabilities, required  List<String> outgoingCapabilities, @JsonKey(unknownEnumValue: DeviceReachability.unknown) required this.reachability, required this.paired, required this.pairing, required this.lastSeenAt,  Map<String, Object?> plugins = const <String, Object?>{}}): _incomingCapabilities = incomingCapabilities,_outgoingCapabilities = outgoingCapabilities,_plugins = plugins,super._();
   factory _Device.fromJson(Map<String, dynamic> json) => _$DeviceFromJson(json);
 
 @override final  String deviceId;
@@ -537,9 +525,17 @@ class _Device extends Device {
 @override final  bool paired;
 @override final  bool pairing;
 @override final  int lastSeenAt;
-/// Known only while the device is paired and connected, once it has
-/// reported it.
-@override final  BatteryStatus? battery;
+/// What the daemon's plugins add to the device, keyed by plugin id.
+/// Read through getters such as [battery].
+ final  Map<String, Object?> _plugins;
+/// What the daemon's plugins add to the device, keyed by plugin id.
+/// Read through getters such as [battery].
+@override@JsonKey() Map<String, Object?> get plugins {
+  if (_plugins is EqualUnmodifiableMapView) return _plugins;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableMapView(_plugins);
+}
+
 
 /// Create a copy of Device
 /// with the given fields replaced by the non-null parameter values.
@@ -554,18 +550,18 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-    return identical(this, other) || (other.runtimeType == runtimeType&&other is _Device&&(identical(other.deviceId, deviceId) || other.deviceId == deviceId)&&(identical(other.deviceName, deviceName) || other.deviceName == deviceName)&&(identical(other.deviceType, deviceType) || other.deviceType == deviceType)&&(identical(other.protocolVersion, protocolVersion) || other.protocolVersion == protocolVersion)&&const DeepCollectionEquality().equals(other.incomingCapabilities, _incomingCapabilities)&&const DeepCollectionEquality().equals(other.outgoingCapabilities, _outgoingCapabilities)&&(identical(other.reachability, reachability) || other.reachability == reachability)&&(identical(other.paired, paired) || other.paired == paired)&&(identical(other.pairing, pairing) || other.pairing == pairing)&&(identical(other.lastSeenAt, lastSeenAt) || other.lastSeenAt == lastSeenAt)&&(identical(other.battery, battery) || other.battery == battery));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is _Device&&(identical(other.deviceId, deviceId) || other.deviceId == deviceId)&&(identical(other.deviceName, deviceName) || other.deviceName == deviceName)&&(identical(other.deviceType, deviceType) || other.deviceType == deviceType)&&(identical(other.protocolVersion, protocolVersion) || other.protocolVersion == protocolVersion)&&const DeepCollectionEquality().equals(other.incomingCapabilities, _incomingCapabilities)&&const DeepCollectionEquality().equals(other.outgoingCapabilities, _outgoingCapabilities)&&(identical(other.reachability, reachability) || other.reachability == reachability)&&(identical(other.paired, paired) || other.paired == paired)&&(identical(other.pairing, pairing) || other.pairing == pairing)&&(identical(other.lastSeenAt, lastSeenAt) || other.lastSeenAt == lastSeenAt)&&const DeepCollectionEquality().equals(other.plugins, _plugins));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
 int get hashCode {
-    return Object.hash(runtimeType,deviceId,deviceName,deviceType,protocolVersion,const DeepCollectionEquality().hash(_incomingCapabilities),const DeepCollectionEquality().hash(_outgoingCapabilities),reachability,paired,pairing,lastSeenAt,battery);
+    return Object.hash(runtimeType,deviceId,deviceName,deviceType,protocolVersion,const DeepCollectionEquality().hash(_incomingCapabilities),const DeepCollectionEquality().hash(_outgoingCapabilities),reachability,paired,pairing,lastSeenAt,const DeepCollectionEquality().hash(_plugins));
 }
 
 @override
 String toString() {
-    return 'Device(deviceId: $deviceId, deviceName: $deviceName, deviceType: $deviceType, protocolVersion: $protocolVersion, incomingCapabilities: $incomingCapabilities, outgoingCapabilities: $outgoingCapabilities, reachability: $reachability, paired: $paired, pairing: $pairing, lastSeenAt: $lastSeenAt, battery: $battery)';
+    return 'Device(deviceId: $deviceId, deviceName: $deviceName, deviceType: $deviceType, protocolVersion: $protocolVersion, incomingCapabilities: $incomingCapabilities, outgoingCapabilities: $outgoingCapabilities, reachability: $reachability, paired: $paired, pairing: $pairing, lastSeenAt: $lastSeenAt, plugins: $plugins)';
 }
 
 
@@ -576,11 +572,11 @@ abstract mixin class _$DeviceCopyWith<$Res> implements $DeviceCopyWith<$Res> {
   factory _$DeviceCopyWith(_Device value, $Res Function(_Device) _then) = __$DeviceCopyWithImpl;
 @override @useResult
 $Res call({
- String deviceId, String deviceName,@JsonKey(unknownEnumValue: DeviceType.unknown) DeviceType deviceType, int protocolVersion, List<String> incomingCapabilities, List<String> outgoingCapabilities,@JsonKey(unknownEnumValue: DeviceReachability.unknown) DeviceReachability reachability, bool paired, bool pairing, int lastSeenAt, BatteryStatus? battery
+ String deviceId, String deviceName,@JsonKey(unknownEnumValue: DeviceType.unknown) DeviceType deviceType, int protocolVersion, List<String> incomingCapabilities, List<String> outgoingCapabilities,@JsonKey(unknownEnumValue: DeviceReachability.unknown) DeviceReachability reachability, bool paired, bool pairing, int lastSeenAt, Map<String, Object?> plugins
 });
 
 
-@override $BatteryStatusCopyWith<$Res>? get battery;
+
 
 }
 /// @nodoc
@@ -593,7 +589,7 @@ class __$DeviceCopyWithImpl<$Res>
 
 /// Create a copy of Device
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? deviceId = null,Object? deviceName = null,Object? deviceType = null,Object? protocolVersion = null,Object? incomingCapabilities = null,Object? outgoingCapabilities = null,Object? reachability = null,Object? paired = null,Object? pairing = null,Object? lastSeenAt = null,Object? battery = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? deviceId = null,Object? deviceName = null,Object? deviceType = null,Object? protocolVersion = null,Object? incomingCapabilities = null,Object? outgoingCapabilities = null,Object? reachability = null,Object? paired = null,Object? pairing = null,Object? lastSeenAt = null,Object? plugins = null,}) {
   return _then(_Device(
 deviceId: null == deviceId ? _self.deviceId : deviceId // ignore: cast_nullable_to_non_nullable
 as String,deviceName: null == deviceName ? _self.deviceName : deviceName // ignore: cast_nullable_to_non_nullable
@@ -605,24 +601,12 @@ as List<String>,reachability: null == reachability ? _self.reachability : reacha
 as DeviceReachability,paired: null == paired ? _self.paired : paired // ignore: cast_nullable_to_non_nullable
 as bool,pairing: null == pairing ? _self.pairing : pairing // ignore: cast_nullable_to_non_nullable
 as bool,lastSeenAt: null == lastSeenAt ? _self.lastSeenAt : lastSeenAt // ignore: cast_nullable_to_non_nullable
-as int,battery: freezed == battery ? _self.battery : battery // ignore: cast_nullable_to_non_nullable
-as BatteryStatus?,
+as int,plugins: null == plugins ? _self._plugins : plugins // ignore: cast_nullable_to_non_nullable
+as Map<String, Object?>,
   ));
 }
 
-/// Create a copy of Device
-/// with the given fields replaced by the non-null parameter values.
-@override
-@pragma('vm:prefer-inline')
-$BatteryStatusCopyWith<$Res>? get battery {
-    if (_self.battery == null) {
-    return null;
-  }
 
-  return $BatteryStatusCopyWith<$Res>(_self.battery!, (value) {
-    return _then(_self.copyWith(battery: value));
-  });
-}
 }
 
 // dart format on

@@ -132,7 +132,7 @@ Device device({
   paired: paired,
   pairing: pairing,
   lastSeenAt: 0,
-  battery: battery,
+  plugins: {'battery': ?battery?.toJson()},
 );
 
 Pairing pairing({

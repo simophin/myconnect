@@ -16,7 +16,7 @@ use myconnect::{
     },
     config::ApiToken,
     device::DeviceSnapshot,
-    plugins::ping::ReceivedPing,
+    plugins::{battery::BatteryStatus, ping::ReceivedPing},
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -513,7 +513,7 @@ fn print_devices(devices: &[DeviceSnapshot], json_output: bool) {
     } else {
         for device in devices {
             let trust = if device.paired { "paired" } else { "unpaired" };
-            let battery = match device.battery {
+            let battery = match BatteryStatus::of(device) {
                 Some(battery) if battery.charging => format!("{}% charging", battery.charge),
                 Some(battery) => format!("{}%", battery.charge),
                 None => "-".to_owned(),

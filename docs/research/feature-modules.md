@@ -1,6 +1,7 @@
 # Research: one module per feature
 
-Status: proposal (2026-09-25), with phase 0 (ping, §7) implemented.
+Status: proposal (2026-09-25), with phases 0 (ping, §7), 0b (find my
+phone) and 1 (battery) implemented.
 Once it is accepted, the target shape moves into `ARCHITECTURE.md` §2 and
 this file becomes the history behind it.
 
@@ -23,7 +24,8 @@ Set by the owner:
 - **Scope:** the Rust daemon. `client.rs`, the CLI and the Flutter UI keep
   their shape for now, though they follow wire changes.
 - **Wire contract:** free to change where that makes the design cleaner.
-  The pilot didn't need any change.
+  The pilot didn't need any change; phase 1 moved `battery` under
+  `plugins` (§5.5).
 
 ## 2. Where we are
 
@@ -173,7 +175,7 @@ pub trait Plugin: Send + Sync + 'static {
     fn connected(&self, ctx: &PluginContext, device: &DeviceSnapshot) {}
     fn disconnected(&self, ctx: &PluginContext, device_id: &str) {}
     fn unpaired(&self, ctx: &PluginContext, device_id: &str) {}
-    fn device_state(&self, device_id: &str) -> Option<(&'static str, Value)> { None }
+    fn device_state(&self, device_id: &str) -> Option<Value> { None }  // keyed by id()
     fn shutdown(&self) -> BoxFuture<'_, ()> { Box::pin(async {}) }
 }
 ```
@@ -228,11 +230,21 @@ would change every URL to express something clients don't care about.
 ### 5.5 Adding to the device snapshot
 
 `DeviceSnapshot` stops having a `battery` field. Core builds a
-`plugins: {"battery": {...}}` map (or flattens it, a wire detail to decide
-in phase 1) from each plugin's `device_state`. A plugin that changes the
-map calls `ctx.device_changed(id)`. The UI keeps its one-snapshot model
-(ADR 0003): still one list endpoint and one `device.updated` event.
-Clearing on disconnect or unpair is the plugin's job, via its hooks.
+`plugins: {"battery": {...}}` map from each plugin's `device_state`,
+keyed by plugin id; a plugin with nothing to add has no key. A plugin that
+changes its state calls `ctx.device_changed(id)`. The UI keeps its
+one-snapshot model (ADR 0003): still one list endpoint and one
+`device.updated` event. Clearing on disconnect or unpair is the plugin's
+job, via its hooks.
+
+Decided in phase 1: a nested `plugins` map, not flattened into the
+snapshot. Flattening would have kept `battery` where it was, but it puts
+plugin keys in the same namespace as core fields, so a plugin id could
+shadow a future core field, and a client deserializing with a catch-all
+(`#[serde(flatten)]` into a map) can't tell an unknown core field from
+plugin state. The nested map keeps the two apart, lets a client ignore
+plugins it doesn't know as a whole, and is always present (`{}` when
+empty), so clients need no null handling for it.
 
 ### 5.6 Settings sections
 
@@ -263,7 +275,7 @@ takes one new trait feature at a time.
 | --- | --- | --- |
 | 0 (done, #16) | ping | trait, registry, dispatch, capabilities, routes, open plugin events, `ApiProblem` for plugins |
 | 0b (done) | find my phone (ring), added after the plan the old way | a send-only plugin: `incoming()` and `handle_packet()` got defaults |
-| 1 | battery | `device_state` + `device_changed`, `disconnected`/`unpaired` hooks, `DeviceSnapshot` extension (UI change) |
+| 1 (done) | battery | `device_state` + `device_changed`, `disconnected`/`unpaired` hooks, `DeviceSnapshot` extension (UI change) |
 | 2 | clipboard | settings sections (UI + CLI change), `connected` hook, `broadcast`, plugin-owned global resource (`/clipboard`) |
 | 3 | share | transfers extracted into a core service; `streaming_routes`; payload/TLS access through the context |
 | 4 | browse (sftp) | plugin-owned sessions, `shutdown` hook; `service/browse.rs` and `transport/sftp.rs` move into the plugin |
@@ -351,3 +363,49 @@ in review, showed:
   string moved in the identity packet. Order means nothing to peers, and
   the capabilities test now compares sorted lists so the next move won't
   break it.
+
+Moving battery (phase 1) showed:
+
+- **Pull, not push, for device state.** The plugin keeps each device's
+  last report behind its own lock and answers `device_state(id)`; the
+  core asks every plugin whenever a snapshot leaves it (the five device
+  events, `GET /devices`, `GET /devices/{id}`), always after dropping its
+  state lock. The registry in `device.rs` never holds plugin state, so it
+  lost `set_battery` and the clearing in `mark_disconnected`/`set_paired`.
+  A push model (`ctx.set_device_state`) would have put plugin data back
+  into core state and made clearing core's job again.
+- **`device_state` returns `Option<Value>`, keyed by `id()`,** instead of
+  the planned `(&'static str, Value)`. A second key per plugin had no use
+  and allowed two plugins to collide; the registry now also panics on a
+  duplicate id, like it does on a duplicate packet type.
+- **Hooks run before the core publishes.** `disconnected` runs before
+  `device.disconnected` and `unpaired` before the `device.updated` (peer
+  unpaired us) or `device.forgotten` (we forgot it). So the event already
+  shows the battery gone, and a plugin clearing state in a hook needn't
+  call `device_changed`. Forgetting a connected device calls both hooks.
+  Without this ordering every disconnect would have published an extra
+  `device.updated`.
+- **Wire change, as §5.5 records.** `battery` moved to
+  `plugins.battery`. The CLI and `client.rs` needed no code of their own:
+  they share `DeviceSnapshot`, and read the battery through
+  `BatteryStatus::of(&device)` from the plugin. The UI keeps a `battery`
+  getter on `Device` that decodes `plugins['battery']`, and ignores a
+  shape it doesn't know rather than failing to decode the whole device, so
+  widgets didn't change.
+- **Core files only lost battery code or gained shared code.** `service.rs`
+  lost 44 lines net (the dispatch arm, `handle_battery`, its test) and
+  gained `with_plugin_state` and the hook calls. `api.rs`, `events.rs`,
+  `state.rs` and `ApplicationError` didn't change. `plugins/mod.rs` lost
+  the battery arm of the fixed table and gained one `builtin()` line.
+- **The first stateful plugin needs construction.** `builtin()` now holds
+  `BatteryPlugin::default()`. `plugins::capabilities()` still builds a
+  throwaway registry to read capability lists (a phase 5 seam), which now
+  also allocates the plugin's empty map; harmless, but one more reason to
+  read capabilities from the handle's registry.
+- **The core's `send` check has its own test.** As §8 asked, the
+  capability-filtering test moved from ping to `plugin.rs`, against a
+  dummy send-only plugin: unknown device, not paired, not connected, not
+  advertised, then accepted. Ping keeps a test that it sends its body.
+- **Still to verify on a real phone,** as before the move: the checks
+  here ran against the fake phone (unit tests, `browse_e2e`, and the app
+  showing `Connected · 73%` and clearing it on disconnect).

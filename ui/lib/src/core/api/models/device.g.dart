@@ -38,9 +38,8 @@ _Device _$DeviceFromJson(Map<String, dynamic> json) => _Device(
   paired: json['paired'] as bool,
   pairing: json['pairing'] as bool,
   lastSeenAt: (json['lastSeenAt'] as num).toInt(),
-  battery: json['battery'] == null
-      ? null
-      : BatteryStatus.fromJson(json['battery'] as Map<String, dynamic>),
+  plugins:
+      json['plugins'] as Map<String, dynamic>? ?? const <String, Object?>{},
 );
 
 Map<String, dynamic> _$DeviceToJson(_Device instance) => <String, dynamic>{
@@ -54,7 +53,7 @@ Map<String, dynamic> _$DeviceToJson(_Device instance) => <String, dynamic>{
   'paired': instance.paired,
   'pairing': instance.pairing,
   'lastSeenAt': instance.lastSeenAt,
-  'battery': instance.battery,
+  'plugins': instance.plugins,
 };
 
 const _$DeviceTypeEnumMap = {

@@ -129,32 +129,18 @@ mod tests {
     }
 
     #[test]
-    fn capability_filtering_rejects_unsupported_peers_and_paired_devices_can_be_pinged() {
+    fn paired_devices_that_accept_pings_can_be_pinged() {
+        // Refusals for other devices are the core's, tested in
+        // `application::plugin`.
         let (handle, _commands) = handle();
-        let ctx = handle.plugin_context();
-        let identity = make_identity(DEVICE_ID, Vec::new());
+        let identity = make_identity(DEVICE_ID, vec![PACKET_TYPE.into()]);
         handle.discover_device(&identity, true, 1).unwrap();
         let (tx, mut rx) = mpsc::channel(4);
         handle
             .register_connection(DEVICE_ID, vec![1, 2, 3], 8, tx, CancellationToken::new(), 1)
             .unwrap();
 
-        // Paired and connected, but the peer never advertised the ping
-        // capability: sending must be refused with a typed rejection, not a
-        // silent no-op or a panic.
-        assert!(matches!(
-            send_ping(&ctx, DEVICE_ID, None),
-            Err(ApplicationError::UnsupportedByPeer)
-        ));
-
-        // The peer re-announces (e.g. on reconnect) advertising the
-        // capability.
-        let identity_with_ping = make_identity(DEVICE_ID, vec![PACKET_TYPE.into()]);
-        handle
-            .discover_device(&identity_with_ping, true, 2)
-            .unwrap();
-
-        send_ping(&ctx, DEVICE_ID, Some("hello".into())).unwrap();
+        send_ping(&handle.plugin_context(), DEVICE_ID, Some("hello".into())).unwrap();
         let sent = rx.try_recv().unwrap();
         assert_eq!(sent.packet_type, PACKET_TYPE);
         let body: PingBody = sent.body_as().unwrap();

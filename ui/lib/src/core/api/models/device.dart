@@ -28,7 +28,8 @@ const ringCapability = 'kdeconnect.findmyphone.request';
 /// The capability a peer lists when it accepts clipboard text.
 const clipboardCapability = 'kdeconnect.clipboard';
 
-/// Mirror of the daemon's `BatteryStatus`: a peer's last battery report.
+/// Mirror of the daemon's `BatteryStatus`: a peer's last battery report,
+/// under `plugins.battery` in its snapshot.
 @freezed
 abstract class BatteryStatus with _$BatteryStatus {
   const factory({required int charge, required bool charging}) = _BatteryStatus;
@@ -53,9 +54,9 @@ abstract class Device with _$Device {
     required bool pairing,
     required int lastSeenAt,
 
-    /// Known only while the device is paired and connected, once it has
-    /// reported it.
-    BatteryStatus? battery,
+    /// What the daemon's plugins add to the device, keyed by plugin id.
+    /// Read through getters such as [battery].
+    @Default(<String, Object?>{}) Map<String, Object?> plugins,
   }) = _Device;
 
   const new _();
@@ -63,6 +64,13 @@ abstract class Device with _$Device {
   factory fromJson(Map<String, Object?> json) => _$DeviceFromJson(json);
 
   bool get isConnected => reachability == DeviceReachability.connected;
+
+  /// The battery the device last reported. Known only while it is paired
+  /// and connected, once it has reported it.
+  BatteryStatus? get battery => switch (plugins['battery']) {
+    final Map<String, Object?> json => _decode(json, BatteryStatus.fromJson),
+    _ => null,
+  };
 
   /// Whether a file sent now would be accepted.
   bool get acceptsFiles =>
@@ -86,4 +94,18 @@ abstract class Device with _$Device {
 
   /// Whether clipboard text sent now would be accepted.
   bool get acceptsClipboard => paired && isConnected && supportsClipboard;
+}
+
+/// [json] decoded by [fromJson], or null if it doesn't fit: a plugin's
+/// state is optional, so a shape from another daemon version is ignored
+/// rather than failing the whole device.
+T? _decode<T>(
+  Map<String, Object?> json,
+  T Function(Map<String, Object?>) fromJson,
+) {
+  try {
+    return fromJson(json);
+  } on Object {
+    return null;
+  }
 }

@@ -1,14 +1,8 @@
 //! `kdeconnect.battery` packet model.
-//!
-//! A peer reports its battery whenever the level or charging state changes,
-//! and once when the plugin loads, which is right after pairing or
-//! connecting. Listing the packet type among our incoming capabilities is
-//! what makes KDE Connect for Android send it; nothing needs to be
-//! requested. This build doesn't report a battery of its own.
 
 use serde::{Deserialize, Serialize};
 
-use crate::device::BatteryStatus;
+use super::BatteryStatus;
 
 /// The packet type and capability identifier for battery reports.
 pub const PACKET_TYPE: &str = "kdeconnect.battery";
