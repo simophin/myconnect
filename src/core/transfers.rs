@@ -35,14 +35,12 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use serde::{Deserialize, Serialize};
+
 use super::{
-    CoreError, EventBus, EventData, OperationErrorCode, Transfer, TransferDirection,
-    TransferSnapshot, TransferStatus, settings::Settings,
+    CoreError, DeviceSnapshot, EventBus, EventData, OperationErrorCode, settings::Settings,
 };
-use crate::{
-    core::DeviceSnapshot,
-    transport::payload::{self, PayloadError},
-};
+use crate::transport::payload::{self, PayloadError};
 
 /// Conservative default cap on a single incoming or outgoing transfer, in
 /// bytes. This exists to keep a misbehaving or malicious peer from causing
@@ -149,6 +147,148 @@ const UPLOAD_CHANNEL_CAPACITY: usize = 4;
 /// into a transfer's task, which drains it with [`TransferHandle::forward`].
 pub fn upload_channel() -> (mpsc::Sender<Bytes>, mpsc::Receiver<Bytes>) {
     mpsc::channel(UPLOAD_CHANNEL_CAPACITY)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferDirection {
+    Incoming,
+    Outgoing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferStatus {
+    Queued,
+    Connecting,
+    Transferring,
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+impl TransferStatus {
+    fn can_transition_to(self, next: Self) -> bool {
+        matches!(
+            (self, next),
+            (
+                Self::Queued,
+                Self::Connecting | Self::Transferring | Self::Cancelled | Self::Failed
+            ) | (
+                Self::Connecting,
+                Self::Transferring | Self::Cancelled | Self::Failed
+            ) | (
+                Self::Transferring,
+                Self::Completed | Self::Cancelled | Self::Failed
+            )
+        )
+    }
+}
+
+/// Immutable view of a file transfer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferSnapshot {
+    pub id: Uuid,
+    pub device_id: String,
+    pub device_name: String,
+    pub direction: TransferDirection,
+    pub status: TransferStatus,
+    pub file_name: String,
+    pub total_bytes: u64,
+    pub transferred_bytes: u64,
+    pub created_at: u64,
+    pub updated_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<OperationErrorCode>,
+    /// Where a completed incoming file was saved. It can differ from
+    /// `file_name` when a file of that name already existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_path: Option<PathBuf>,
+}
+
+/// Mutable core representation of a transfer operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Transfer {
+    snapshot: TransferSnapshot,
+}
+
+impl Transfer {
+    pub fn new(snapshot: TransferSnapshot) -> Self {
+        Self { snapshot }
+    }
+
+    pub fn snapshot(&self) -> TransferSnapshot {
+        self.snapshot.clone()
+    }
+
+    pub fn transition(
+        &mut self,
+        next: TransferStatus,
+        updated_at: u64,
+        error_code: Option<OperationErrorCode>,
+    ) -> Result<TransferSnapshot, TransferTransitionError> {
+        let current = self.snapshot.status;
+        if !current.can_transition_to(next) {
+            return Err(TransferTransitionError { current, next });
+        }
+        self.snapshot.status = next;
+        self.snapshot.updated_at = updated_at;
+        self.snapshot.error_code = error_code;
+        Ok(self.snapshot())
+    }
+
+    pub fn record_progress(
+        &mut self,
+        transferred_bytes: u64,
+        updated_at: u64,
+    ) -> Result<TransferSnapshot, TransferProgressError> {
+        if self.snapshot.status != TransferStatus::Transferring {
+            return Err(TransferProgressError::NotTransferring(self.snapshot.status));
+        }
+        if transferred_bytes < self.snapshot.transferred_bytes
+            || transferred_bytes > self.snapshot.total_bytes
+        {
+            return Err(TransferProgressError::InvalidByteCount {
+                previous: self.snapshot.transferred_bytes,
+                next: transferred_bytes,
+                total: self.snapshot.total_bytes,
+            });
+        }
+        self.snapshot.transferred_bytes = transferred_bytes;
+        self.snapshot.updated_at = updated_at;
+        Ok(self.snapshot())
+    }
+
+    /// Mark an incoming transfer completed, recording where the file landed.
+    pub fn complete(
+        &mut self,
+        saved_path: Option<PathBuf>,
+        updated_at: u64,
+    ) -> Result<TransferSnapshot, TransferTransitionError> {
+        self.transition(TransferStatus::Completed, updated_at, None)?;
+        self.snapshot.saved_path = saved_path;
+        Ok(self.snapshot())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[error("invalid transfer transition from {current:?} to {next:?}")]
+pub struct TransferTransitionError {
+    pub current: TransferStatus,
+    pub next: TransferStatus,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum TransferProgressError {
+    #[error("cannot update progress while transfer is {0:?}")]
+    NotTransferring(TransferStatus),
+    #[error("invalid transfer byte count {next}; previous is {previous} and total is {total}")]
+    InvalidByteCount {
+        previous: u64,
+        next: u64,
+        total: u64,
+    },
 }
 
 /// Every transfer this daemon process knows about. Cheap to clone.
@@ -631,7 +771,8 @@ pub enum FileNameError {
 mod tests {
     use super::*;
     use crate::{
-        core::{DeviceReachability, DeviceSnapshot, settings::SettingsDefaults},
+        core::settings::SettingsDefaults,
+        core::{DeviceReachability, DeviceSnapshot},
         protocol::DeviceType,
     };
 
@@ -860,5 +1001,49 @@ mod tests {
 
         let third = unique_destination(directory.path(), "photo.jpg");
         assert_eq!(third, directory.path().join("photo (2).jpg"));
+    }
+
+    fn transfer(status: TransferStatus) -> Transfer {
+        Transfer::new(TransferSnapshot {
+            id: Uuid::nil(),
+            device_id: "740bd4b9b4184ee497d6caf1da8151be".into(),
+            device_name: "FOSS Phone".into(),
+            direction: TransferDirection::Outgoing,
+            status,
+            file_name: "photo.jpg".into(),
+            total_bytes: 10,
+            transferred_bytes: 0,
+            created_at: 100,
+            updated_at: 100,
+            error_code: None,
+            saved_path: None,
+        })
+    }
+
+    #[test]
+    fn transfer_rejects_invalid_transitions_and_progress() {
+        let mut transfer = transfer(TransferStatus::Queued);
+        assert!(
+            transfer
+                .transition(TransferStatus::Completed, 101, None)
+                .is_err()
+        );
+        transfer
+            .transition(TransferStatus::Transferring, 102, None)
+            .unwrap();
+        transfer.record_progress(8, 103).unwrap();
+        assert!(matches!(
+            transfer.record_progress(7, 104),
+            Err(TransferProgressError::InvalidByteCount { .. })
+        ));
+        assert!(transfer.record_progress(11, 104).is_err());
+    }
+
+    #[test]
+    fn transfer_snapshots_use_stable_camel_case_json_names() {
+        let transfer_json =
+            serde_json::to_value(transfer(TransferStatus::Queued).snapshot()).unwrap();
+        assert_eq!(transfer_json["fileName"], "photo.jpg");
+        assert_eq!(transfer_json["totalBytes"], 10);
     }
 }

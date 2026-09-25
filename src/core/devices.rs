@@ -1,4 +1,5 @@
-//! Peer device state and registry.
+//! Devices: the registry of known peers, and what clients see of a device,
+//! with what plugins add to it.
 
 use std::collections::BTreeMap;
 
@@ -6,7 +7,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::protocol::{DeviceType, IdentityBody, IdentityValidationError};
+use super::{
+    Core, CoreError, EventData, OperationErrorCode, pairing::fail_active_pairing, unix_millis,
+};
+use crate::{
+    config::{TrustStore, TrustedDevice, TrustedIdentity},
+    protocol::{DeviceType, IdentityBody, IdentityValidationError, Packet, PairingBody},
+};
 
 /// Whether a known peer can currently be reached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,11 +189,250 @@ pub enum DeviceRegistryError {
     UnknownDevice(String),
 }
 
+impl Core {
+    /// The device as clients see it, with what plugins add.
+    pub fn device(&self, device_id: &str) -> Option<DeviceSnapshot> {
+        let device = self.state.read().ok()?.devices.get(device_id)?;
+        Some(self.with_plugin_state(device))
+    }
+
+    /// Every known device as clients see it: paired ones (even while
+    /// offline) and unpaired ones that have announced themselves.
+    pub fn devices(&self) -> Result<Vec<DeviceSnapshot>, CoreError> {
+        // Plugins add to device snapshots, so those are read out before
+        // their state is asked for, never while holding the lock.
+        let devices = self.read_state()?.devices.snapshot();
+        Ok(devices
+            .into_iter()
+            .map(|device| self.with_plugin_state(device))
+            .collect())
+    }
+
+    pub fn replace_devices(&self, devices: DeviceRegistry) -> Result<(), CoreError> {
+        self.state
+            .write()
+            .map_err(|_| CoreError::StateUnavailable)?
+            .devices = devices;
+        Ok(())
+    }
+
+    pub fn discover_device(
+        &self,
+        identity: &IdentityBody,
+        paired: bool,
+        observed_at: u64,
+    ) -> Result<DeviceSnapshot, CoreError> {
+        let (previous, snapshot) = {
+            let mut state = self
+                .state
+                .write()
+                .map_err(|_| CoreError::StateUnavailable)?;
+            let previous = state.devices.get(&identity.device_id);
+            let snapshot = state
+                .devices
+                .discover(identity, paired, observed_at)
+                .map_err(|_| CoreError::StateUnavailable)?;
+            (previous, snapshot)
+        };
+        let snapshot = self.with_plugin_state(snapshot);
+        let event = if previous.is_none() {
+            EventData::DeviceDiscovered(snapshot.clone())
+        } else {
+            EventData::DeviceUpdated(snapshot.clone())
+        };
+        self.events.publish(event)?;
+        Ok(snapshot)
+    }
+
+    pub fn mark_device_connected(
+        &self,
+        device_id: &str,
+        observed_at: u64,
+    ) -> Result<DeviceSnapshot, CoreError> {
+        let snapshot = self
+            .state
+            .write()
+            .map_err(|_| CoreError::StateUnavailable)?
+            .devices
+            .mark_connected(device_id, observed_at)
+            .map_err(|_| CoreError::StateUnavailable)?;
+        let snapshot = self.with_plugin_state(snapshot);
+        self.events
+            .publish(EventData::DeviceConnected(snapshot.clone()))?;
+        Ok(snapshot)
+    }
+
+    pub fn mark_device_disconnected(&self, device_id: &str) -> Result<DeviceSnapshot, CoreError> {
+        let snapshot = self
+            .state
+            .write()
+            .map_err(|_| CoreError::StateUnavailable)?
+            .devices
+            .mark_disconnected(device_id)
+            .map_err(|_| CoreError::StateUnavailable)?;
+        let snapshot = self.with_plugin_state(snapshot);
+        self.events
+            .publish(EventData::DeviceDisconnected(snapshot.clone()))?;
+        Ok(snapshot)
+    }
+
+    /// Remove trust, disconnect, and forget a device entirely.
+    pub fn forget_device(&self, device_id: &str) -> Result<(), CoreError> {
+        let (forgotten, cancellation, failed_pairing) = {
+            let mut state = self
+                .state
+                .write()
+                .map_err(|_| CoreError::StateUnavailable)?;
+            let connection = state.connections.get(device_id);
+            let cancellation = connection.map(|c| c.cancellation.clone());
+            // Tell the peer before the connection closes, so it drops its
+            // trust in us too. The transport flushes packets already queued
+            // when the connection is cancelled.
+            if let Some(connection) = connection {
+                let body = PairingBody {
+                    pair: false,
+                    timestamp: None,
+                    extra: Default::default(),
+                };
+                if let Ok(packet) = Packet::from_body(unix_millis(), "kdeconnect.pair", &body) {
+                    let _ = connection.packets.try_send(packet);
+                }
+            }
+            let failed_pairing =
+                fail_active_pairing(&mut state, device_id, OperationErrorCode::Internal);
+            let forgotten = state.devices.forget(device_id);
+            state.connections.remove(device_id);
+            (forgotten, cancellation, failed_pairing)
+        };
+        let Some(forgotten) = forgotten else {
+            return Err(CoreError::UnknownDevice);
+        };
+        self.trust_store
+            .remove(device_id)
+            .map_err(CoreError::Trust)?;
+        let ctx = self.plugin_context();
+        if let Some(cancellation) = cancellation {
+            cancellation.cancel();
+            self.plugins.disconnected(&ctx, device_id);
+        }
+        self.plugins.unpaired(&ctx, device_id);
+        if let Some(snapshot) = failed_pairing {
+            let _ = self.events.publish(EventData::PairingUpdated(snapshot));
+        }
+        let _ = self.events.publish(EventData::DeviceForgotten(
+            self.with_plugin_state(forgotten),
+        ));
+        Ok(())
+    }
+
+    /// Publish `device.updated` with the device's current snapshot.
+    pub(super) fn publish_device_update(&self, device_id: &str) {
+        let snapshot = self
+            .state
+            .read()
+            .ok()
+            .and_then(|state| state.devices.get(device_id));
+        if let Some(snapshot) = snapshot {
+            let _ = self
+                .events
+                .publish(EventData::DeviceUpdated(self.with_plugin_state(snapshot)));
+        }
+    }
+
+    /// `snapshot` as clients see it, with what each plugin adds. Call it
+    /// without holding the state lock: it calls into plugins.
+    pub(super) fn with_plugin_state(&self, mut snapshot: DeviceSnapshot) -> DeviceSnapshot {
+        snapshot.plugins = self.plugins.device_state(&snapshot.device_id);
+        snapshot
+    }
+
+    /// How a connected peer currently describes itself, for its trust record.
+    pub(super) fn known_identity(&self, device_id: &str) -> Option<TrustedIdentity> {
+        let state = self.state.read().ok()?;
+        state
+            .devices
+            .get(device_id)
+            .map(|device| trusted_identity(&device))
+    }
+
+    /// Bring a paired peer's trust record up to date with how it describes
+    /// itself now, so it is listed that way while offline. Called once a
+    /// connection is authenticated, never from an unauthenticated
+    /// discovery announcement.
+    pub(super) fn refresh_trusted_identity(&self, device: &DeviceSnapshot) {
+        if !device.paired {
+            return;
+        }
+        let Ok(Some(mut trusted)) = self.trust_store.get(&device.device_id) else {
+            return;
+        };
+        let identity = trusted_identity(device);
+        if trusted.last_identity.as_ref() == Some(&identity) {
+            return;
+        }
+        trusted.last_identity = Some(identity);
+        if let Err(error) = self.trust_store.put(&trusted) {
+            tracing::debug!(device_id = device.device_id, %error, "could not update trust record");
+        }
+    }
+}
+
+/// The paired peers in `trust_store`, as unreachable until they are seen.
+pub(super) fn paired_devices(trust_store: &(dyn TrustStore + Send + Sync)) -> DeviceRegistry {
+    let mut registry = DeviceRegistry::new();
+    match trust_store.list() {
+        Ok(devices) => {
+            for device in devices {
+                registry.restore(paired_device_snapshot(device));
+            }
+        }
+        Err(error) => tracing::warn!(%error, "could not list paired devices"),
+    }
+    registry
+}
+
+fn paired_device_snapshot(device: TrustedDevice) -> DeviceSnapshot {
+    // A record from before identities were kept shows its ID until the peer
+    // next connects and fills it in.
+    let identity = device.last_identity.unwrap_or_else(|| TrustedIdentity {
+        device_name: device.device_id.clone(),
+        device_type: DeviceType::Phone,
+        incoming_capabilities: Vec::new(),
+        outgoing_capabilities: Vec::new(),
+    });
+    DeviceSnapshot {
+        device_id: device.device_id,
+        device_name: identity.device_name,
+        device_type: identity.device_type,
+        protocol_version: device.last_trusted_protocol_version,
+        incoming_capabilities: identity.incoming_capabilities,
+        outgoing_capabilities: identity.outgoing_capabilities,
+        reachability: DeviceReachability::Unavailable,
+        paired: true,
+        pairing: false,
+        last_seen_at: 0,
+        plugins: Default::default(),
+    }
+}
+
+fn trusted_identity(device: &DeviceSnapshot) -> TrustedIdentity {
+    TrustedIdentity {
+        device_name: device.device_name.clone(),
+        device_type: device.device_type,
+        incoming_capabilities: device.incoming_capabilities.clone(),
+        outgoing_capabilities: device.outgoing_capabilities.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{Map, json};
 
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+
     use super::*;
+    use crate::core::testing::{MemoryTrustStore, handle, handle_with_trust, make_identity};
 
     fn identity() -> IdentityBody {
         IdentityBody {
@@ -259,5 +505,90 @@ mod tests {
                 "plugins": {}
             })
         );
+    }
+
+    #[test]
+    fn paired_devices_are_listed_offline_and_keep_their_latest_identity() {
+        let described = "740bd4b9b4184ee497d6caf1da8151be";
+        let undescribed = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let trusted = |device_id: &str, last_identity| TrustedDevice {
+            device_id: device_id.into(),
+            certificate_der: vec![1, 2, 3],
+            last_trusted_protocol_version: 8,
+            last_identity,
+        };
+        let (handle, _commands) = handle_with_trust(MemoryTrustStore::new(vec![
+            trusted(
+                described,
+                Some(TrustedIdentity {
+                    device_name: "Pixel".into(),
+                    device_type: DeviceType::Phone,
+                    incoming_capabilities: vec!["kdeconnect.ping".into()],
+                    outgoing_capabilities: Vec::new(),
+                }),
+            ),
+            trusted(undescribed, None),
+        ]));
+
+        let devices = handle.devices().unwrap();
+        let names: Vec<_> = devices.iter().map(|d| d.device_name.as_str()).collect();
+        assert_eq!(names, ["Pixel", undescribed]);
+        assert!(devices.iter().all(|d| d.paired
+            && d.reachability == DeviceReachability::Unavailable
+            && d.plugins.is_empty()));
+        assert_eq!(devices[0].incoming_capabilities, ["kdeconnect.ping"]);
+
+        let mut identity = make_identity(undescribed, vec!["kdeconnect.share.request".into()]);
+        identity.device_name = "Laptop".into();
+        identity.device_type = DeviceType::Laptop;
+        handle.discover_device(&identity, true, 5).unwrap();
+        let (tx, _rx) = mpsc::channel(4);
+        handle
+            .register_connection(
+                undescribed,
+                vec![1, 2, 3],
+                8,
+                tx,
+                CancellationToken::new(),
+                5,
+            )
+            .unwrap();
+        let stored = handle.trust_store.get(undescribed).unwrap().unwrap();
+        assert_eq!(
+            stored.last_identity,
+            Some(TrustedIdentity {
+                device_name: "Laptop".into(),
+                device_type: DeviceType::Laptop,
+                incoming_capabilities: vec!["kdeconnect.share.request".into()],
+                outgoing_capabilities: Vec::new(),
+            })
+        );
+
+        handle.unregister_connection(undescribed);
+        let device = handle.device(undescribed).expect("the device");
+        assert_eq!(device.device_name, "Laptop");
+        assert_eq!(device.reachability, DeviceReachability::Unavailable);
+    }
+
+    #[test]
+    fn forgetting_a_connected_device_tells_the_peer_before_disconnecting() {
+        let (handle, _commands) = handle();
+        let device_id = "740bd4b9b4184ee497d6caf1da8151be";
+        handle
+            .discover_device(&make_identity(device_id, Vec::new()), true, 1)
+            .unwrap();
+        let (tx, mut rx) = mpsc::channel(4);
+        let cancellation = CancellationToken::new();
+        handle
+            .register_connection(device_id, vec![1, 2, 3], 8, tx, cancellation.clone(), 1)
+            .unwrap();
+
+        handle.forget_device(device_id).unwrap();
+
+        let sent = rx.try_recv().unwrap();
+        assert_eq!(sent.packet_type, "kdeconnect.pair");
+        let body: PairingBody = sent.body_as().unwrap();
+        assert!(!body.pair);
+        assert!(cancellation.is_cancelled());
     }
 }

@@ -1,6 +1,6 @@
 //! User settings: persisted preferences, layered under the start options of
 //! the current run and over built-in defaults. Kept free of sockets and
-//! application state so the precedence rules can be tested on their own.
+//! the rest of the core's state so the precedence rules can be tested on their own.
 //!
 //! The core's own settings are typed fields. Each plugin with settings owns
 //! a section under `plugins.<id>` (see [`super::PluginSettings`]); the core

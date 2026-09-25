@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::broadcast;
 
+use super::DeviceSnapshot;
 use super::{PairingSnapshot, PluginEvent, SettingsSnapshot, TransferSnapshot};
-use crate::core::DeviceSnapshot;
 
-/// Data carried by an application event: one of the core's own, or a
+/// Data carried by an event: one of the core's own, or a
 /// plugin's. Both serialize as `{"type": ..., "data": ...}`; any type the
 /// core doesn't know deserializes as [`EventData::Plugin`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,7 +67,7 @@ impl EventData {
     }
 }
 
-/// Sequenced event sent to API and other application clients.
+/// Sequenced event sent to `/events` and other clients of the core.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CoreEvent {

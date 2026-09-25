@@ -171,7 +171,7 @@ impl LanService {
     pub async fn start(
         config: LanConfig,
         local: LocalDeviceInfo,
-        application: Core,
+        core: Core,
         commands: mpsc::Receiver<LanCommand>,
         identity: Arc<LocalIdentity>,
         trust_store: Arc<dyn TrustStore + Send + Sync>,
@@ -202,7 +202,7 @@ impl LanService {
         let task = tokio::spawn(run(
             config,
             local,
-            application,
+            core,
             commands,
             identity,
             trust_store,
@@ -258,7 +258,7 @@ impl Drop for LanService {
 async fn run(
     config: LanConfig,
     mut local: LocalDeviceInfo,
-    application: Core,
+    core: Core,
     mut commands: mpsc::Receiver<LanCommand>,
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
@@ -268,7 +268,7 @@ async fn run(
     registry: Arc<ConnectionRegistry>,
     cancellation: CancellationToken,
 ) {
-    let mut device_name = application.watch_local_device_name();
+    let mut device_name = core.watch_local_device_name();
     let mut device_name_open = true;
     let mut connections = JoinSet::new();
     let connection_limit = Arc::new(Semaphore::new(MAX_PENDING_CONNECTIONS));
@@ -325,7 +325,7 @@ async fn run(
                         && identity_body.device_id != local.device_id
                     {
                         let paired = is_trusted(&trust_store, &identity_body.device_id);
-                        let _ = application.discover_device(&identity_body, paired, unix_millis());
+                        let _ = core.discover_device(&identity_body, paired, unix_millis());
                         if let Some(port) = tcp_port(&identity_body)
                             && let Ok(permit) = connection_limit.clone().try_acquire_owned()
                             && let Some(reservation) = registry.reserve_outgoing(&local.device_id, &identity_body.device_id)
@@ -333,7 +333,7 @@ async fn run(
                             let address = SocketAddr::new(source.ip(), port);
                             spawn_outgoing(
                                 &mut connections, address, identity_body.clone(), reservation,
-                                permit, local.clone(), application.clone(), identity.clone(), trust_store.clone(),
+                                permit, local.clone(), core.clone(), identity.clone(), trust_store.clone(),
                                 announcement.clone(), registry.clone(), cancellation.clone(),
                                 config.connect_timeout, config.identity_timeout,
                             );
@@ -349,7 +349,7 @@ async fn run(
                 Ok((stream, _)) => {
                     if let Ok(permit) = connection_limit.clone().try_acquire_owned() {
                         spawn_incoming(
-                            &mut connections, stream, permit, local.clone(), application.clone(),
+                            &mut connections, stream, permit, local.clone(), core.clone(),
                             identity.clone(), trust_store.clone(), announcement.clone(), registry.clone(),
                             cancellation.clone(), config.identity_timeout,
                         );
@@ -388,7 +388,7 @@ fn spawn_outgoing(
     reservation: Reservation,
     permit: OwnedSemaphorePermit,
     local: LocalDeviceInfo,
-    application: Core,
+    core: Core,
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     announcement: Arc<Vec<u8>>,
@@ -408,7 +408,7 @@ fn spawn_outgoing(
                 Some(discovered),
                 reservation,
                 local,
-                application.clone(),
+                core.clone(),
                 identity,
                 trust_store,
                 announcement,
@@ -418,7 +418,7 @@ fn spawn_outgoing(
             )
             .await;
         } else if registry.release(&expected_device_id, reservation.id) {
-            let _ = application.mark_device_disconnected(&expected_device_id);
+            let _ = core.mark_device_disconnected(&expected_device_id);
         }
     });
 }
@@ -429,7 +429,7 @@ fn spawn_incoming(
     stream: TcpStream,
     permit: OwnedSemaphorePermit,
     local: LocalDeviceInfo,
-    application: Core,
+    core: Core,
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     announcement: Arc<Vec<u8>>,
@@ -449,7 +449,7 @@ fn spawn_incoming(
                 cancellation: CancellationToken::new(),
             },
             local,
-            application,
+            core,
             identity,
             trust_store,
             announcement,
@@ -477,7 +477,7 @@ async fn handle_connection(
     discovered: Option<IdentityBody>,
     reservation: Reservation,
     local: LocalDeviceInfo,
-    application: Core,
+    core: Core,
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     announcement: Arc<Vec<u8>>,
@@ -600,7 +600,7 @@ async fn handle_connection(
     // of the discovery broadcast in the same process), so ensure the device
     // registry has an entry before registering the connection against it.
     let paired = trusted.is_some();
-    if application
+    if core
         .discover_device(&pre_tls_identity, paired, unix_millis())
         .is_err()
     {
@@ -612,7 +612,7 @@ async fn handle_connection(
     // Keep one sender alive for the lifetime of this task so the receiver
     // never observes a spurious `None` while the connection is registered.
     let _keep_alive = packet_tx.clone();
-    if let Err(error) = application.register_connection(
+    if let Err(error) = core.register_connection(
         &device_id,
         peer_certificate_der,
         inner_identity.protocol_version,
@@ -625,7 +625,7 @@ async fn handle_connection(
         return;
     }
     if let Some(peer_addr) = peer_addr {
-        application.set_connection_peer_addr(&device_id, peer_addr);
+        core.set_connection_peer_addr(&device_id, peer_addr);
     }
     debug!(local_id = %local.device_id, %device_id, ?role, "session registered");
 
@@ -659,7 +659,7 @@ async fn handle_connection(
                 Ok(length) => match codec.decode(&buffer[..length]) {
                     Ok(packets) => {
                         for packet in packets {
-                            application.handle_peer_packet(&device_id, packet);
+                            core.handle_peer_packet(&device_id, packet);
                         }
                     }
                     Err(error) => { debug!(local_id = %local.device_id, %device_id, %error, "loop end: decode error"); break }
@@ -669,7 +669,7 @@ async fn handle_connection(
     }
 
     debug!(local_id = %local.device_id, %device_id, "session ended, unregistering");
-    application.unregister_connection(&device_id);
+    core.unregister_connection(&device_id);
     registry.release(&device_id, reservation.id);
 }
 

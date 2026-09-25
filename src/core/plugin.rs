@@ -20,8 +20,8 @@ use futures_util::future::{BoxFuture, join_all};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
-use super::{Core, CoreError, EventData, PayloadPeer, Transfers};
-use crate::{core::DeviceSnapshot, protocol::Packet};
+use super::{Core, CoreError, DeviceSnapshot, EventData, PayloadPeer, Transfers};
+use crate::protocol::Packet;
 
 /// A feature of the daemon, plugged into the core.
 pub trait Plugin: Send + Sync + 'static {
