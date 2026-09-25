@@ -370,8 +370,31 @@ impl Transfers {
         file_name: String,
         total_bytes: u64,
     ) -> TransferHandle {
+        self.begin_as(None, device, direction, file_name, total_bytes)
+            .expect("a fresh id is never taken")
+    }
+
+    /// Like [`Self::begin`], but with `id`, when given, as the transfer's
+    /// id: one a client chose so that it can follow the transfer before the
+    /// request that starts it answers. Fails with
+    /// [`CoreError::TransferExists`] if a transfer already has that id.
+    pub fn begin_as(
+        &self,
+        id: Option<Uuid>,
+        device: &DeviceSnapshot,
+        direction: TransferDirection,
+        file_name: String,
+        total_bytes: u64,
+    ) -> Result<TransferHandle, CoreError> {
+        let mut state = self.inner.state();
+        let id = match id {
+            Some(id) if state.records.contains_key(&id) => return Err(CoreError::TransferExists),
+            Some(id) => id,
+            None => std::iter::repeat_with(Uuid::new_v4)
+                .find(|id| !state.records.contains_key(id))
+                .expect("the iterator is endless"),
+        };
         let now = unix_millis();
-        let id = Uuid::new_v4();
         let transfer = Transfer::new(TransferSnapshot {
             id,
             device_id: device.device_id.clone(),
@@ -388,27 +411,25 @@ impl Transfers {
         });
         let started = transfer.snapshot();
         let cancellation = CancellationToken::new();
-        {
-            let mut state = self.inner.state();
-            state.records.insert(id, transfer);
-            state.active.insert(
-                id,
-                Active {
-                    device_id: device.device_id.clone(),
-                    cancellation: cancellation.clone(),
-                    task: None,
-                },
-            );
-        }
+        state.records.insert(id, transfer);
+        state.active.insert(
+            id,
+            Active {
+                device_id: device.device_id.clone(),
+                cancellation: cancellation.clone(),
+                task: None,
+            },
+        );
+        drop(state);
         self.inner.publish(EventData::TransferStarted(started));
-        TransferHandle {
+        Ok(TransferHandle {
             id,
             total_bytes,
             inner: self.inner.clone(),
             cancellation,
             last_progress_event: None,
             finished: false,
-        }
+        })
     }
 
     /// Every transfer, oldest first by id.
@@ -839,6 +860,35 @@ mod tests {
 
         assert_eq!(published, vec![1, 100]);
         assert_eq!(transfer.snapshot().transferred_bytes, 100);
+    }
+
+    #[test]
+    fn a_client_chosen_id_is_used_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let transfers = transfers(directory.path(), 8);
+        let id = Uuid::new_v4();
+        let transfer = transfers
+            .begin_as(
+                Some(id),
+                &device("peer"),
+                TransferDirection::Outgoing,
+                "a".into(),
+                1,
+            )
+            .unwrap();
+        assert_eq!(transfer.id(), id);
+        transfer.cancelled();
+        assert!(matches!(
+            transfers.begin_as(
+                Some(id),
+                &device("peer"),
+                TransferDirection::Outgoing,
+                "b".into(),
+                1
+            ),
+            Err(CoreError::TransferExists)
+        ));
+        assert_eq!(transfers.get(id).unwrap().file_name, "a");
     }
 
     #[test]

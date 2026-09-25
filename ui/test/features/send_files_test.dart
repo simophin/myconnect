@@ -38,7 +38,7 @@ void main() {
           incomingCapabilities: [shareCapability],
         ),
       ];
-    when(() => daemon.api.sendFile(any(), any())).thenAnswer(
+    when(() => daemon.api.sendFileWithAnyId(any(), any())).thenAnswer(
       (invocation) async => transfer(
         deviceId: invocation.positionalArguments[0] as String,
         direction: TransferDirection.outgoing,
@@ -56,10 +56,10 @@ void main() {
     await _drop(tester, [photo, notes]);
 
     verifyInOrder([
-      () => daemon.api.sendFile(_pixelId, photo),
-      () => daemon.api.sendFile(_pixelId, notes),
+      () => daemon.api.sendFileWithAnyId(_pixelId, photo),
+      () => daemon.api.sendFileWithAnyId(_pixelId, notes),
     ]);
-    verifyNever(() => daemon.api.sendFile(_laptopId, any()));
+    verifyNever(() => daemon.api.sendFileWithAnyId(_laptopId, any()));
     expect(find.byType(AlertDialog), findsNothing);
     // The device's page, where the transfers show.
     expect(find.text('Device ID'), findsOneWidget);
@@ -79,7 +79,7 @@ void main() {
     await _drop(tester, [photo]);
 
     expect(find.text('Send photo.jpg'), findsOneWidget);
-    verifyNever(() => daemon.api.sendFile(any(), any()));
+    verifyNever(() => daemon.api.sendFileWithAnyId(any(), any()));
     await tester.tap(
       find.descendant(
         of: find.byType(AlertDialog),
@@ -88,7 +88,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    verify(() => daemon.api.sendFile(_laptopId, photo)).called(1);
+    verify(() => daemon.api.sendFileWithAnyId(_laptopId, photo)).called(1);
     expect(find.text('Device ID'), findsOneWidget);
   });
 
@@ -113,7 +113,7 @@ void main() {
     );
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
-    verifyNever(() => daemon.api.sendFile(any(), any()));
+    verifyNever(() => daemon.api.sendFileWithAnyId(any(), any()));
   });
 
   testWidgets('a dropped folder is refused', (tester) async {
@@ -123,7 +123,7 @@ void main() {
     await _drop(tester, [files.path]);
 
     expect(find.text('Only files can be sent, not folders.'), findsOneWidget);
-    verifyNever(() => daemon.api.sendFile(any(), any()));
+    verifyNever(() => daemon.api.sendFileWithAnyId(any(), any()));
   });
 
   testWidgets('the tray sends files to the device they were picked for', (
@@ -140,8 +140,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(daemon.shell.visible, isFalse);
-    verify(() => daemon.api.sendFile(_laptopId, photo)).called(1);
-    verify(() => daemon.api.sendFile(_laptopId, notes)).called(1);
+    verify(() => daemon.api.sendFileWithAnyId(_laptopId, photo)).called(1);
+    verify(() => daemon.api.sendFileWithAnyId(_laptopId, notes)).called(1);
     expect(daemon.notifications.shown.values, ['Sending 2 files.']);
   });
 
@@ -172,7 +172,7 @@ void main() {
     daemon.shell.selectTrayItem(['Laptop', 'Send files…']);
     await tester.pumpAndSettle();
 
-    verifyNever(() => daemon.api.sendFile(any(), any()));
+    verifyNever(() => daemon.api.sendFileWithAnyId(any(), any()));
     expect(daemon.notifications.shown.values, [
       'The device is not connected right now.',
     ]);
@@ -180,7 +180,7 @@ void main() {
 
   testWidgets('failed uploads are reported once', (tester) async {
     final daemon = daemonWithRecipients();
-    when(() => daemon.api.sendFile(any(), any())).thenThrow(
+    when(() => daemon.api.sendFileWithAnyId(any(), any())).thenThrow(
       const ApiException(code: 'device_not_connected', statusCode: 409),
     );
     await pumpApp(tester, daemon);

@@ -33,6 +33,7 @@ use russh_sftp::{
 };
 use thiserror::Error;
 use tokio::{io::AsyncWriteExt, sync::mpsc};
+use uuid::Uuid;
 
 pub use files::{DirectoryListing, FileEntry, FileKind};
 pub use packet::{
@@ -256,7 +257,7 @@ impl BrowsePlugin {
     /// or, if that is taken, a numbered variant of it, so an upload never
     /// replaces an existing file. The caller streams the content into the
     /// returned sender; an upload that ends early is removed from the
-    /// device.
+    /// device. The transfer gets `id` if the client chose one.
     pub async fn upload(
         &self,
         ctx: &PluginContext,
@@ -264,12 +265,18 @@ impl BrowsePlugin {
         directory: &str,
         file_name: &str,
         declared_size: u64,
+        id: Option<Uuid>,
     ) -> Result<(TransferSnapshot, mpsc::Sender<Bytes>), BrowseError> {
         let directory = normalize_path(directory)?;
         validate_remote_name(file_name).map_err(|_| CoreError::InvalidFileName)?;
         let limit = ctx.transfers().max_bytes();
         if declared_size > limit {
             return Err(CoreError::TransferTooLarge { limit }.into());
+        }
+        // Checked again when the transfer begins; this spares creating a
+        // file for a request that would be refused.
+        if id.is_some_and(|id| ctx.transfers().get(id).is_some()) {
+            return Err(CoreError::TransferExists.into());
         }
         let device = ctx.device(device_id).ok_or(CoreError::UnknownDevice)?;
         let session = self.sessions.get(ctx, device_id).await?;
@@ -282,16 +289,24 @@ impl BrowsePlugin {
             return Err(BrowseError::NotADirectory);
         }
 
-        let (path, remote) = self
+        let (path, mut remote) = self
             .create_unique_file(device_id, &session, &directory, file_name)
             .await?;
         let (_, final_name) = split_remote_path(&path).expect("created under a directory");
-        let transfer = ctx.transfers().begin(
+        let transfer = match ctx.transfers().begin_as(
+            id,
             &device,
             TransferDirection::Outgoing,
             final_name.to_owned(),
             declared_size,
-        );
+        ) {
+            Ok(transfer) => transfer,
+            Err(error) => {
+                let _ = remote.shutdown().await;
+                let _ = session.sftp().remove_file(path.as_str()).await;
+                return Err(error.into());
+            }
+        };
         let started = transfer.snapshot();
         let (chunk_tx, chunk_rx) = upload_channel();
         transfer.spawn(move |transfer| run_upload(transfer, session, path, remote, chunk_rx));

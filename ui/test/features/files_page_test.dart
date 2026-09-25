@@ -265,7 +265,7 @@ void main() {
     )..writeAsStringSync('jpg')).path;
     final daemon = _phoneDaemon();
     when(
-      () => daemon.api.uploadFile(any(), any(), any()),
+      () => daemon.api.uploadFileWithAnyId(any(), any(), any()),
     ).thenAnswer((_) async => transfer(direction: TransferDirection.outgoing));
     await pumpApp(tester, daemon);
     await _openInternal(tester);
@@ -275,8 +275,9 @@ void main() {
     await _dropEvent(tester, 'updated', [position.dx, position.dy]);
     await _dropEvent(tester, 'performOperation', [photo]);
 
-    verify(() => daemon.api.uploadFile(_pixelId, _internal, photo)).called(1);
-    verifyNever(() => daemon.api.sendFile(any(), any()));
+    verify(() => daemon.api.uploadFileWithAnyId(_pixelId, _internal, photo))
+        .called(1);
+    verifyNever(() => daemon.api.sendFileWithAnyId(any(), any()));
     // No dialog asks where to send it.
     expect(find.byType(AlertDialog), findsNothing);
   });

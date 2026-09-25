@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -18,6 +19,25 @@ typedef _Json = Map<String, Object?>;
 
 /// Typed client for the daemon's `/api/v1` control API — the only way the
 /// UI reads or changes state. Every failure surfaces as [ApiException].
+/// A fresh random (version 4) UUID, for a client to give a transfer it
+/// starts (`transferId` on [MyConnectApi.sendFile] and
+/// [MyConnectApi.uploadFile]).
+String newTransferId() {
+  final random = Random.secure();
+  final bytes = [for (var i = 0; i < 16; i++) random.nextInt(256)];
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  final hex = [for (final byte in bytes) byte.toRadixString(16).padLeft(2, '0')]
+      .join();
+  return [
+    hex.substring(0, 8),
+    hex.substring(8, 12),
+    hex.substring(12, 16),
+    hex.substring(16, 20),
+    hex.substring(20),
+  ].join('-');
+}
+
 class MyConnectApi {
   new(this._dio);
 
@@ -141,12 +161,15 @@ class MyConnectApi {
       );
 
   /// Upload the local file at [localPath] into [directory] on the device.
-  /// Like [sendFile], this completes at the end of the upload.
+  /// Like [sendFile], this completes at the end of the upload, and takes
+  /// the same [transferId] and [cancelToken].
   Future<Transfer> uploadFile(
     String deviceId,
     String directory,
-    String localPath,
-  ) async {
+    String localPath, {
+    String? transferId,
+    CancelToken? cancelToken,
+  }) async {
     // The daemon reads the directory before the file.
     final form = FormData()
       ..fields.add(MapEntry('path', directory))
@@ -156,7 +179,9 @@ class MyConnectApi {
         () => _dio.post<_Json>(
           '${_files(deviceId)}/upload',
           data: form,
+          queryParameters: _transferQuery(transferId),
           options: Options(receiveTimeout: Duration.zero),
+          cancelToken: cancelToken,
         ),
       ),
     );
@@ -189,6 +214,9 @@ class MyConnectApi {
     () => _dio.delete<void>(_files(deviceId), queryParameters: {'path': path}),
   );
 
+  static Map<String, Object>? _transferQuery(String? transferId) =>
+      transferId == null ? null : {'transferId': transferId};
+
   String _files(String deviceId) =>
       'devices/${Uri.encodeComponent(deviceId)}/files';
 
@@ -197,13 +225,26 @@ class MyConnectApi {
   /// The daemon answers only once the whole file has been streamed to the
   /// peer, so this completes at the end of the upload; follow progress
   /// through `transfer.*` events meanwhile.
-  Future<Transfer> sendFile(String deviceId, String path) async {
+  ///
+  /// With a [transferId] (a UUID), the transfer gets that id, so the caller
+  /// can follow it before this completes. If the transfer ends first
+  /// (cancelled from either end, or failed), the daemon answers at once,
+  /// but this only gets the answer after sending the whole file; cancel
+  /// [cancelToken] to stop sending instead.
+  Future<Transfer> sendFile(
+    String deviceId,
+    String path, {
+    String? transferId,
+    CancelToken? cancelToken,
+  }) async {
     final form = FormData()..files.add(MapEntry('file', await _filePart(path)));
     return Transfer.fromJson(
       await _send(
         () => _dio.post<_Json>(
           'devices/${Uri.encodeComponent(deviceId)}/share',
           data: form,
+          queryParameters: _transferQuery(transferId),
+          cancelToken: cancelToken,
           // The daemon fails an upload that stalls, but a large one may
           // legitimately take far longer than the default deadline.
           options: Options(receiveTimeout: Duration.zero),

@@ -605,6 +605,8 @@ Moving share (phase 3) showed:
     rest of the multipart body to look for further parts. A large upload
     then ends in `408` after the idle timeout rather than at once. The
     old `POST /transfers` did the same.
+  - Both were fixed afterwards: the client subscribes before loading a
+    snapshot, and an upload whose transfer ends is answered at once.
 
 Moving browse (phase 4) showed:
 

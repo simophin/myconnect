@@ -1,6 +1,6 @@
 //! Client for the local MyConnect control API.
 
-use std::{env, net::Ipv4Addr, path::Path, pin::Pin, time::Duration};
+use std::{env, future::Future, net::Ipv4Addr, path::Path, pin::Pin, time::Duration};
 
 use futures_core::Stream;
 use futures_util::StreamExt;
@@ -450,6 +450,9 @@ impl ApiClient {
         Ok(Box::pin(stream))
     }
 
+    /// Print-ready updates for the device list: a snapshot, then device
+    /// events, and a fresh snapshot after every reconnect. Runs until
+    /// `cancellation`.
     pub async fn watch_devices<F>(
         &self,
         cancellation: CancellationToken,
@@ -458,31 +461,24 @@ impl ApiClient {
     where
         F: FnMut(DeviceWatchUpdate) + Send,
     {
-        loop {
-            on_update(DeviceWatchUpdate::Snapshot(self.devices().await?));
-            if cancellation.is_cancelled() {
-                return Ok(());
-            }
-            let mut events = self.events().await?;
-            loop {
-                tokio::select! {
-                    _ = cancellation.cancelled() => return Ok(()),
-                    event = events.next() => match event {
-                        Some(Ok(event)) if is_device_event(&event.event) => {
-                            on_update(DeviceWatchUpdate::Event(event));
-                        }
-                        Some(Ok(_)) => {}
-                        Some(Err(_)) | None => break,
+        self.watch(
+            cancellation,
+            || self.devices(),
+            |update| {
+                match update {
+                    Watched::Snapshot(devices) => on_update(DeviceWatchUpdate::Snapshot(devices)),
+                    Watched::Event(event) if is_device_event(&event.event) => {
+                        on_update(DeviceWatchUpdate::Event(event));
                     }
+                    Watched::Event(_) => {}
                 }
-            }
-            tokio::select! {
-                _ = cancellation.cancelled() => return Ok(()),
-                _ = sleep(Duration::from_millis(250)) => {}
-            }
-        }
+                false
+            },
+        )
+        .await
     }
 
+    /// Like [`ApiClient::watch_devices`], for the synced clipboard text.
     pub async fn watch_clipboard<F>(
         &self,
         cancellation: CancellationToken,
@@ -491,31 +487,29 @@ impl ApiClient {
     where
         F: FnMut(ClipboardWatchUpdate) + Send,
     {
-        loop {
-            on_update(ClipboardWatchUpdate::Snapshot(self.clipboard().await?));
-            if cancellation.is_cancelled() {
-                return Ok(());
-            }
-            let mut events = self.events().await?;
-            loop {
-                tokio::select! {
-                    _ = cancellation.cancelled() => return Ok(()),
-                    event = events.next() => match event {
-                        Some(Ok(event)) if event.event.event_type() == ClipboardSnapshot::TYPE => {
-                            on_update(ClipboardWatchUpdate::Event(event));
-                        }
-                        Some(Ok(_)) => {}
-                        Some(Err(_)) | None => break,
+        self.watch(
+            cancellation,
+            || self.clipboard(),
+            |update| {
+                match update {
+                    Watched::Snapshot(clipboard) => {
+                        on_update(ClipboardWatchUpdate::Snapshot(clipboard));
                     }
+                    Watched::Event(event)
+                        if event.event.event_type() == ClipboardSnapshot::TYPE =>
+                    {
+                        on_update(ClipboardWatchUpdate::Event(event));
+                    }
+                    Watched::Event(_) => {}
                 }
-            }
-            tokio::select! {
-                _ = cancellation.cancelled() => return Ok(()),
-                _ = sleep(Duration::from_millis(250)) => {}
-            }
-        }
+                false
+            },
+        )
+        .await
     }
 
+    /// Like [`ApiClient::watch_devices`], for one transfer, ending once the
+    /// transfer has (or at once if it already had).
     pub async fn watch_transfer<F>(
         &self,
         transfer_id: Uuid,
@@ -525,27 +519,58 @@ impl ApiClient {
     where
         F: FnMut(TransferWatchUpdate) + Send,
     {
+        self.watch(
+            cancellation,
+            || self.transfer(transfer_id),
+            |update| match update {
+                Watched::Snapshot(transfer) => {
+                    let terminal = transfer_is_terminal(transfer.status);
+                    on_update(TransferWatchUpdate::Snapshot(transfer));
+                    terminal
+                }
+                Watched::Event(event) => {
+                    let Some(transfer) = transfer_from_event(&event.event)
+                        .filter(|transfer| transfer.id == transfer_id)
+                    else {
+                        return false;
+                    };
+                    let terminal = transfer_is_terminal(transfer.status);
+                    on_update(TransferWatchUpdate::Event(event));
+                    terminal
+                }
+            },
+        )
+        .await
+    }
+
+    /// Follow a resource: its snapshot from `load`, then every event, and
+    /// again after the event stream drops, until `on_update` returns `true`
+    /// or `cancellation`. Subscribes to `/events` before loading the
+    /// snapshot, so a change made in between arrives as an event instead of
+    /// being missed; the daemon subscribes before it answers.
+    async fn watch<S, Load, Loading, F>(
+        &self,
+        cancellation: CancellationToken,
+        load: Load,
+        mut on_update: F,
+    ) -> Result<(), ClientError>
+    where
+        Load: Fn() -> Loading,
+        Loading: Future<Output = Result<S, ClientError>>,
+        F: FnMut(Watched<S>) -> bool,
+    {
         loop {
-            let snapshot = self.transfer(transfer_id).await?;
-            let terminal = transfer_is_terminal(snapshot.status);
-            on_update(TransferWatchUpdate::Snapshot(snapshot));
-            if terminal || cancellation.is_cancelled() {
+            let mut events = self.events().await?;
+            if on_update(Watched::Snapshot(load().await?)) || cancellation.is_cancelled() {
                 return Ok(());
             }
-            let mut events = self.events().await?;
             loop {
                 tokio::select! {
                     _ = cancellation.cancelled() => return Ok(()),
                     event = events.next() => match event {
                         Some(Ok(event)) => {
-                            if let Some(transfer) = transfer_from_event(&event.event)
-                                && transfer.id == transfer_id
-                            {
-                                let terminal = transfer_is_terminal(transfer.status);
-                                on_update(TransferWatchUpdate::Event(event));
-                                if terminal {
-                                    return Ok(());
-                                }
+                            if on_update(Watched::Event(event)) {
+                                return Ok(());
                             }
                         }
                         Some(Err(_)) | None => break,
@@ -637,6 +662,12 @@ pub enum ClipboardWatchUpdate {
 
 pub enum TransferWatchUpdate {
     Snapshot(TransferSnapshot),
+    Event(CoreEvent),
+}
+
+/// What [`ApiClient::watch`] hands its callback.
+enum Watched<S> {
+    Snapshot(S),
     Event(CoreEvent),
 }
 

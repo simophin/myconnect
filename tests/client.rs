@@ -533,3 +533,154 @@ fn client_rejects_non_http_schemes() {
         Err(ClientError::UnsupportedScheme)
     ));
 }
+
+/// A daemon whose resources change right after each snapshot is taken: every
+/// snapshot request publishes an event on `/events`, reaching only the
+/// clients already subscribed, as the real event bus does.
+async fn start_racing_daemon() -> (String, JoinHandle<()>) {
+    let (events, _) = tokio::sync::broadcast::channel::<CoreEvent>(16);
+
+    fn publish(events: &tokio::sync::broadcast::Sender<CoreEvent>, event: EventData) {
+        let _ = events.send(CoreEvent {
+            sequence: 1,
+            timestamp: 12,
+            event,
+        });
+    }
+
+    let app = Router::new()
+        .route(
+            "/api/v1/devices",
+            get(
+                |State(events): State<tokio::sync::broadcast::Sender<CoreEvent>>| async move {
+                    publish(&events, EventData::DeviceUpdated(device()));
+                    Json(vec![device()])
+                },
+            ),
+        )
+        .route(
+            "/api/v1/clipboard",
+            get(
+                |State(events): State<tokio::sync::broadcast::Sender<CoreEvent>>| async move {
+                    let changed = ClipboardSnapshot {
+                        text: "changed".into(),
+                        updated_at: 12,
+                        source_device_id: None,
+                    };
+                    publish(
+                        &events,
+                        EventData::Plugin(PluginEvent::new(&changed).unwrap()),
+                    );
+                    Json(ClipboardSnapshot {
+                        text: "current".into(),
+                        updated_at: 10,
+                        source_device_id: None,
+                    })
+                },
+            ),
+        )
+        .route(
+            "/api/v1/transfers/{transfer_id}",
+            get(
+                |State(events): State<tokio::sync::broadcast::Sender<CoreEvent>>| async move {
+                    // The transfer ends just after this snapshot of it is taken.
+                    let running = transfer_snapshot();
+                    let completed = TransferSnapshot {
+                        status: TransferStatus::Completed,
+                        transferred_bytes: running.total_bytes,
+                        ..running.clone()
+                    };
+                    publish(&events, EventData::TransferCompleted(completed));
+                    Json(running)
+                },
+            ),
+        )
+        .route(
+            "/api/v1/events",
+            get(
+                |State(events): State<tokio::sync::broadcast::Sender<CoreEvent>>| async move {
+                    let mut receiver = events.subscribe();
+                    let stream = async_stream::stream! {
+                        while let Ok(event) = receiver.recv().await {
+                            let frame = format!(
+                                "event: {}\ndata: {}\n\n",
+                                event.event.event_type(),
+                                serde_json::to_string(&event).unwrap()
+                            );
+                            yield Ok::<_, std::convert::Infallible>(frame);
+                        }
+                    };
+                    (
+                        [(CONTENT_TYPE, "text/event-stream")],
+                        Body::from_stream(stream),
+                    )
+                },
+            ),
+        )
+        .with_state(events);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (format!("http://{address}"), task)
+}
+
+#[tokio::test]
+async fn watch_modes_see_changes_made_right_after_their_snapshot() {
+    let (url, task) = start_racing_daemon().await;
+    let client = ApiClient::new(&url, None).unwrap();
+
+    // A transfer that ends between the snapshot and the subscription must
+    // still end the watch, rather than leave it waiting forever.
+    let mut updates = Vec::new();
+    timeout(
+        Duration::from_secs(2),
+        client.watch_transfer(Uuid::from_u128(2), CancellationToken::new(), |update| {
+            updates.push(match update {
+                TransferWatchUpdate::Snapshot(transfer) => transfer.status,
+                TransferWatchUpdate::Event(event) => match event.event {
+                    EventData::TransferCompleted(transfer) => transfer.status,
+                    other => panic!("unexpected event {other:?}"),
+                },
+            });
+        }),
+    )
+    .await
+    .expect("the watch missed the transfer's end")
+    .unwrap();
+    assert_eq!(
+        updates,
+        [TransferStatus::Transferring, TransferStatus::Completed]
+    );
+
+    let cancellation = CancellationToken::new();
+    let stop = cancellation.clone();
+    timeout(
+        Duration::from_secs(2),
+        client.watch_devices(cancellation, move |update| {
+            if matches!(update, DeviceWatchUpdate::Event(_)) {
+                stop.cancel();
+            }
+        }),
+    )
+    .await
+    .expect("the watch missed a device change")
+    .unwrap();
+
+    let cancellation = CancellationToken::new();
+    let stop = cancellation.clone();
+    timeout(
+        Duration::from_secs(2),
+        client.watch_clipboard(cancellation, move |update| {
+            if matches!(update, ClipboardWatchUpdate::Event(_)) {
+                stop.cancel();
+            }
+        }),
+    )
+    .await
+    .expect("the watch missed a clipboard change")
+    .unwrap();
+
+    task.abort();
+}

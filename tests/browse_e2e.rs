@@ -648,6 +648,7 @@ async fn a_cancelled_upload_leaves_nothing_behind() {
             INTERNAL,
             "partial.bin",
             1_000_000,
+            None,
         )
         .await
         .unwrap();
@@ -670,6 +671,47 @@ async fn a_cancelled_upload_leaves_nothing_behind() {
             .exists()
     );
     drop(sender);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_an_upload_answers_its_request_at_once() {
+    let harness = harness(android_roots(), false).await;
+    // Large enough to be still uploading when it is cancelled.
+    let local_dir = tempfile::tempdir().unwrap();
+    let local = local_dir.path().join("large.bin");
+    std::fs::File::create(&local)
+        .unwrap()
+        .set_len(1024 * 1024 * 1024)
+        .unwrap();
+    let client = ApiClient::new(&format!("http://{}", harness._api.local_addr()), None).unwrap();
+    let phone_id = harness.phone_id.clone();
+    let upload = tokio::spawn(async move { client.upload_file(&phone_id, INTERNAL, &local).await });
+
+    let transfer_id = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(transfer) = harness.desktop.transfers().list().first() {
+                return transfer.id;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the upload starts a transfer");
+    harness.desktop.cancel_transfer(transfer_id).unwrap();
+
+    // Well within the 15-second idle timeout the request used to run into.
+    let transfer = tokio::time::timeout(Duration::from_secs(5), upload)
+        .await
+        .expect("the upload's request ends once its transfer is cancelled")
+        .unwrap()
+        .expect("the client gets the cancelled transfer, not an error");
+    assert_eq!(transfer.id, transfer_id);
+    assert_eq!(transfer.status, TransferStatus::Cancelled);
+    assert!(
+        !harness
+            .phone_path(&format!("{INTERNAL}/large.bin"))
+            .exists()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
