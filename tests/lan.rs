@@ -6,10 +6,7 @@ use std::{
 
 use myconnect::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
-    core::{
-        ApplicationService, Command, Core, EventData, LocalDeviceSnapshot, Query, QueryResult,
-        SettingsPatch,
-    },
+    core::{Core, EventData, LanCommand, LocalDeviceSnapshot, SettingsPatch},
     device::DeviceReachability,
     plugins::clipboard::InMemoryClipboard,
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
@@ -34,7 +31,7 @@ struct Peer {
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     application: Core,
-    commands: mpsc::Receiver<Command>,
+    commands: mpsc::Receiver<LanCommand>,
     _directory: tempfile::TempDir,
 }
 
@@ -99,11 +96,7 @@ fn test_config(bind: SocketAddr, target: SocketAddr) -> LanConfig {
 async fn wait_for_reachability(application: &Core, device_id: &str, expected: DeviceReachability) {
     timeout(Duration::from_secs(3), async {
         loop {
-            if let QueryResult::Device(Some(device)) = application
-                .query(Query::Device {
-                    device_id: device_id.into(),
-                })
-                .unwrap()
+            if let Some(device) = application.device(device_id)
                 && device.reachability == expected
             {
                 break;
@@ -157,12 +150,7 @@ async fn a_renamed_device_is_seen_under_its_new_name() {
         .unwrap();
     timeout(Duration::from_secs(3), async {
         loop {
-            if let QueryResult::Device(Some(device)) = b
-                .application
-                .query(Query::Device {
-                    device_id: a_id.clone(),
-                })
-                .unwrap()
+            if let Some(device) = b.application.device(&a_id)
                 && device.device_name == "Renamed A"
             {
                 break;
@@ -217,17 +205,17 @@ async fn two_peers_discover_connect_deduplicate_and_follow_address_changes() {
     wait_for_reachability(&a.application, &b_id, DeviceReachability::Connected).await;
     wait_for_reachability(&b.application, &a_id, DeviceReachability::Connected).await;
     for _ in 0..10 {
-        a.application.command(Command::AnnounceDiscovery).unwrap();
-        b.application.command(Command::AnnounceDiscovery).unwrap();
+        a.application.announce().unwrap();
+        b.application.announce().unwrap();
     }
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(matches!(
-        a.application.query(Query::Devices).unwrap(),
-        QueryResult::Devices(devices) if devices.len() == 1
+        a.application.devices().unwrap(),
+        devices if devices.len() == 1
     ));
     assert!(matches!(
-        b.application.query(Query::Devices).unwrap(),
-        QueryResult::Devices(devices) if devices.len() == 1
+        b.application.devices().unwrap(),
+        devices if devices.len() == 1
     ));
 
     a_service.shutdown().await.unwrap();
@@ -298,8 +286,8 @@ async fn a_peer_added_by_address_connects_without_broadcast() {
 
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(matches!(
-        a.application.query(Query::Devices).unwrap(),
-        QueryResult::Devices(devices) if devices.is_empty()
+        a.application.devices().unwrap(),
+        devices if devices.is_empty()
     ));
 
     a.application.announce_to(Ipv4Addr::LOCALHOST).unwrap();
@@ -618,10 +606,7 @@ async fn malformed_oversized_self_and_unsupported_discovery_are_ignored() {
         .unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
 
-    assert_eq!(
-        local_peer.application.query(Query::Devices).unwrap(),
-        QueryResult::Devices(Vec::new())
-    );
+    assert_eq!(local_peer.application.devices().unwrap(), Vec::new());
     service.shutdown().await.unwrap();
 }
 

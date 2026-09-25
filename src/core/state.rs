@@ -4,9 +4,6 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-use super::SettingsSnapshot;
-use crate::device::DeviceSnapshot;
-
 /// Public, non-sensitive failure categories safe to return to API clients.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -264,41 +261,14 @@ pub enum TransferProgressError {
     },
 }
 
-/// Transport-independent mutations accepted by the application core.
+/// What the core asks of the LAN transport, over the channel
+/// [`super::Core::new`] returns for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Command {
+pub enum LanCommand {
+    /// Broadcast this device's identity now.
     AnnounceDiscovery,
+    /// Send this device's identity to one address.
     AnnounceTo { address: Ipv4Addr },
-    ForgetDevice { device_id: String },
-    StartPairing { device_id: String },
-    AcceptPairing { pairing_id: Uuid },
-    CancelPairing { pairing_id: Uuid },
-}
-
-/// Transport-independent reads accepted by the application core.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Query {
-    Status,
-    Devices,
-    Device { device_id: String },
-    Pairings,
-    Pairing { pairing_id: Uuid },
-    Transfers,
-    Transfer { transfer_id: Uuid },
-    Settings,
-}
-
-/// Typed result of an application query.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum QueryResult {
-    Status(StatusSnapshot),
-    Devices(Vec<DeviceSnapshot>),
-    Device(Option<DeviceSnapshot>),
-    Pairings(Vec<PairingSnapshot>),
-    Pairing(Option<PairingSnapshot>),
-    Transfers(Vec<TransferSnapshot>),
-    Transfer(Option<TransferSnapshot>),
-    Settings(SettingsSnapshot),
 }
 
 #[cfg(test)]

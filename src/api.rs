@@ -43,9 +43,8 @@ pub(crate) use upload::{
 use crate::{
     config::ApiToken,
     core::{
-        ApplicationService, Command, CoreError, CoreEvent, DEFAULT_MAX_TRANSFER_BYTES,
-        PairingSnapshot, Query, QueryResult, SettingsPatch, SettingsSnapshot, StatusSnapshot,
-        TransferSnapshot,
+        Core, CoreError, CoreEvent, DEFAULT_MAX_TRANSFER_BYTES, PairingSnapshot, SettingsPatch,
+        SettingsSnapshot, StatusSnapshot, TransferSnapshot,
     },
     device::DeviceSnapshot,
 };
@@ -120,7 +119,7 @@ impl Default for ApiServerConfig {
 
 #[derive(Clone)]
 struct ApiState {
-    application: Arc<dyn ApplicationService>,
+    core: Core,
     shutdown: CancellationToken,
 }
 
@@ -134,7 +133,7 @@ pub struct ApiServer {
 impl ApiServer {
     pub async fn start(
         config: ApiServerConfig,
-        application: Arc<dyn ApplicationService>,
+        core: Core,
         token: Option<ApiToken>,
         shutdown: CancellationToken,
     ) -> Result<Self, ApiServerError> {
@@ -145,7 +144,7 @@ impl ApiServer {
 
         let router = router(
             ApiState {
-                application,
+                core,
                 shutdown: shutdown.clone(),
             },
             token,
@@ -216,7 +215,7 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
     // idle timeout instead. Layers apply to the routes a router has when
     // they are added, so each set keeps its own limits after the merge.
     let streaming = state
-        .application
+        .core
         .plugin_streaming_routes()
         .layer(Extension(UploadIdleTimeout(config.request_timeout)))
         .layer(DefaultBodyLimit::max(config.max_transfer_body_bytes))
@@ -225,7 +224,7 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
             enforce_content_length,
         ));
 
-    let plugin_routes = state.application.plugin_routes();
+    let plugin_routes = state.core.plugin_routes();
     let api = Router::new()
         .route("/status", get(get_status))
         .route("/discovery", post(post_discovery))
@@ -344,35 +343,25 @@ async fn require_authentication(
     }
 }
 
-async fn get_status(State(state): State<ApiState>) -> Result<Json<StatusSnapshot>, ApiProblem> {
-    match state.application.query(Query::Status).map_err(map_error)? {
-        QueryResult::Status(status) => Ok(Json(status)),
-        _ => Err(ApiProblem::internal()),
-    }
+async fn get_status(State(state): State<ApiState>) -> Json<StatusSnapshot> {
+    Json(state.core.status())
 }
 
 async fn get_devices(
     State(state): State<ApiState>,
 ) -> Result<Json<Vec<DeviceSnapshot>>, ApiProblem> {
-    match state.application.query(Query::Devices).map_err(map_error)? {
-        QueryResult::Devices(devices) => Ok(Json(devices)),
-        _ => Err(ApiProblem::internal()),
-    }
+    Ok(Json(state.core.devices()?))
 }
 
 async fn get_device(
     State(state): State<ApiState>,
     Path(device_id): Path<String>,
 ) -> Result<Json<DeviceSnapshot>, ApiProblem> {
-    match state
-        .application
-        .query(Query::Device { device_id })
-        .map_err(map_error)?
-    {
-        QueryResult::Device(Some(device)) => Ok(Json(device)),
-        QueryResult::Device(None) => Err(ApiProblem::not_found("device_not_found")),
-        _ => Err(ApiProblem::internal()),
-    }
+    state
+        .core
+        .device(&device_id)
+        .map(Json)
+        .ok_or(ApiProblem::not_found("device_not_found"))
 }
 
 #[derive(Deserialize)]
@@ -394,12 +383,9 @@ async fn post_discovery(
                 .trim()
                 .parse()
                 .map_err(|_| ApiProblem::bad_request("invalid_address"))?;
-            state.application.announce_to(address).map_err(map_error)?;
+            state.core.announce_to(address)?;
         }
-        None => state
-            .application
-            .command(Command::AnnounceDiscovery)
-            .map_err(map_error)?,
+        None => state.core.announce()?,
     }
     Ok(StatusCode::ACCEPTED)
 }
@@ -408,10 +394,7 @@ async fn delete_device(
     State(state): State<ApiState>,
     Path(device_id): Path<String>,
 ) -> Result<StatusCode, ApiProblem> {
-    state
-        .application
-        .forget_device(&device_id)
-        .map_err(map_error)?;
+    state.core.forget_device(&device_id)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -425,10 +408,7 @@ async fn post_pairing(
     State(state): State<ApiState>,
     Json(request): Json<StartPairingRequest>,
 ) -> Result<(StatusCode, Json<PairingSnapshot>), ApiProblem> {
-    let pairing = state
-        .application
-        .start_outgoing_pairing(&request.device_id)
-        .map_err(map_error)?;
+    let pairing = state.core.start_outgoing_pairing(&request.device_id)?;
     Ok((StatusCode::ACCEPTED, Json(pairing)))
 }
 
@@ -438,39 +418,25 @@ async fn post_pairing(
 async fn get_pairings(
     State(state): State<ApiState>,
 ) -> Result<Json<Vec<PairingSnapshot>>, ApiProblem> {
-    match state
-        .application
-        .query(Query::Pairings)
-        .map_err(map_error)?
-    {
-        QueryResult::Pairings(pairings) => Ok(Json(pairings)),
-        _ => Err(ApiProblem::internal()),
-    }
+    Ok(Json(state.core.pairings()?))
 }
 
 async fn get_pairing(
     State(state): State<ApiState>,
     Path(pairing_id): Path<Uuid>,
 ) -> Result<Json<PairingSnapshot>, ApiProblem> {
-    match state
-        .application
-        .query(Query::Pairing { pairing_id })
-        .map_err(map_error)?
-    {
-        QueryResult::Pairing(Some(pairing)) => Ok(Json(pairing)),
-        QueryResult::Pairing(None) => Err(ApiProblem::not_found("pairing_not_found")),
-        _ => Err(ApiProblem::internal()),
-    }
+    state
+        .core
+        .pairing(pairing_id)
+        .map(Json)
+        .ok_or(ApiProblem::not_found("pairing_not_found"))
 }
 
 async fn post_pairing_accept(
     State(state): State<ApiState>,
     Path(pairing_id): Path<Uuid>,
 ) -> Result<Json<PairingSnapshot>, ApiProblem> {
-    let pairing = state
-        .application
-        .accept_pairing(pairing_id)
-        .map_err(map_error)?;
+    let pairing = state.core.accept_pairing(pairing_id)?;
     Ok(Json(pairing))
 }
 
@@ -478,61 +444,38 @@ async fn delete_pairing(
     State(state): State<ApiState>,
     Path(pairing_id): Path<Uuid>,
 ) -> Result<Json<PairingSnapshot>, ApiProblem> {
-    let pairing = state
-        .application
-        .cancel_pairing(pairing_id)
-        .map_err(map_error)?;
+    let pairing = state.core.cancel_pairing(pairing_id)?;
     Ok(Json(pairing))
 }
 
 async fn get_transfers(
     State(state): State<ApiState>,
 ) -> Result<Json<Vec<TransferSnapshot>>, ApiProblem> {
-    match state
-        .application
-        .query(Query::Transfers)
-        .map_err(map_error)?
-    {
-        QueryResult::Transfers(transfers) => Ok(Json(transfers)),
-        _ => Err(ApiProblem::internal()),
-    }
+    Ok(Json(state.core.transfers().list()))
 }
 
 async fn get_transfer(
     State(state): State<ApiState>,
     Path(transfer_id): Path<Uuid>,
 ) -> Result<Json<TransferSnapshot>, ApiProblem> {
-    match state
-        .application
-        .query(Query::Transfer { transfer_id })
-        .map_err(map_error)?
-    {
-        QueryResult::Transfer(Some(transfer)) => Ok(Json(transfer)),
-        QueryResult::Transfer(None) => Err(ApiProblem::not_found("transfer_not_found")),
-        _ => Err(ApiProblem::internal()),
-    }
+    state
+        .core
+        .transfers()
+        .get(transfer_id)
+        .map(Json)
+        .ok_or(ApiProblem::not_found("transfer_not_found"))
 }
 
 async fn delete_transfer(
     State(state): State<ApiState>,
     Path(transfer_id): Path<Uuid>,
 ) -> Result<Json<TransferSnapshot>, ApiProblem> {
-    let transfer = state
-        .application
-        .cancel_transfer(transfer_id)
-        .map_err(map_error)?;
+    let transfer = state.core.cancel_transfer(transfer_id)?;
     Ok(Json(transfer))
 }
 
 async fn get_settings(State(state): State<ApiState>) -> Result<Json<SettingsSnapshot>, ApiProblem> {
-    match state
-        .application
-        .query(Query::Settings)
-        .map_err(map_error)?
-    {
-        QueryResult::Settings(settings) => Ok(Json(settings)),
-        _ => Err(ApiProblem::internal()),
-    }
+    Ok(Json(state.core.settings()?))
 }
 
 /// Change the fields present in the body; `null` resets one to its default.
@@ -542,17 +485,14 @@ async fn patch_settings(
     State(state): State<ApiState>,
     Json(patch): Json<SettingsPatch>,
 ) -> Result<Json<SettingsSnapshot>, ApiProblem> {
-    let settings = state
-        .application
-        .update_settings(patch)
-        .map_err(map_error)?;
+    let settings = state.core.update_settings(patch)?;
     Ok(Json(settings))
 }
 
 async fn get_events(
     State(state): State<ApiState>,
 ) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
-    let mut receiver = state.application.subscribe();
+    let mut receiver = state.core.subscribe();
     let shutdown = state.shutdown;
     let stream = async_stream::stream! {
         loop {
@@ -561,8 +501,8 @@ async fn get_events(
                 received = receiver.recv() => received,
             };
             match received {
-                Ok(application_event) => {
-                    let Some(event) = sse_event(&application_event) else { break };
+                Ok(core_event) => {
+                    let Some(event) = sse_event(&core_event) else { break };
                     yield Ok(event);
                 }
                 // A gap requires the client to reconnect and fetch snapshots.

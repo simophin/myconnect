@@ -24,7 +24,7 @@ use tracing::debug;
 
 use crate::{
     config::{LocalIdentity, TrustStore},
-    core::{Command, Core},
+    core::{Core, LanCommand},
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
     transport::tls::{self, PeerPin, TlsMaterial},
 };
@@ -172,7 +172,7 @@ impl LanService {
         config: LanConfig,
         local: LocalDeviceInfo,
         application: Core,
-        commands: mpsc::Receiver<Command>,
+        commands: mpsc::Receiver<LanCommand>,
         identity: Arc<LocalIdentity>,
         trust_store: Arc<dyn TrustStore + Send + Sync>,
         cancellation: CancellationToken,
@@ -259,7 +259,7 @@ async fn run(
     config: LanConfig,
     mut local: LocalDeviceInfo,
     application: Core,
-    mut commands: mpsc::Receiver<Command>,
+    mut commands: mpsc::Receiver<LanCommand>,
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     udp: Arc<UdpSocket>,
@@ -284,10 +284,10 @@ async fn run(
                 announce(&udp, &config.announcement_targets, &announcement).await;
             }
             command = commands.recv(), if commands_open => match command {
-                Some(Command::AnnounceDiscovery) => {
+                Some(LanCommand::AnnounceDiscovery) => {
                     announce(&udp, &config.announcement_targets, &announcement).await;
                 }
-                Some(Command::AnnounceTo { address }) if config.loopback_only => {
+                Some(LanCommand::AnnounceTo { address }) if config.loopback_only => {
                     if address.is_loopback() {
                         let target = SocketAddr::V4(SocketAddrV4::new(LOOPBACK_BROADCAST, config.peer_discovery_port));
                         announce(&udp, &[target], &announcement).await;
@@ -295,11 +295,10 @@ async fn run(
                         debug!(%address, "not announcing off loopback in loopback-only mode");
                     }
                 }
-                Some(Command::AnnounceTo { address }) => {
+                Some(LanCommand::AnnounceTo { address }) => {
                     let target = SocketAddr::V4(SocketAddrV4::new(address, config.peer_discovery_port));
                     announce(&udp, &[target], &announcement).await;
                 }
-                Some(_) => {}
                 None => commands_open = false,
             },
             // A rename applies to connections made from now on; announcing

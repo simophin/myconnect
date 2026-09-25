@@ -125,7 +125,7 @@ mod tests {
 
     use super::*;
     use crate::core::{
-        ApplicationService, Core, EventData, Query, QueryResult,
+        Core, EventData,
         testing::{handle, make_identity},
     };
 
@@ -141,15 +141,7 @@ mod tests {
     }
 
     fn battery(handle: &Core, device_id: &str) -> Option<BatteryStatus> {
-        match handle
-            .query(Query::Device {
-                device_id: device_id.into(),
-            })
-            .unwrap()
-        {
-            QueryResult::Device(Some(device)) => BatteryStatus::of(&device),
-            other => panic!("unexpected result {other:?}"),
-        }
+        BatteryStatus::of(&handle.device(device_id).expect("a known device"))
     }
 
     /// A paired device, connected, with events subscribed after it was.

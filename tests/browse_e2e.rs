@@ -22,8 +22,8 @@ use myconnect::{
     client::{ApiClient, ClientError},
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     core::{
-        ApplicationService, Core, LocalDeviceSnapshot, Query, QueryResult, TransferConfig,
-        TransferDirection, TransferSnapshot, TransferStatus,
+        Core, LocalDeviceSnapshot, TransferConfig, TransferDirection, TransferSnapshot,
+        TransferStatus,
     },
     device::DeviceReachability,
     plugins::clipboard::InMemoryClipboard,
@@ -107,11 +107,7 @@ async fn wait_for_device(
 ) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let QueryResult::Device(Some(device)) = application
-                .query(Query::Device {
-                    device_id: device_id.into(),
-                })
-                .unwrap()
+            if let Some(device) = application.device(device_id)
                 && accept(&device)
             {
                 break;
@@ -199,7 +195,7 @@ async fn harness(reply: BrowseReply, wrong_host_key: bool) -> Harness {
 
     let api = ApiServer::start(
         ApiServerConfig::new(0).unwrap(),
-        Arc::new(desktop.clone()),
+        desktop.clone(),
         None,
         CancellationToken::new(),
     )

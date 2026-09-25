@@ -15,8 +15,8 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::{
-    Command, CoreEvent, EventBus, EventBusError, LocalDeviceSnapshot, OperationErrorCode, Pairing,
-    PairingDirection, PairingSnapshot, PairingStatus, PairingTransitionError, Query, QueryResult,
+    CoreEvent, EventBus, EventBusError, LanCommand, LocalDeviceSnapshot, OperationErrorCode,
+    Pairing, PairingDirection, PairingSnapshot, PairingStatus, PairingTransitionError,
     StatusSnapshot, TransferSnapshot,
     payload::PayloadPeer,
     plugin::{Plugin, PluginContext, PluginRegistry},
@@ -40,24 +40,6 @@ pub const PAIRING_TIMEOUT: Duration = Duration::from_secs(30);
 /// ordinary clock drift between devices is far larger than the pairing
 /// timeout, so the timeout can't double as the skew limit.
 pub const PAIRING_TIMESTAMP_TOLERANCE_SECS: u64 = 1800;
-/// Core interface consumed by the local API and future frontends.
-pub trait ApplicationService: Send + Sync {
-    fn query(&self, query: Query) -> Result<QueryResult, CoreError>;
-    fn command(&self, command: Command) -> Result<(), CoreError>;
-    fn subscribe(&self) -> broadcast::Receiver<CoreEvent>;
-    fn start_outgoing_pairing(&self, device_id: &str) -> Result<PairingSnapshot, CoreError>;
-    fn accept_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, CoreError>;
-    fn cancel_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, CoreError>;
-    fn forget_device(&self, device_id: &str) -> Result<(), CoreError>;
-    fn announce_to(&self, address: Ipv4Addr) -> Result<(), CoreError>;
-    /// The HTTP routes of every plugin, merged.
-    fn plugin_routes(&self) -> axum::Router;
-    /// The streaming (upload) routes of every plugin, merged.
-    fn plugin_streaming_routes(&self) -> axum::Router;
-    fn update_settings(&self, patch: SettingsPatch) -> Result<SettingsSnapshot, CoreError>;
-    fn cancel_transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, CoreError>;
-}
-
 /// A live, TLS-authenticated control-channel connection to a peer, as
 /// registered by the transport layer once the double identity exchange and
 /// TLS handshake succeed.
@@ -107,7 +89,7 @@ pub struct Core {
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     identity: Arc<LocalIdentity>,
     state: Arc<RwLock<CoreState>>,
-    commands: mpsc::Sender<Command>,
+    commands: mpsc::Sender<LanCommand>,
     events: EventBus,
     transfers: Transfers,
     plugins: Arc<PluginRegistry>,
@@ -126,7 +108,7 @@ impl Core {
         event_capacity: usize,
         identity: Arc<LocalIdentity>,
         transfer_config: TransferConfig,
-    ) -> Result<(Self, mpsc::Receiver<Command>), CoreError> {
+    ) -> Result<(Self, mpsc::Receiver<LanCommand>), CoreError> {
         if command_capacity == 0 {
             return Err(CoreError::InvalidCommandCapacity);
         }
@@ -189,6 +171,21 @@ impl Core {
         &self.events
     }
 
+    /// Events from now on, for `/events` and other clients.
+    pub fn subscribe(&self) -> broadcast::Receiver<CoreEvent> {
+        self.events.subscribe()
+    }
+
+    /// Every plugin's HTTP routes, merged, for the API server.
+    pub(crate) fn plugin_routes(&self) -> axum::Router {
+        self.plugins.routes(&self.plugin_context())
+    }
+
+    /// Every plugin's streaming (upload) routes, merged, for the API server.
+    pub(crate) fn plugin_streaming_routes(&self) -> axum::Router {
+        self.plugins.streaming_routes(&self.plugin_context())
+    }
+
     /// Every file transfer, whichever feature started it.
     pub fn transfers(&self) -> &Transfers {
         &self.transfers
@@ -198,6 +195,18 @@ impl Core {
     pub fn device(&self, device_id: &str) -> Option<DeviceSnapshot> {
         let device = self.state.read().ok()?.devices.get(device_id)?;
         Some(self.with_plugin_state(device))
+    }
+
+    /// Every known device as clients see it: paired ones (even while
+    /// offline) and unpaired ones that have announced themselves.
+    pub fn devices(&self) -> Result<Vec<DeviceSnapshot>, CoreError> {
+        // Plugins add to device snapshots, so those are read out before
+        // their state is asked for, never while holding the lock.
+        let devices = self.read_state()?.devices.snapshot();
+        Ok(devices
+            .into_iter()
+            .map(|device| self.with_plugin_state(device))
+            .collect())
     }
 
     /// Payload-connection access to a paired, connected device.
@@ -731,6 +740,12 @@ impl Core {
         }
     }
 
+    /// Announce this device on the network now, rather than at the next
+    /// interval, so peers answer promptly.
+    pub fn announce(&self) -> Result<(), CoreError> {
+        self.send_lan_command(LanCommand::AnnounceDiscovery)
+    }
+
     /// Announce this device to one address, for networks where broadcast
     /// discovery doesn't reach the peer. A peer that hears it dials back
     /// over TCP, as it would after a broadcast. Only unicast addresses are
@@ -740,7 +755,7 @@ impl Core {
         if address.is_unspecified() || address.is_broadcast() || address.is_multicast() {
             return Err(CoreError::InvalidDiscoveryAddress);
         }
-        self.command(Command::AnnounceTo { address })
+        self.send_lan_command(LanCommand::AnnounceTo { address })
     }
 
     /// Queue `packet` to a paired, connected device. Refused, with a typed
@@ -1185,7 +1200,32 @@ impl Core {
         self.transfers.cancel(transfer_id)
     }
 
-    fn status(&self) -> StatusSnapshot {
+    fn send_lan_command(&self, command: LanCommand) -> Result<(), CoreError> {
+        self.commands
+            .try_send(command)
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => CoreError::CommandQueueFull,
+                mpsc::error::TrySendError::Closed(_) => CoreError::CommandQueueClosed,
+            })
+    }
+
+    /// Every pairing this daemon process knows about, including finished
+    /// ones.
+    pub fn pairings(&self) -> Result<Vec<PairingSnapshot>, CoreError> {
+        Ok(self
+            .read_state()?
+            .pairings
+            .values()
+            .map(|runtime| runtime.pairing.snapshot())
+            .collect())
+    }
+
+    /// A pairing this daemon process knows about.
+    pub fn pairing(&self, pairing_id: Uuid) -> Option<PairingSnapshot> {
+        self.pairing_snapshot(pairing_id).ok()
+    }
+
+    pub fn status(&self) -> StatusSnapshot {
         StatusSnapshot {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             uptime_seconds: self.started_at.elapsed().as_secs(),
@@ -1218,110 +1258,6 @@ fn fail_active_pairing(
     }
     let _ = state.devices.set_pairing(device_id, false);
     Some(snapshot)
-}
-
-impl ApplicationService for Core {
-    fn query(&self, query: Query) -> Result<QueryResult, CoreError> {
-        match query {
-            Query::Status => return Ok(QueryResult::Status(self.status())),
-            Query::Settings => return Ok(QueryResult::Settings(self.settings()?)),
-            _ => {}
-        }
-
-        // Plugins add to device snapshots, so those are read out before
-        // their state is asked for, never while holding the lock.
-        match query {
-            Query::Devices => {
-                let devices = self.read_state()?.devices.snapshot();
-                return Ok(QueryResult::Devices(
-                    devices
-                        .into_iter()
-                        .map(|device| self.with_plugin_state(device))
-                        .collect(),
-                ));
-            }
-            Query::Device { device_id } => {
-                let device = self.read_state()?.devices.get(&device_id);
-                return Ok(QueryResult::Device(
-                    device.map(|device| self.with_plugin_state(device)),
-                ));
-            }
-            _ => {}
-        }
-
-        let state = self.read_state()?;
-        Ok(match query {
-            Query::Status | Query::Settings | Query::Devices | Query::Device { .. } => {
-                unreachable!("handled before locking state")
-            }
-            Query::Pairings => QueryResult::Pairings(
-                state
-                    .pairings
-                    .values()
-                    .map(|runtime| runtime.pairing.snapshot())
-                    .collect(),
-            ),
-            Query::Pairing { pairing_id } => QueryResult::Pairing(
-                state
-                    .pairings
-                    .get(&pairing_id)
-                    .map(|runtime| runtime.pairing.snapshot()),
-            ),
-            Query::Transfers => QueryResult::Transfers(self.transfers.list()),
-            Query::Transfer { transfer_id } => {
-                QueryResult::Transfer(self.transfers.get(transfer_id))
-            }
-        })
-    }
-
-    fn command(&self, command: Command) -> Result<(), CoreError> {
-        self.commands
-            .try_send(command)
-            .map_err(|error| match error {
-                mpsc::error::TrySendError::Full(_) => CoreError::CommandQueueFull,
-                mpsc::error::TrySendError::Closed(_) => CoreError::CommandQueueClosed,
-            })
-    }
-
-    fn subscribe(&self) -> broadcast::Receiver<CoreEvent> {
-        self.events.subscribe()
-    }
-
-    fn start_outgoing_pairing(&self, device_id: &str) -> Result<PairingSnapshot, CoreError> {
-        Core::start_outgoing_pairing(self, device_id)
-    }
-
-    fn accept_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, CoreError> {
-        Core::accept_pairing(self, pairing_id)
-    }
-
-    fn cancel_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, CoreError> {
-        Core::cancel_pairing(self, pairing_id)
-    }
-
-    fn announce_to(&self, address: Ipv4Addr) -> Result<(), CoreError> {
-        Core::announce_to(self, address)
-    }
-
-    fn forget_device(&self, device_id: &str) -> Result<(), CoreError> {
-        Core::forget_device(self, device_id)
-    }
-
-    fn plugin_routes(&self) -> axum::Router {
-        self.plugins.routes(&self.plugin_context())
-    }
-
-    fn plugin_streaming_routes(&self) -> axum::Router {
-        self.plugins.streaming_routes(&self.plugin_context())
-    }
-
-    fn update_settings(&self, patch: SettingsPatch) -> Result<SettingsSnapshot, CoreError> {
-        Core::update_settings(self, patch)
-    }
-
-    fn cancel_transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, CoreError> {
-        Core::cancel_transfer(self, transfer_id)
-    }
 }
 
 /// The paired peers in `trust_store`, as unreachable until they are seen.
@@ -1399,8 +1335,6 @@ pub enum CoreError {
     StateUnavailable,
     #[error("core event bus could not be created")]
     EventBus(#[from] EventBusError),
-    #[error("core returned an unexpected query result")]
-    UnexpectedQueryResult,
     #[error("unknown device")]
     UnknownDevice,
     #[error("discovery address must be a unicast IPv4 address")]
@@ -1453,30 +1387,22 @@ mod tests {
     use crate::core::testing::{MemoryTrustStore, handle, handle_with_trust, make_identity};
 
     #[test]
-    fn status_and_empty_snapshots_are_queryable() {
+    fn status_and_empty_snapshots_are_readable() {
         let (handle, _commands) = handle();
-        assert!(matches!(
-            handle.query(Query::Status).unwrap(),
-            QueryResult::Status(StatusSnapshot {
-                protocol_version: 8,
-                ..
-            })
-        ));
-        assert_eq!(
-            handle.query(Query::Devices).unwrap(),
-            QueryResult::Devices(Vec::new())
-        );
+        assert_eq!(handle.status().protocol_version, 8);
+        assert_eq!(handle.devices().unwrap(), Vec::new());
+        assert_eq!(handle.pairings().unwrap(), Vec::new());
     }
 
     #[tokio::test]
     async fn commands_are_bounded_and_observable() {
         let (handle, mut commands) = handle();
-        handle.command(Command::AnnounceDiscovery).unwrap();
+        handle.announce().unwrap();
         assert!(matches!(
-            handle.command(Command::AnnounceDiscovery),
+            handle.announce(),
             Err(CoreError::CommandQueueFull)
         ));
-        assert_eq!(commands.recv().await, Some(Command::AnnounceDiscovery));
+        assert_eq!(commands.recv().await, Some(LanCommand::AnnounceDiscovery));
     }
 
     #[tokio::test]
@@ -1494,7 +1420,10 @@ mod tests {
         }
         let address = Ipv4Addr::new(192, 168, 1, 20);
         handle.announce_to(address).unwrap();
-        assert_eq!(commands.recv().await, Some(Command::AnnounceTo { address }));
+        assert_eq!(
+            commands.recv().await,
+            Some(LanCommand::AnnounceTo { address })
+        );
     }
 
     #[test]
@@ -1529,9 +1458,7 @@ mod tests {
             trusted(undescribed, None),
         ]));
 
-        let QueryResult::Devices(devices) = handle.query(Query::Devices).unwrap() else {
-            panic!("expected devices");
-        };
+        let devices = handle.devices().unwrap();
         let names: Vec<_> = devices.iter().map(|d| d.device_name.as_str()).collect();
         assert_eq!(names, ["Pixel", undescribed]);
         assert!(devices.iter().all(|d| d.paired
@@ -1566,14 +1493,7 @@ mod tests {
         );
 
         handle.unregister_connection(undescribed);
-        let QueryResult::Device(Some(device)) = handle
-            .query(Query::Device {
-                device_id: undescribed.into(),
-            })
-            .unwrap()
-        else {
-            panic!("expected the device");
-        };
+        let device = handle.device(undescribed).expect("the device");
         assert_eq!(device.device_name, "Laptop");
         assert_eq!(device.reachability, DeviceReachability::Unavailable);
     }

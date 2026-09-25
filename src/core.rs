@@ -44,11 +44,11 @@ pub use plugin::{
     Plugin, PluginContext, PluginEvent, PluginEventKind, PluginRegistry, PluginSettings,
     SettingsSection,
 };
-pub use service::{ApplicationService, Core, CoreError};
+pub use service::{Core, CoreError};
 pub use settings::{SettingsDefaults, SettingsPatch, SettingsSnapshot};
 pub use state::{
-    Command, LocalDeviceSnapshot, OperationErrorCode, Pairing, PairingDirection, PairingSnapshot,
-    PairingStatus, PairingTransitionError, Query, QueryResult, StatusSnapshot, Transfer,
+    LanCommand, LocalDeviceSnapshot, OperationErrorCode, Pairing, PairingDirection,
+    PairingSnapshot, PairingStatus, PairingTransitionError, StatusSnapshot, Transfer,
     TransferDirection, TransferProgressError, TransferSnapshot, TransferStatus,
     TransferTransitionError,
 };
@@ -210,7 +210,7 @@ impl RunningService {
 
         let server = ApiServer::start(
             ApiServerConfig::new(request.api_port)?.with_host(request.api_host),
-            Arc::new(application.clone()),
+            application.clone(),
             request.api_token,
             shutdown.clone(),
         )

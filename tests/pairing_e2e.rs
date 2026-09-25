@@ -10,10 +10,7 @@ use std::{
 
 use myconnect::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
-    core::{
-        ApplicationService, Command, Core, EventData, LocalDeviceSnapshot, PairingDirection,
-        PairingStatus, Query, QueryResult,
-    },
+    core::{Core, EventData, LanCommand, LocalDeviceSnapshot, PairingDirection, PairingStatus},
     device::DeviceReachability,
     plugins::clipboard::InMemoryClipboard,
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
@@ -31,7 +28,7 @@ struct Peer {
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     application: Core,
-    commands: mpsc::Receiver<Command>,
+    commands: mpsc::Receiver<LanCommand>,
     _directory: tempfile::TempDir,
 }
 
@@ -96,11 +93,7 @@ fn test_config(bind: SocketAddr, target: SocketAddr) -> LanConfig {
 async fn wait_for_reachability(application: &Core, device_id: &str, expected: DeviceReachability) {
     timeout(Duration::from_secs(3), async {
         loop {
-            if let QueryResult::Device(Some(device)) = application
-                .query(Query::Device {
-                    device_id: device_id.into(),
-                })
-                .unwrap()
+            if let Some(device) = application.device(device_id)
                 && device.reachability == expected
             {
                 break;
@@ -115,11 +108,7 @@ async fn wait_for_reachability(application: &Core, device_id: &str, expected: De
 async fn wait_for_paired(application: &Core, device_id: &str, expected: bool) {
     timeout(Duration::from_secs(3), async {
         loop {
-            if let QueryResult::Device(Some(device)) = application
-                .query(Query::Device {
-                    device_id: device_id.into(),
-                })
-                .unwrap()
+            if let Some(device) = application.device(device_id)
                 && device.paired == expected
             {
                 break;
@@ -234,14 +223,8 @@ async fn valid_peer_pairs_reconnects_with_pinned_trust_and_unpairs() {
     wait_for_reachability(&b2.application, &a_id, DeviceReachability::Connected).await;
     // Reconnection alone (no new pairing) must already show both sides paired,
     // because the connection used the pinned certificate.
-    match a2
-        .application
-        .query(Query::Device {
-            device_id: b_id.clone(),
-        })
-        .unwrap()
-    {
-        QueryResult::Device(Some(device)) => assert!(device.paired),
+    match a2.application.device(&b_id) {
+        Some(device) => assert!(device.paired),
         other => panic!("unexpected {other:?}"),
     }
 
@@ -427,15 +410,7 @@ async fn identity_swap_after_tls_handshake_is_rejected() {
     // The device that showed up during the pre-TLS plaintext exchange must
     // never be registered as connected, because its post-TLS identity did
     // not match.
-    assert!(matches!(
-        victim
-            .application
-            .query(Query::Device {
-                device_id: claimed_id
-            })
-            .unwrap(),
-        QueryResult::Device(None)
-    ));
+    assert!(victim.application.device(&claimed_id).is_none());
 
     service.shutdown().await.unwrap();
 }
@@ -450,15 +425,7 @@ async fn protocol_downgrade_after_tls_handshake_is_rejected() {
     // the pre-TLS and post-TLS identity exchanges.
     let _ = attempt_identity_mismatch(addr, &victim_id, &claimed_id, 8, &claimed_id, 7).await;
 
-    assert!(matches!(
-        victim
-            .application
-            .query(Query::Device {
-                device_id: claimed_id
-            })
-            .unwrap(),
-        QueryResult::Device(None)
-    ));
+    assert!(victim.application.device(&claimed_id).is_none());
 
     service.shutdown().await.unwrap();
 }

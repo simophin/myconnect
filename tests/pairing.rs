@@ -5,8 +5,8 @@ use std::{sync::Arc, time::Duration};
 use myconnect::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     core::{
-        ApplicationService, Command, Core, CoreError, CoreEvent, EventData, LocalDeviceSnapshot,
-        PairingDirection, PairingStatus, Query, QueryResult, TransferConfig,
+        Core, CoreError, CoreEvent, EventData, LanCommand, LocalDeviceSnapshot, PairingDirection,
+        PairingStatus, TransferConfig,
     },
     plugins::clipboard::InMemoryClipboard,
     protocol::{DeviceType, IdentityBody, Packet, PairingBody},
@@ -25,7 +25,7 @@ struct Harness {
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     packets: mpsc::Receiver<Packet>,
     events: broadcast::Receiver<CoreEvent>,
-    _commands: mpsc::Receiver<Command>,
+    _commands: mpsc::Receiver<LanCommand>,
     _directory: tempfile::TempDir,
 }
 
@@ -203,29 +203,18 @@ async fn accepting_an_incoming_pairing_persists_trust_only_after_confirmation() 
     };
 
     // Trust must not exist before local confirmation.
-    let trust_store_before = harness
-        .application
-        .query(Query::Device {
-            device_id: harness.peer_id.clone(),
-        })
-        .unwrap();
+    let trust_store_before = harness.application.device(&harness.peer_id);
     assert!(matches!(
         trust_store_before,
-        QueryResult::Device(Some(device)) if !device.paired
+        Some(device) if !device.paired
     ));
     assert!(harness.trust_store.get(&harness.peer_id).unwrap().is_none());
 
     let accepted = harness.application.accept_pairing(pairing.id).unwrap();
     assert_eq!(accepted.status, PairingStatus::Accepted);
 
-    match harness
-        .application
-        .query(Query::Device {
-            device_id: harness.peer_id.clone(),
-        })
-        .unwrap()
-    {
-        QueryResult::Device(Some(device)) => assert!(device.paired),
+    match harness.application.device(&harness.peer_id) {
+        Some(device) => assert!(device.paired),
         other => panic!("unexpected {other:?}"),
     }
 
@@ -259,14 +248,8 @@ async fn rejecting_a_pairing_sends_pair_false_and_never_pairs() {
     let body: PairingBody = sent.body_as().unwrap();
     assert!(!body.pair);
 
-    match harness
-        .application
-        .query(Query::Device {
-            device_id: harness.peer_id.clone(),
-        })
-        .unwrap()
-    {
-        QueryResult::Device(Some(device)) => assert!(!device.paired),
+    match harness.application.device(&harness.peer_id) {
+        Some(device) => assert!(!device.paired),
         other => panic!("unexpected {other:?}"),
     }
 }
@@ -377,14 +360,8 @@ async fn pairing_expires_after_the_thirty_second_timeout_and_releases_its_timer(
     .expect("the pairing reaches a terminal state within the timeout window");
 
     assert_eq!(snapshot.status, PairingStatus::Expired);
-    match harness
-        .application
-        .query(Query::Device {
-            device_id: harness.peer_id.clone(),
-        })
-        .unwrap()
-    {
-        QueryResult::Device(Some(device)) => assert!(!device.pairing && !device.paired),
+    match harness.application.device(&harness.peer_id) {
+        Some(device) => assert!(!device.pairing && !device.paired),
         other => panic!("unexpected {other:?}"),
     }
 }
@@ -429,14 +406,8 @@ async fn unpaired_devices_cannot_trigger_state_changes_with_non_pairing_packets(
         Packet::from_body(0, "kdeconnect.ping", &serde_json::json!({})).unwrap(),
     );
     tokio::time::sleep(Duration::from_millis(50)).await;
-    match harness
-        .application
-        .query(Query::Device {
-            device_id: harness.peer_id.clone(),
-        })
-        .unwrap()
-    {
-        QueryResult::Device(Some(device)) => assert!(!device.paired),
+    match harness.application.device(&harness.peer_id) {
+        Some(device) => assert!(!device.paired),
         other => panic!("unexpected {other:?}"),
     }
 }
@@ -478,15 +449,7 @@ async fn forgetting_a_device_removes_trust_and_reports_unknown_afterwards() {
         }
     };
     assert_eq!(forgotten.device_id, harness.peer_id);
-    assert!(matches!(
-        harness
-            .application
-            .query(Query::Device {
-                device_id: harness.peer_id.clone(),
-            })
-            .unwrap(),
-        QueryResult::Device(None)
-    ));
+    assert!(harness.application.device(&harness.peer_id).is_none());
     assert!(matches!(
         harness.application.forget_device(&harness.peer_id),
         Err(CoreError::UnknownDevice)

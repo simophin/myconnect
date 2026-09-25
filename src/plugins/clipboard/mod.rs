@@ -422,7 +422,7 @@ mod tests {
 
     use super::*;
     use crate::core::{
-        ApplicationService, Core, EventData,
+        Core, EventData,
         testing::{handle, make_identity},
     };
 

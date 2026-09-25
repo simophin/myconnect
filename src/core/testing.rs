@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
-use super::{Command, Core, LocalDeviceSnapshot, Plugin, TransferConfig};
+use super::{Core, LanCommand, LocalDeviceSnapshot, Plugin, TransferConfig};
 use crate::{
     config::{LocalIdentity, TrustError, TrustStore, TrustedDevice},
     protocol::{DeviceType, IdentityBody},
@@ -52,11 +52,13 @@ impl TrustStore for MemoryTrustStore {
 
 /// A core with no devices. Its command queue and event bus hold one item
 /// each, so tests see overflow early.
-pub(crate) fn handle() -> (Core, mpsc::Receiver<Command>) {
+pub(crate) fn handle() -> (Core, mpsc::Receiver<LanCommand>) {
     handle_with_trust(MemoryTrustStore::default())
 }
 
-pub(crate) fn handle_with_trust(trust_store: MemoryTrustStore) -> (Core, mpsc::Receiver<Command>) {
+pub(crate) fn handle_with_trust(
+    trust_store: MemoryTrustStore,
+) -> (Core, mpsc::Receiver<LanCommand>) {
     build(
         trust_store,
         crate::plugins::builtin(crate::plugins::clipboard::InMemoryClipboard::shared()),
@@ -66,14 +68,14 @@ pub(crate) fn handle_with_trust(trust_store: MemoryTrustStore) -> (Core, mpsc::R
 /// A core with no devices, running `plugins`.
 pub(crate) fn handle_with_plugins(
     plugins: Vec<Arc<dyn Plugin>>,
-) -> (Core, mpsc::Receiver<Command>) {
+) -> (Core, mpsc::Receiver<LanCommand>) {
     build(MemoryTrustStore::default(), plugins)
 }
 
 fn build(
     trust_store: MemoryTrustStore,
     plugins: Vec<Arc<dyn Plugin>>,
-) -> (Core, mpsc::Receiver<Command>) {
+) -> (Core, mpsc::Receiver<LanCommand>) {
     let directory = tempfile::tempdir().unwrap();
     let identity = Arc::new(LocalIdentity::load_or_create(directory.path()).unwrap());
     Core::new(

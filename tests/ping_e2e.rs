@@ -11,10 +11,7 @@ use std::{
 
 use myconnect::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore, TrustedDevice},
-    core::{
-        ApplicationService, Command, Core, CoreError, EventData, LocalDeviceSnapshot, Query,
-        QueryResult,
-    },
+    core::{Core, CoreError, EventData, LanCommand, LocalDeviceSnapshot},
     device::DeviceReachability,
     plugins::clipboard::InMemoryClipboard,
     plugins::{
@@ -40,7 +37,7 @@ struct Peer {
     identity: Arc<LocalIdentity>,
     trust_store: Arc<dyn TrustStore + Send + Sync>,
     application: Core,
-    commands: mpsc::Receiver<Command>,
+    commands: mpsc::Receiver<LanCommand>,
     _directory: tempfile::TempDir,
 }
 
@@ -108,11 +105,7 @@ fn test_config(bind: SocketAddr, target: SocketAddr) -> LanConfig {
 async fn wait_for_reachability(application: &Core, device_id: &str, expected: DeviceReachability) {
     timeout(Duration::from_secs(3), async {
         loop {
-            if let QueryResult::Device(Some(device)) = application
-                .query(Query::Device {
-                    device_id: device_id.into(),
-                })
-                .unwrap()
+            if let Some(device) = application.device(device_id)
                 && device.reachability == expected
             {
                 break;
@@ -127,11 +120,7 @@ async fn wait_for_reachability(application: &Core, device_id: &str, expected: De
 async fn wait_for_paired(application: &Core, device_id: &str, expected: bool) {
     timeout(Duration::from_secs(3), async {
         loop {
-            if let QueryResult::Device(Some(device)) = application
-                .query(Query::Device {
-                    device_id: device_id.into(),
-                })
-                .unwrap()
+            if let Some(device) = application.device(device_id)
                 && device.paired == expected
             {
                 break;

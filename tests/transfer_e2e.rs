@@ -20,8 +20,8 @@ use bytes::Bytes;
 use myconnect::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     core::{
-        ApplicationService, Core, CoreError, EventData, LocalDeviceSnapshot, Query, QueryResult,
-        TransferConfig, TransferDirection, TransferSnapshot, TransferStatus,
+        Core, CoreError, EventData, LocalDeviceSnapshot, TransferConfig, TransferDirection,
+        TransferSnapshot, TransferStatus,
     },
     device::DeviceReachability,
     plugins,
@@ -82,11 +82,7 @@ fn local(device_id: &str, name: &str) -> LocalDeviceInfo {
 async fn wait_for_reachability(application: &Core, device_id: &str, expected: DeviceReachability) {
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            if let QueryResult::Device(Some(device)) = application
-                .query(Query::Device {
-                    device_id: device_id.into(),
-                })
-                .unwrap()
+            if let Some(device) = application.device(device_id)
                 && device.reachability == expected
             {
                 break;
@@ -101,11 +97,7 @@ async fn wait_for_reachability(application: &Core, device_id: &str, expected: De
 async fn wait_for_paired(application: &Core, device_id: &str, expected: bool) {
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            if let QueryResult::Device(Some(device)) = application
-                .query(Query::Device {
-                    device_id: device_id.into(),
-                })
-                .unwrap()
+            if let Some(device) = application.device(device_id)
                 && device.paired == expected
             {
                 break;
@@ -124,9 +116,7 @@ async fn wait_for_transfer_status(
 ) -> TransferSnapshot {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let QueryResult::Transfer(Some(snapshot)) =
-                application.query(Query::Transfer { transfer_id }).unwrap()
-            {
+            if let Some(snapshot) = application.transfers().get(transfer_id) {
                 if snapshot.status == expected {
                     return snapshot;
                 }
@@ -301,10 +291,7 @@ async fn run_successful_transfer(harness: &Harness, file_name: &str, data: Vec<u
 
     // The peer must show a matching, independently completed incoming
     // transfer resource.
-    let incoming_transfers = match harness.b.query(Query::Transfers).unwrap() {
-        QueryResult::Transfers(transfers) => transfers,
-        other => panic!("unexpected query result: {other:?}"),
-    };
+    let incoming_transfers = harness.b.transfers().list();
     let incoming = incoming_transfers
         .into_iter()
         .find(|transfer| {
@@ -438,7 +425,7 @@ async fn oversized_payload_is_rejected_by_the_receiver_without_dialing() {
     // transfer resource is recorded as failed and no file is ever written.
     let incoming_transfers = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            if let QueryResult::Transfers(transfers) = harness.b.query(Query::Transfers).unwrap()
+            if let transfers = harness.b.transfers().list()
                 && !transfers.is_empty()
             {
                 return transfers;
@@ -480,10 +467,7 @@ async fn path_traversal_filename_is_rejected_without_touching_the_filesystem() {
 
     // No network activity is expected at all: the rejection happens
     // synchronously, before any payload port is ever dialed.
-    let transfers = match harness.b.query(Query::Transfers).unwrap() {
-        QueryResult::Transfers(transfers) => transfers,
-        other => panic!("unexpected query result: {other:?}"),
-    };
+    let transfers = harness.b.transfers().list();
     let rejected = transfers
         .into_iter()
         .find(|transfer| transfer.direction == TransferDirection::Incoming)
@@ -513,7 +497,7 @@ async fn unreachable_payload_port_fails_the_incoming_transfer() {
 
     let transfers = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if let QueryResult::Transfers(transfers) = harness.b.query(Query::Transfers).unwrap()
+            if let transfers = harness.b.transfers().list()
                 && !transfers.is_empty()
             {
                 return transfers;
@@ -553,12 +537,7 @@ async fn cancelling_an_outgoing_transfer_stops_it_and_cleans_up() {
     // Give the payload connection a moment to establish before cancelling.
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if let QueryResult::Transfer(Some(snapshot)) = harness
-                .a
-                .query(Query::Transfer {
-                    transfer_id: started.id,
-                })
-                .unwrap()
+            if let Some(snapshot) = harness.a.transfers().get(started.id)
                 && matches!(
                     snapshot.status,
                     TransferStatus::Transferring | TransferStatus::Connecting
@@ -575,12 +554,7 @@ async fn cancelling_an_outgoing_transfer_stops_it_and_cleans_up() {
     harness.a.cancel_transfer(started.id).unwrap();
     let final_snapshot = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            if let QueryResult::Transfer(Some(snapshot)) = harness
-                .a
-                .query(Query::Transfer {
-                    transfer_id: started.id,
-                })
-                .unwrap()
+            if let Some(snapshot) = harness.a.transfers().get(started.id)
                 && matches!(
                     snapshot.status,
                     TransferStatus::Cancelled | TransferStatus::Failed
