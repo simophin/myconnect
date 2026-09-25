@@ -24,6 +24,7 @@ use std::{
 use axum::Router;
 use bytes::Bytes;
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 pub use packet::{
     PACKET_TYPE, ShareRequestBody, ShareRequestUpdateBody, UPDATE_PACKET_TYPE,
@@ -63,15 +64,17 @@ impl Plugin for SharePlugin {
 }
 
 /// Start sending a file of `declared_size` bytes to a paired, connected
-/// device that accepts `kdeconnect.share.request`. Returns at once with the
-/// `queued` transfer and a bounded sender to stream the file's bytes into;
-/// dropping the sender ends the upload. The transfer fails if fewer or more
-/// bytes than declared arrive.
+/// device that accepts `kdeconnect.share.request`, as a transfer with `id`
+/// if the client chose one. Returns at once with the `queued` transfer and
+/// a bounded sender to stream the file's bytes into; dropping the sender
+/// ends the upload. The transfer fails if fewer or more bytes than declared
+/// arrive.
 pub fn send_file(
     ctx: &PluginContext,
     device_id: &str,
     file_name: String,
     declared_size: u64,
+    id: Option<Uuid>,
 ) -> Result<(TransferSnapshot, mpsc::Sender<Bytes>), CoreError> {
     if file_name.trim().is_empty() {
         return Err(CoreError::InvalidFileName);
@@ -84,12 +87,13 @@ pub fn send_file(
     let peer = ctx.payload_peer(device_id)?;
     let device = ctx.device(device_id).ok_or(CoreError::UnknownDevice)?;
 
-    let transfer = ctx.transfers().begin(
+    let transfer = ctx.transfers().begin_as(
+        id,
         &device,
         TransferDirection::Outgoing,
         file_name,
         declared_size,
-    );
+    )?;
     let started = transfer.snapshot();
     let (sender, chunks) = upload_channel();
     let ctx = ctx.clone();
@@ -226,16 +230,16 @@ mod tests {
         let (handle, _plugin, _commands) = handle_with_plugin(SharePlugin);
         let ctx = handle.plugin_context();
         assert!(matches!(
-            send_file(&ctx, PEER, "a.txt".into(), 1),
+            send_file(&ctx, PEER, "a.txt".into(), 1, None),
             Err(CoreError::UnknownDevice)
         ));
         let _packets = paired_peer(&handle);
         assert!(matches!(
-            send_file(&ctx, PEER, " ".into(), 1),
+            send_file(&ctx, PEER, " ".into(), 1, None),
             Err(CoreError::InvalidFileName)
         ));
         assert!(matches!(
-            send_file(&ctx, PEER, "a.txt".into(), u64::MAX),
+            send_file(&ctx, PEER, "a.txt".into(), u64::MAX, None),
             Err(CoreError::TransferTooLarge { .. })
         ));
         assert!(ctx.transfers().list().is_empty());
@@ -247,7 +251,7 @@ mod tests {
         let mut packets = paired_peer(&handle);
         let ctx = handle.plugin_context();
 
-        let (started, _sender) = send_file(&ctx, PEER, "notes.txt".into(), 5).unwrap();
+        let (started, _sender) = send_file(&ctx, PEER, "notes.txt".into(), 5, None).unwrap();
         assert_eq!(started.status, TransferStatus::Queued);
         assert_eq!(started.direction, TransferDirection::Outgoing);
 

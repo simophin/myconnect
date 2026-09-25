@@ -36,8 +36,10 @@ use uuid::Uuid;
 
 mod upload;
 
+use upload::linger_after_answer;
 pub(crate) use upload::{
-    UploadIdleTimeout, declared_size, field_text, forward_upload, next_field, skip_field,
+    Forwarded, TransferQuery, UploadIdleTimeout, declared_size, field_text, forward_upload,
+    next_field, requested_transfer_id, skip_field,
 };
 
 use crate::{
@@ -213,10 +215,18 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
     // takes longer than that; handlers bound each step of the upload by the
     // idle timeout instead. Layers apply to the routes a router has when
     // they are added, so each set keeps its own limits after the merge.
+    // A handler that answers before reading the whole upload leaves the
+    // rest to be drained, so a client still sending gets the answer.
+    let idle = config.request_timeout;
+    let shutdown = state.shutdown.clone();
     let streaming = state
         .core
         .plugin_streaming_routes()
-        .layer(Extension(UploadIdleTimeout(config.request_timeout)))
+        .layer(Extension(UploadIdleTimeout(idle)))
+        .layer(middleware::map_request(move |request| {
+            let shutdown = shutdown.clone();
+            async move { linger_after_answer(idle, shutdown, request) }
+        }))
         .layer(DefaultBodyLimit::max(config.max_transfer_body_bytes))
         .layer(middleware::from_fn_with_state(
             config.max_transfer_body_bytes,
@@ -589,6 +599,9 @@ fn map_error(error: CoreError) -> ApiProblem {
             "transfer_too_large",
         ),
         CoreError::UnknownTransfer => ApiProblem::not_found("transfer_not_found"),
+        CoreError::TransferExists => {
+            ApiProblem::new(StatusCode::CONFLICT, "Conflict", "transfer_exists")
+        }
         CoreError::InvalidDeviceName => ApiProblem::bad_request("invalid_device_name"),
         CoreError::InvalidDownloadDir => ApiProblem::bad_request("invalid_download_dir"),
         CoreError::InvalidSettings => ApiProblem::bad_request("invalid_settings"),

@@ -275,6 +275,7 @@ async fn run_successful_transfer(harness: &Harness, file_name: &str, data: Vec<u
         &harness.b_id,
         file_name.to_owned(),
         data.len() as u64,
+        None,
     )
     .unwrap();
     assert_eq!(started.status, TransferStatus::Queued);
@@ -368,7 +369,8 @@ async fn unpaired_device_cannot_initiate_a_transfer() {
             &a_application.plugin_context(),
             "missing-device",
             "f.bin".into(),
-            10
+            10,
+            None
         ),
         Err(CoreError::UnknownDevice)
     ));
@@ -386,6 +388,7 @@ async fn declared_size_mismatch_fails_the_outgoing_transfer() {
         &harness.b_id,
         "short.bin".into(),
         100,
+        None,
     )
     .unwrap();
     send_in_chunks(sender, vec![1_u8; 10], 4096).await;
@@ -413,6 +416,7 @@ async fn oversized_payload_is_rejected_by_the_receiver_without_dialing() {
         &harness.b_id,
         "too_big.bin".into(),
         1024,
+        None,
     )
     .unwrap();
     send_in_chunks(sender, vec![9_u8; 1024], 4096).await;
@@ -526,6 +530,7 @@ async fn cancelling_an_outgoing_transfer_stops_it_and_cleans_up() {
         &harness.b_id,
         "cancel-me.bin".into(),
         10_000_000,
+        None,
     )
     .unwrap();
     // Keep sending in the background so the transfer is actually mid-flight

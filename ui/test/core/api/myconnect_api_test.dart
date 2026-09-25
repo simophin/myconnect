@@ -104,6 +104,22 @@ void main() {
     );
   });
 
+  test('makes random version 4 UUIDs for transfer ids', () {
+    final ids = {for (var i = 0; i < 100; i++) newTransferId()};
+    expect(ids, hasLength(100));
+    for (final id in ids) {
+      expect(
+        id,
+        matches(
+          RegExp(
+            '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-'
+            r'[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+          ),
+        ),
+      );
+    }
+  });
+
   test('uploads a file as deviceId, then a file part with its size', () async {
     final directory = await Directory.systemTemp.createTemp('myconnect_test');
     addTearDown(() => directory.delete(recursive: true));
@@ -124,11 +140,14 @@ void main() {
       }, status: 202),
     );
 
-    final transfer = await apiWith(adapter).sendFile('device', file.path);
+    final transferId = newTransferId();
+    final transfer = await apiWith(adapter)
+        .sendFile('device', file.path, transferId: transferId);
 
     expect(transfer.fileName, 'notes.txt');
     final request = adapter.requests.single;
     expect(request.path, 'devices/device/share');
+    expect(request.queryParameters, {'transferId': transferId});
     expect(request.receiveTimeout, Duration.zero);
     final form = request.data as FormData;
     expect(form.fields, isEmpty);
@@ -191,6 +210,7 @@ void main() {
 
     final request = adapter.requests.single;
     expect(request.path, 'devices/device/files/upload');
+    expect(request.queryParameters, isEmpty);
     final form = request.data as FormData;
     expect(form.fields.single.key, 'path');
     expect(form.fields.single.value, '/sdcard/DCIM');

@@ -61,6 +61,8 @@ pub enum CoreError {
     TransferTooLarge { limit: u64 },
     #[error("unknown transfer")]
     UnknownTransfer,
+    #[error("a transfer with this id already exists")]
+    TransferExists,
     #[error("device name must be 1 to 32 characters without reserved punctuation")]
     InvalidDeviceName,
     #[error("download directory must be an absolute path that can be created")]

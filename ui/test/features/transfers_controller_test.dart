@@ -1,6 +1,8 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:myconnect_ui/src/core/api/api_exception.dart';
 import 'package:myconnect_ui/src/core/api/models/event.dart';
 import 'package:myconnect_ui/src/core/api/models/transfer.dart';
 import 'package:myconnect_ui/src/features/transfers/transfers_controller.dart';
@@ -56,7 +58,7 @@ void main() {
     );
     // As in the real daemon, `transfer.completed` arrives before the
     // upload's response, which describes the transfer mid-flight.
-    when(() => daemon.api.sendFile('a' * 32, '/tmp/photo.jpg'))
+    when(() => daemon.api.sendFileWithAnyId('a' * 32, '/tmp/photo.jpg'))
         .thenAnswer((_) async {
           await daemon.emit(TransferChanged(completed));
           return transfer(direction: TransferDirection.outgoing, updatedAt: 4);
@@ -68,5 +70,65 @@ void main() {
 
     expect(result, completed);
     expect(container.read(transfersProvider).value!['t1'], completed);
+  });
+
+  test('an upload whose transfer ends early stops sending', () async {
+    await container.read(transfersProvider.future);
+    CancelToken? token;
+    String? chosenId;
+    // Like Dart's HttpClient, the fake reads no answer until it has sent
+    // the whole file, which here never happens unless it is stopped.
+    when(() => daemon.api.sendFileWithAnyId('a' * 32, '/tmp/big.iso'))
+        .thenAnswer((invocation) async {
+          chosenId = invocation.namedArguments[#transferId] as String;
+          token = invocation.namedArguments[#cancelToken] as CancelToken;
+          await daemon.emit(
+            TransferChanged(
+              transfer(id: chosenId!, direction: TransferDirection.outgoing),
+            ),
+          );
+          await token!.whenCancel;
+          throw const ApiException(code: 'daemon_unavailable');
+        });
+
+    final sending = container
+        .read(transfersProvider.notifier)
+        .send('a' * 32, '/tmp/big.iso');
+    await pumpEventQueue();
+    expect(token!.isCancelled, isFalse);
+
+    final cancelled = transfer(
+      id: chosenId!,
+      direction: TransferDirection.outgoing,
+      status: TransferStatus.cancelled,
+      updatedAt: 5,
+    );
+    await daemon.emit(TransferChanged(cancelled));
+
+    expect(await sending, cancelled);
+    expect(token!.isCancelled, isTrue);
+  });
+
+  test('a completed upload is left to finish', () async {
+    await container.read(transfersProvider.future);
+    when(() => daemon.api.sendFileWithAnyId('a' * 32, '/tmp/photo.jpg'))
+        .thenAnswer((invocation) async {
+          final id = invocation.namedArguments[#transferId] as String;
+          final token = invocation.namedArguments[#cancelToken] as CancelToken;
+          final completed = transfer(
+            id: id,
+            direction: TransferDirection.outgoing,
+            status: TransferStatus.completed,
+            transferredBytes: 100,
+          );
+          await daemon.emit(TransferChanged(completed));
+          expect(token.isCancelled, isFalse);
+          return completed;
+        });
+
+    final result = await container
+        .read(transfersProvider.notifier)
+        .send('a' * 32, '/tmp/photo.jpg');
+    expect(result.status, TransferStatus.completed);
   });
 }

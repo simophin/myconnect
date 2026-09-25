@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     Extension, Json, Router,
     body::Body,
-    extract::{Multipart, Path, Query, State},
+    extract::{Multipart, Path, Query, State, rejection::QueryRejection},
     http::{
         HeaderValue, StatusCode,
         header::{CONTENT_LENGTH, CONTENT_TYPE},
@@ -17,8 +17,8 @@ use tokio_util::io::ReaderStream;
 use super::{BrowseError, BrowsePlugin, DirectoryListing, FileEntry};
 use crate::{
     api::{
-        ApiProblem, UploadIdleTimeout, declared_size, field_text, forward_upload, next_field,
-        skip_field,
+        ApiProblem, Forwarded, TransferQuery, UploadIdleTimeout, declared_size, field_text,
+        forward_upload, next_field, requested_transfer_id, skip_field,
     },
     core::{PluginContext, TransferSnapshot},
 };
@@ -190,15 +190,19 @@ async fn post_file_download(
 /// Stream a `multipart/form-data` upload (a `path` text field naming the
 /// directory on the device, then one `file` part with a `Content-Length`
 /// header) into a directory on a paired device, as an outgoing transfer.
-/// A name that is taken gets a ` (n)` suffix. Like `POST
+/// A name that is taken gets a ` (n)` suffix, and the transfer gets the id
+/// in `?transferId=` if the client chose one. Like `POST
 /// /devices/{id}/share`, the response comes once the whole file has been
-/// forwarded, and the request fails only if the upload stalls.
+/// forwarded or the transfer has ended, and the request fails only if the
+/// upload stalls.
 async fn post_file_upload(
     State(state): State<BrowseState>,
     Path(device_id): Path<String>,
+    query: Result<Query<TransferQuery>, QueryRejection>,
     Extension(UploadIdleTimeout(idle)): Extension<UploadIdleTimeout>,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<TransferSnapshot>), ApiProblem> {
+    let id = requested_transfer_id(query)?;
     let mut directory: Option<String> = None;
     let mut created = None;
 
@@ -222,10 +226,13 @@ async fn post_file_upload(
                         &directory,
                         &file_name,
                         declared_size,
+                        id,
                     )
                     .await?;
                 created = Some(transfer.id);
-                forward_upload(idle, &mut field, sender).await?;
+                if forward_upload(idle, &mut field, sender).await? == Forwarded::TransferEnded {
+                    break;
+                }
             }
             _ => skip_field(idle, field).await?,
         }

@@ -127,11 +127,6 @@ macOS app has only an ad-hoc signature. A Flutter build hook
   the last byte has been forwarded, so it ends on `transferring (N/N)`
   rather than `completed`. Waiting for the terminal state (or watching
   `/events`) would make the CLI report the real outcome.
-- Cancelling an upload's transfer (`POST /devices/{id}/share` or
-  `.../files/upload`) doesn't end the HTTP request at once: the handler
-  reads the rest of the body looking for more parts, and a large upload
-  ends in `408 request_timeout` after the idle timeout. Returning once the
-  transfer has ended would answer promptly.
 - A transfer the sender cancels shows up on the receiver as `failed` with
   `connection_failed`, not `cancelled`, because the receiver only sees the
   payload connection close early. KDE Connect has no cancel notice in the

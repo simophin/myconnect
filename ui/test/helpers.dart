@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
@@ -18,6 +19,29 @@ import 'package:myconnect_ui/src/core/desktop/desktop_shell.dart';
 import 'package:myconnect_ui/src/core/providers.dart';
 
 class MockMyConnectApi extends Mock implements MyConnectApi;
+
+/// Uploads as the transfers controller makes them, with whatever transfer
+/// id and cancel token it chose, for stubbing and verifying.
+extension AnyUploadId on MyConnectApi {
+  Future<Transfer> sendFileWithAnyId(String deviceId, String path) => sendFile(
+    deviceId,
+    path,
+    transferId: any(named: 'transferId'),
+    cancelToken: any(named: 'cancelToken'),
+  );
+
+  Future<Transfer> uploadFileWithAnyId(
+    String deviceId,
+    String directory,
+    String path,
+  ) => uploadFile(
+    deviceId,
+    directory,
+    path,
+    transferId: any(named: 'transferId'),
+    cancelToken: any(named: 'cancelToken'),
+  );
+}
 
 class FakeDaemonHost implements DaemonHost {
   int stops = 0;
@@ -182,6 +206,7 @@ Transfer transfer({
 /// An API mock with empty defaults, plus a controllable event stream.
 class TestDaemon {
   new() {
+    registerFallbackValue(CancelToken());
     when(api.devices).thenAnswer((_) async => devices);
     when(api.pairings).thenAnswer((_) async => pairings);
     when(api.transfers).thenAnswer((_) async => transfers);

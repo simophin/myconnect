@@ -925,3 +925,187 @@ async fn discovery_can_be_sent_to_one_unicast_address() {
 
     server.server.shutdown().await.unwrap();
 }
+
+/// One response, read up to the end of its body (by `Content-Length`)
+/// rather than to the end of the connection.
+async fn read_response(stream: &mut TcpStream) -> String {
+    let mut response = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let read = stream.read(&mut buffer).await.unwrap();
+        assert_ne!(read, 0, "connection closed mid-response");
+        response.extend_from_slice(&buffer[..read]);
+        let text = String::from_utf8_lossy(&response);
+        let Some((head, body)) = text.split_once("\r\n\r\n") else {
+            continue;
+        };
+        let length: usize = head
+            .lines()
+            .find_map(|line| {
+                line.to_ascii_lowercase()
+                    .strip_prefix("content-length:")
+                    .map(|value| value.trim().parse().unwrap())
+            })
+            .expect("the response has a length");
+        if body.len() >= length {
+            return text.into_owned();
+        }
+    }
+}
+
+/// The transfer the server is running, once there is one.
+async fn wait_for_a_transfer(server: &TestServer) -> uuid::Uuid {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(transfer) = server.application.transfers().list().first() {
+                return transfer.id;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the upload starts a transfer")
+}
+
+#[tokio::test]
+async fn cancelling_an_upload_answers_its_request_at_once() {
+    // An idle timeout far longer than the test waits for the answer.
+    let server = TestServer::start_with(None, Duration::from_secs(30)).await;
+    let device_id = "cccccccccccccccccccccccccccccccc";
+    let _packets = server.connect_and_pair(device_id);
+
+    // Declare a large file but send only its first bytes, then wait, as a
+    // client does while the device is slow to accept.
+    let boundary = "myconnect-test-boundary";
+    let file_len = 64 * 1024 * 1024;
+    let file_head = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"big.bin\"\r\nContent-Length: {file_len}\r\n\r\n"
+    );
+    let trailer = format!("\r\n--{boundary}--\r\n");
+    let mut stream = TcpStream::connect(server.server.local_addr())
+        .await
+        .unwrap();
+    let head = format!(
+        "POST /api/v1/devices/{device_id}/share HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary={boundary}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{file_head}",
+        file_head.len() + file_len + trailer.len(),
+    );
+    stream.write_all(head.as_bytes()).await.unwrap();
+    stream.write_all(&[7_u8; 1024]).await.unwrap();
+
+    let transfer_id = wait_for_a_transfer(&server).await;
+    let cancelled = request(
+        &server,
+        "DELETE",
+        &format!("/api/v1/transfers/{transfer_id}"),
+        false,
+    )
+    .await;
+    assert!(cancelled.starts_with("HTTP/1.1 200 OK"), "{cancelled}");
+
+    // The daemon answers without waiting for the rest of the upload (and
+    // keeps the connection open for it meanwhile, so read only the answer).
+    let response = timeout(Duration::from_secs(5), read_response(&mut stream))
+        .await
+        .expect("the upload's request ends once its transfer is cancelled");
+    assert!(
+        response.starts_with("HTTP/1.1 202 Accepted"),
+        "unexpected response: {response}"
+    );
+    let transfer: serde_json::Value = serde_json::from_str(body(&response)).unwrap();
+    assert_eq!(transfer["id"], transfer_id.to_string());
+    assert_eq!(transfer["status"], "cancelled");
+
+    server.server.shutdown().await.unwrap();
+    server
+        .application
+        .shutdown_transfers(Duration::from_secs(1))
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_still_sending_a_cancelled_upload_is_told_it_was_cancelled() {
+    let server = TestServer::start_with(None, Duration::from_secs(30)).await;
+    let device_id = "cccccccccccccccccccccccccccccccc";
+    let _packets = server.connect_and_pair(device_id);
+
+    // Larger than the daemon can take in before the device accepts it, so
+    // the client is still sending when the transfer is cancelled.
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("big.bin");
+    std::fs::File::create(&file)
+        .unwrap()
+        .set_len(1024 * 1024 * 1024)
+        .unwrap();
+    let client =
+        myconnect::client::ApiClient::new(&format!("http://{}", server.server.local_addr()), None)
+            .unwrap();
+    let upload = tokio::spawn(async move { client.send_file(device_id, &file).await });
+
+    let transfer_id = wait_for_a_transfer(&server).await;
+    server.application.cancel_transfer(transfer_id).unwrap();
+    let transfer = timeout(Duration::from_secs(5), upload)
+        .await
+        .expect("the upload's request ends once its transfer is cancelled")
+        .unwrap()
+        .expect("the client gets the cancelled transfer, not an error");
+    assert_eq!(transfer.id, transfer_id);
+    assert_eq!(transfer.status, myconnect::core::TransferStatus::Cancelled);
+
+    server.server.shutdown().await.unwrap();
+    server
+        .application
+        .shutdown_transfers(Duration::from_secs(1))
+        .await;
+}
+
+/// Upload a small file to `path` and return the response.
+async fn small_upload(server: &TestServer, path: &str) -> String {
+    let boundary = "myconnect-test-boundary";
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"id.txt\"\r\nContent-Length: 2\r\n\r\nhi\r\n--{boundary}--\r\n"
+    );
+    let mut stream = TcpStream::connect(server.server.local_addr())
+        .await
+        .unwrap();
+    body = format!(
+        "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary={boundary}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len(),
+    );
+    stream.write_all(body.as_bytes()).await.unwrap();
+    timeout(Duration::from_secs(5), read_response(&mut stream))
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_client_may_choose_the_id_of_the_transfer_it_uploads() {
+    let server = TestServer::start_with(None, Duration::from_secs(15)).await;
+    let device_id = "cccccccccccccccccccccccccccccccc";
+    let _packets = server.connect_and_pair(device_id);
+    let id = uuid::Uuid::new_v4();
+    let path = format!("/api/v1/devices/{device_id}/share?transferId={id}");
+
+    let created = small_upload(&server, &path).await;
+    assert!(created.starts_with("HTTP/1.1 202 Accepted"), "{created}");
+    let transfer: serde_json::Value = serde_json::from_str(body(&created)).unwrap();
+    assert_eq!(transfer["id"], id.to_string());
+
+    let reused = small_upload(&server, &path).await;
+    assert!(reused.starts_with("HTTP/1.1 409 Conflict"), "{reused}");
+    assert!(body(&reused).contains("transfer_exists"));
+
+    let invalid = small_upload(
+        &server,
+        &format!("/api/v1/devices/{device_id}/share?transferId=nope"),
+    )
+    .await;
+    assert!(invalid.starts_with("HTTP/1.1 400 Bad Request"), "{invalid}");
+    assert!(body(&invalid).contains("invalid_transfer_id"));
+    assert_eq!(server.application.transfers().list().len(), 1);
+
+    server.server.shutdown().await.unwrap();
+    server
+        .application
+        .shutdown_transfers(Duration::from_secs(1))
+        .await;
+}
