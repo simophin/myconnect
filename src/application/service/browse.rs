@@ -15,23 +15,31 @@ use std::{
     task::{Context, Poll},
 };
 
+use bytes::Bytes;
 use russh_sftp::{
     client::{error::Error as SftpStatusError, fs::Metadata},
     protocol::{FileType, OpenFlags, StatusCode},
 };
 use tokio::{
     io::{AsyncRead, AsyncWriteExt, ReadBuf},
-    sync::oneshot,
+    sync::{mpsc, oneshot},
 };
 
 use super::*;
 use crate::{
-    application::files::{
-        DirectoryListing, FileEntry, FileKind, join_remote_path, normalize_remote_path,
-        numbered_name, split_remote_path, validate_remote_name,
+    application::{
+        TransferDirection,
+        files::{
+            DirectoryListing, FileEntry, FileKind, join_remote_path, normalize_remote_path,
+            numbered_name, split_remote_path, validate_remote_name,
+        },
+        transfers::{TransferHandle, sanitize_file_name, upload_channel},
     },
     plugins::sftp::{self, SftpBody, SftpReply, SftpRoot},
-    transport::sftp::{self as sftp_transport, SftpConnection, SftpEndpoint, SftpError},
+    transport::{
+        payload::PayloadError,
+        sftp::{self as sftp_transport, SftpConnection, SftpEndpoint, SftpError},
+    },
 };
 
 /// How long to wait for the peer's `kdeconnect.sftp` answer.
@@ -215,140 +223,21 @@ impl ApplicationHandle {
         let file_name = sanitize_file_name(name).map_err(|_| ApplicationError::InvalidFileName)?;
         let session = self.remote_session(device_id).await?;
         let total = self.remote_file_size(device_id, &session, &path).await?;
-        if total > self.transfer_config.max_transfer_bytes {
+        if total > self.transfers.max_bytes() {
             return Err(ApplicationError::TransferTooLarge {
-                limit: self.transfer_config.max_transfer_bytes,
+                limit: self.transfers.max_bytes(),
             });
         }
-
-        let transfer_id = Uuid::new_v4();
-        let transfer = self.new_transfer(
-            transfer_id,
-            device_id,
+        let device = self.known_device(device_id)?;
+        let transfer = self.transfers.begin(
+            &device,
             TransferDirection::Incoming,
             file_name.clone(),
             total,
-        )?;
+        );
         let started = transfer.snapshot();
-        self.insert_transfer(transfer)?;
-        let cancellation = CancellationToken::new();
-        let task_handle = self.clone();
-        let task_cancellation = cancellation.clone();
-        let join = tokio::spawn(async move {
-            task_handle
-                .run_file_download(
-                    transfer_id,
-                    session,
-                    path,
-                    file_name,
-                    total,
-                    task_cancellation,
-                )
-                .await;
-        });
-        self.track_transfer_task(transfer_id, device_id, cancellation, join);
-        self.events
-            .publish(super::super::EventData::TransferStarted(started.clone()))?;
+        transfer.spawn(move |transfer| run_file_download(transfer, session, path, file_name));
         Ok(started)
-    }
-
-    async fn run_file_download(
-        &self,
-        transfer_id: Uuid,
-        session: Arc<RemoteSession>,
-        path: String,
-        file_name: String,
-        total: u64,
-        cancellation: CancellationToken,
-    ) {
-        let mut remote = tokio::select! {
-            _ = cancellation.cancelled() => {
-                self.finish_transfer_cancelled(transfer_id);
-                self.cleanup_transfer_task(transfer_id);
-                return;
-            }
-            result = session.sftp().open(path.as_str()) => match result {
-                Ok(file) => file,
-                Err(_) => {
-                    self.fail_transfer(transfer_id, OperationErrorCode::ConnectionFailed);
-                    self.cleanup_transfer_task(transfer_id);
-                    return;
-                }
-            },
-        };
-
-        // Read once, so the partial and the final file share a directory
-        // even if the setting changes mid-transfer.
-        let download_dir = match self.settings() {
-            Ok(settings) => settings.download_dir,
-            Err(_) => {
-                self.fail_transfer(transfer_id, OperationErrorCode::Internal);
-                self.cleanup_transfer_task(transfer_id);
-                return;
-            }
-        };
-        if tokio::fs::create_dir_all(&download_dir).await.is_err() {
-            self.fail_transfer(transfer_id, OperationErrorCode::Internal);
-            self.cleanup_transfer_task(transfer_id);
-            return;
-        }
-        let temp_path = download_dir.join(format!(".{transfer_id}.part"));
-        let mut file = match tokio::fs::File::create(&temp_path).await {
-            Ok(file) => file,
-            Err(_) => {
-                self.fail_transfer(transfer_id, OperationErrorCode::Internal);
-                self.cleanup_transfer_task(transfer_id);
-                return;
-            }
-        };
-        if self
-            .transition_transfer(transfer_id, TransferStatus::Transferring, None)
-            .is_none()
-        {
-            let _ = tokio::fs::remove_file(&temp_path).await;
-            self.cleanup_transfer_task(transfer_id);
-            return;
-        }
-
-        let mut progress = ProgressEvents::default();
-        let result = payload::copy_exact(
-            &mut remote,
-            &mut file,
-            total,
-            &cancellation,
-            |transferred| {
-                session.touch();
-                progress.record(self, transfer_id, transferred);
-            },
-        )
-        .await;
-        drop(file);
-        let _ = remote.shutdown().await;
-
-        match result {
-            Ok(()) => {
-                let destination = unique_destination(&download_dir, &file_name);
-                match tokio::fs::rename(&temp_path, &destination).await {
-                    Ok(()) => self.complete_transfer(
-                        transfer_id,
-                        Some(std::path::absolute(&destination).unwrap_or(destination)),
-                    ),
-                    Err(_) => {
-                        let _ = tokio::fs::remove_file(&temp_path).await;
-                        self.fail_transfer(transfer_id, OperationErrorCode::Internal);
-                    }
-                }
-            }
-            Err(payload::PayloadError::Cancelled) => {
-                let _ = tokio::fs::remove_file(&temp_path).await;
-                self.finish_transfer_cancelled(transfer_id);
-            }
-            Err(_) => {
-                let _ = tokio::fs::remove_file(&temp_path).await;
-                self.fail_transfer(transfer_id, OperationErrorCode::ConnectionFailed);
-            }
-        }
-        self.cleanup_transfer_task(transfer_id);
     }
 
     /// Start uploading a file into `directory` on a peer, as an outgoing
@@ -365,11 +254,12 @@ impl ApplicationHandle {
     ) -> Result<(TransferSnapshot, mpsc::Sender<Bytes>), ApplicationError> {
         let directory = normalize_path(directory)?;
         validate_remote_name(file_name).map_err(|_| ApplicationError::InvalidFileName)?;
-        if declared_size > self.transfer_config.max_transfer_bytes {
+        if declared_size > self.transfers.max_bytes() {
             return Err(ApplicationError::TransferTooLarge {
-                limit: self.transfer_config.max_transfer_bytes,
+                limit: self.transfers.max_bytes(),
             });
         }
+        let device = self.known_device(device_id)?;
         let session = self.remote_session(device_id).await?;
         let metadata = session
             .sftp()
@@ -380,44 +270,19 @@ impl ApplicationHandle {
             return Err(ApplicationError::NotADirectory);
         }
 
-        let (path, mut remote) = self
+        let (path, remote) = self
             .create_unique_file(device_id, &session, &directory, file_name)
             .await?;
         let (_, final_name) = split_remote_path(&path).expect("created under a directory");
-        let transfer_id = Uuid::new_v4();
-        let transfer = self.new_transfer(
-            transfer_id,
-            device_id,
+        let transfer = self.transfers.begin(
+            &device,
             TransferDirection::Outgoing,
             final_name.to_owned(),
             declared_size,
-        )?;
+        );
         let started = transfer.snapshot();
-        if let Err(error) = self.insert_transfer(transfer) {
-            let _ = remote.shutdown().await;
-            let _ = session.sftp().remove_file(path.as_str()).await;
-            return Err(error);
-        }
-
-        let (chunk_tx, chunk_rx) = mpsc::channel::<Bytes>(TRANSFER_CHANNEL_CAPACITY);
-        let cancellation = CancellationToken::new();
-        let task_handle = self.clone();
-        let task_cancellation = cancellation.clone();
-        let join = tokio::spawn(async move {
-            task_handle
-                .run_file_upload(
-                    transfer_id,
-                    session,
-                    path,
-                    remote,
-                    chunk_rx,
-                    task_cancellation,
-                )
-                .await;
-        });
-        self.track_transfer_task(transfer_id, device_id, cancellation, join);
-        self.events
-            .publish(super::super::EventData::TransferStarted(started.clone()))?;
+        let (chunk_tx, chunk_rx) = upload_channel();
+        transfer.spawn(move |transfer| run_file_upload(transfer, session, path, remote, chunk_rx));
         Ok((started, chunk_tx))
     }
 
@@ -456,62 +321,6 @@ impl ApplicationHandle {
             };
         }
         Err(ApplicationError::RemoteFileExists)
-    }
-
-    async fn run_file_upload(
-        &self,
-        transfer_id: Uuid,
-        session: Arc<RemoteSession>,
-        path: String,
-        mut remote: russh_sftp::client::fs::File,
-        mut chunk_rx: mpsc::Receiver<Bytes>,
-        cancellation: CancellationToken,
-    ) {
-        let Some(total) = self.transfer_snapshot(transfer_id).map(|s| s.total_bytes) else {
-            self.cleanup_transfer_task(transfer_id);
-            return;
-        };
-        if self
-            .transition_transfer(transfer_id, TransferStatus::Transferring, None)
-            .is_none()
-        {
-            let _ = session.sftp().remove_file(path.as_str()).await;
-            self.cleanup_transfer_task(transfer_id);
-            return;
-        }
-
-        let mut progress = ProgressEvents::default();
-        let mut result = payload::forward_channel(
-            &mut chunk_rx,
-            &mut remote,
-            total,
-            &cancellation,
-            |transferred| {
-                session.touch();
-                progress.record(self, transfer_id, transferred);
-            },
-        )
-        .await;
-        // Closing the handle is when a server reports a failed write.
-        let closed = remote.shutdown().await;
-        if result.is_ok()
-            && let Err(error) = closed
-        {
-            result = Err(payload::PayloadError::Socket(error));
-        }
-
-        match result {
-            Ok(()) => self.complete_transfer(transfer_id, None),
-            Err(error) => {
-                let _ = session.sftp().remove_file(path.as_str()).await;
-                if matches!(error, payload::PayloadError::Cancelled) {
-                    self.finish_transfer_cancelled(transfer_id);
-                } else {
-                    self.fail_transfer(transfer_id, OperationErrorCode::ConnectionFailed);
-                }
-            }
-        }
-        self.cleanup_transfer_task(transfer_id);
     }
 
     /// Create a directory on a peer.
@@ -921,75 +730,58 @@ impl ApplicationHandle {
         });
     }
 
-    fn new_transfer(
-        &self,
-        transfer_id: Uuid,
-        device_id: &str,
-        direction: TransferDirection,
-        file_name: String,
-        total: u64,
-    ) -> Result<Transfer, ApplicationError> {
-        let device_name = self
-            .read_state()?
+    /// The device a transfer is with, for its snapshot.
+    fn known_device(&self, device_id: &str) -> Result<DeviceSnapshot, ApplicationError> {
+        self.read_state()?
             .devices
             .get(device_id)
-            .ok_or(ApplicationError::UnknownDevice)?
-            .device_name;
-        let now = unix_millis();
-        Ok(Transfer::new(TransferSnapshot {
-            id: transfer_id,
-            device_id: device_id.to_owned(),
-            device_name,
-            direction,
-            status: TransferStatus::Queued,
-            file_name,
-            total_bytes: total,
-            transferred_bytes: 0,
-            created_at: now,
-            updated_at: now,
-            error_code: None,
-            saved_path: None,
-        }))
+            .ok_or(ApplicationError::UnknownDevice)
     }
+}
 
-    /// Add a transfer resource. Done before its task starts, so the task
-    /// always finds it.
-    fn insert_transfer(&self, transfer: Transfer) -> Result<(), ApplicationError> {
-        let snapshot = transfer.snapshot();
-        self.state
-            .write()
-            .map_err(|_| ApplicationError::StateUnavailable)?
-            .transfers
-            .insert(snapshot.id, transfer);
-        Ok(())
-    }
+/// Copy a file from a peer into the download directory.
+async fn run_file_download(
+    transfer: TransferHandle,
+    session: Arc<RemoteSession>,
+    path: String,
+    file_name: String,
+) {
+    let cancellation = transfer.cancellation();
+    let mut remote = tokio::select! {
+        _ = cancellation.cancelled() => return transfer.cancelled(),
+        result = session.sftp().open(path.as_str()) => match result {
+            Ok(file) => file,
+            Err(_) => return transfer.fail(OperationErrorCode::ConnectionFailed),
+        },
+    };
+    transfer.save_to_downloads(&mut remote, &file_name).await;
+    let _ = remote.shutdown().await;
+    session.touch();
+}
 
-    /// Record a transfer's task so cancellation, disconnect and shutdown can
-    /// stop it.
-    fn track_transfer_task(
-        &self,
-        transfer_id: Uuid,
-        device_id: &str,
-        cancellation: CancellationToken,
-        handle: JoinHandle<()>,
-    ) {
-        let Ok(mut state) = self.state.write() else {
-            cancellation.cancel();
-            return;
-        };
-        // A task that already finished has cleaned up after itself.
-        if handle.is_finished() {
-            return;
-        }
-        state.transfer_tasks.insert(
-            transfer_id,
-            TransferTask {
-                device_id: device_id.to_owned(),
-                cancellation,
-                handle,
-            },
-        );
+/// Write an upload into the file created for it on a peer, removing the
+/// file if the upload doesn't finish.
+async fn run_file_upload(
+    mut transfer: TransferHandle,
+    session: Arc<RemoteSession>,
+    path: String,
+    mut remote: russh_sftp::client::fs::File,
+    mut chunks: mpsc::Receiver<Bytes>,
+) {
+    transfer.transferring();
+    let mut result = transfer.forward(&mut chunks, &mut remote).await;
+    // Closing the handle is when a server reports a failed write.
+    let closed = remote.shutdown().await;
+    if result.is_ok()
+        && let Err(error) = closed
+    {
+        result = Err(PayloadError::Socket(error));
     }
+    if result.is_err() {
+        let _ = session.sftp().remove_file(path.as_str()).await;
+    }
+    session.touch();
+    transfer.finish(result);
 }
 
 fn normalize_path(path: &str) -> Result<String, ApplicationError> {

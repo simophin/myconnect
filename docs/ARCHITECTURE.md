@@ -53,15 +53,15 @@ types — they know nothing about HTTP. A plugin reaches the core only through
 | `config` | `src/config/{mod,identity,settings,token,trust}.rs` | Local device identity (UUID + self-signed cert), the optional API bearer token (never persisted), filesystem-backed `TrustStore` of pinned peer certificates (one `trusted-devices/<id>.json` each, with the name, type and capabilities the peer last reported over an authenticated connection), and `settings.json` (user settings, written atomically). |
 | `transport` | `src/transport/{lan,tls,payload,sftp}.rs` | UDP discovery, TCP control-channel connect/accept, the real rustls TLS handshake and certificate pinning, the auxiliary TLS payload connection used for file transfer, and the SSH/SFTP client connection to a peer's file server (§12). |
 | `device` | `src/device.rs` | `DeviceSnapshot` (whose `plugins` map the core fills from each plugin's `device_state` when it hands a snapshot out), `DeviceReachability`, and the in-memory device registry keyed by device ID. It starts with every paired device from the `TrustStore`, as `unavailable`, so paired devices are listed while offline. |
-| `plugins` | `src/plugins/mod.rs`, `src/plugins/{ping,findmyphone}/{mod,packet,http}.rs`, `src/plugins/battery/{mod,packet}.rs`, `src/plugins/clipboard/{mod,packet,http,backend}.rs`, `src/plugins/clipboard/backend/system.rs`, `src/plugins/{share,sftp}.rs` | The features. `builtin()` lists those that implement `application::Plugin` (so far ping, which owns its packet handling, `ping.received` event and `POST /devices/{id}/ping` route, find my phone, which only sends and owns `POST /devices/{id}/ring`, battery, which adds `plugins.battery` to device snapshots and clears it through the `disconnected`/`unpaired` hooks, and clipboard, which owns the synced text and `/clipboard`, the `plugins.clipboard` settings section, and its backends: the `ClipboardService` trait, the desktop clipboard `SystemClipboard` over `arboard`, and an in-memory one, §6). The rest are still routed by a fixed table (`dispatch_incoming`) into `application`. Advertises capability strings for the identity packet: ping, clipboard and share in both directions; `kdeconnect.sftp.request` outgoing and `kdeconnect.sftp` incoming only, since this build browses peers but serves no files; `kdeconnect.battery` incoming only, since it reads peers' batteries but reports none; `kdeconnect.findmyphone.request` outgoing only, since this build asks peers to ring but doesn't ring itself. |
-| `application` | `src/application.rs`, `src/application/{state,events,plugin,service,settings,transfer,files}.rs`, `src/application/service/browse.rs` | Orchestration: connection registry, pairing state machine, transfer state machine, user settings (with a section per plugin that has settings), browse sessions with peers' files (§12), bounded event bus, and the plugin API (`Plugin`, `PluginContext`, `PluginRegistry`; plugin events travel as `EventData::Plugin` with the same `{type, data}` shape). `testing` is a real core for unit tests. `RunningService` starts/stops a whole daemon (LAN + API) for the CLI and embedders. |
-| `api` | `src/api.rs` | Axum HTTP transport only — translates HTTP requests to `ApplicationService` calls and snapshots back to JSON. Optional bearer-token auth, body-size limits, SSE. |
+| `plugins` | `src/plugins/mod.rs`, `src/plugins/{ping,findmyphone}/{mod,packet,http}.rs`, `src/plugins/battery/{mod,packet}.rs`, `src/plugins/clipboard/{mod,packet,http,backend}.rs`, `src/plugins/clipboard/backend/system.rs`, `src/plugins/share/{mod,packet,http}.rs`, `src/plugins/sftp.rs` | The features. `builtin()` lists those that implement `application::Plugin` (so far ping, which owns its packet handling, `ping.received` event and `POST /devices/{id}/ping` route, find my phone, which only sends and owns `POST /devices/{id}/ring`, battery, which adds `plugins.battery` to device snapshots and clears it through the `disconnected`/`unpaired` hooks, and clipboard, which owns the synced text and `/clipboard`, the `plugins.clipboard` settings section, and its backends: the `ClipboardService` trait, the desktop clipboard `SystemClipboard` over `arboard`, and an in-memory one, §6, and share, which sends files through its streaming route `POST /devices/{id}/share` and saves files peers send, both as transfers of the core's transfers service, §5). Browsing is still routed by a fixed table (`dispatch_incoming`) into `application`. Advertises capability strings for the identity packet: ping, clipboard and share in both directions; `kdeconnect.sftp.request` outgoing and `kdeconnect.sftp` incoming only, since this build browses peers but serves no files; `kdeconnect.battery` incoming only, since it reads peers' batteries but reports none; `kdeconnect.findmyphone.request` outgoing only, since this build asks peers to ring but doesn't ring itself. |
+| `application` | `src/application.rs`, `src/application/{state,events,plugin,service,settings,transfers,payload,files}.rs`, `src/application/service/browse.rs` | Orchestration: connection registry, pairing state machine, the transfers service (`Transfers`, `TransferHandle`: the transfer state machine, progress throttling, cancellation, and cleanup, for every feature that moves a file, §5), payload connections for plugins (`PayloadPeer`: listen or dial with this device's certificate without handing out its key), user settings (with a section per plugin that has settings), browse sessions with peers' files (§12), bounded event bus, and the plugin API (`Plugin`, `PluginContext`, `PluginRegistry`; plugin events travel as `EventData::Plugin` with the same `{type, data}` shape). `testing` is a real core for unit tests. `RunningService` starts/stops a whole daemon (LAN + API) for the CLI and embedders. |
+| `api` | `src/api.rs`, `src/api/upload.rs` | Axum HTTP transport only — translates HTTP requests to `ApplicationService` calls and snapshots back to JSON, and merges in the plugins' routes. Optional bearer-token auth, body-size limits, SSE. Streaming routes (a plugin's `streaming_routes`, and the browse upload) get the transfer-sized body limit and no request deadline; `upload` has the helpers they share (idle timeout, forwarding a multipart file part into a transfer). |
 | `client` | `src/client.rs` | Typed HTTP client used by the CLI (and any future frontend) to talk to `api`. |
 | `src/bin/myconnect` | `cli.rs`, `main.rs` | Argument parsing and daemon bootstrap only. |
 | `myconnect-ffi` | `ffi/src/lib.rs` | `cdylib` exporting `myconnect_start` / `myconnect_stop` / `myconnect_free_string` (JSON in, JSON out) so a GUI process can embed a daemon. See §9. |
 
 A new feature is a module under `plugins/` implementing `application::Plugin`
-(packet types, packet handler, routes, what it adds to a device snapshot,
+(packet types, packet handler, routes and streaming routes, what it adds to a device snapshot,
 a settings section, and `connected`/`disconnected`/`unpaired` hooks) plus
 one line in `plugins::builtin()`.
 The set is fixed at compile time; nothing is loaded at runtime. The older
@@ -135,10 +135,20 @@ States: `requested → awaiting_confirmation → accepted | rejected | expired |
 
 States: `queued → connecting → transferring → completed | cancelled | failed`.
 
-- Transfers use `kdeconnect.share.request` / `kdeconnect.share.request.update`
-  on the control channel to negotiate, then stream bytes over a **separate**
+- Transfers are a core service (`application::Transfers`) that every feature
+  moving a file uses: sharing and browsing (§12). A feature calls
+  `PluginContext::transfers().begin(..)` and gets a `TransferHandle` that owns
+  the state machine, records progress, and ends the transfer; a handle
+  dropped without ending it fails it (or cancels it if cancellation was
+  asked for), so a transfer never stays running after its task is gone. The
+  core lists (`GET /transfers`) and cancels (`DELETE /transfers/{id}`, a
+  disconnect, shutdown) transfers whatever started them.
+- Sharing (`plugins::share`) uses `kdeconnect.share.request` on the control
+  channel to offer one file, then streams bytes over a **separate**
   auxiliary TLS payload connection (`transport::payload`), reusing the same
-  TLS material and pinning logic as the control channel.
+  TLS material and pinning logic as the control channel. Plugins open these
+  through `PluginContext::payload_peer`, which never hands out the private
+  key. `kdeconnect.share.request.update` isn't handled: one file per request.
 - Uploads are streamed from the HTTP multipart body straight to the network;
   downloads are streamed from the network straight to a temporary
   `.{transfer_id}.part` file. Neither hop buffers a whole file in memory.
@@ -247,8 +257,8 @@ and gets a `401` otherwise. Without a token — the CLI default — any local
 client may call the API. Tokens are never persisted; clients pass the same
 `--api-token`/`MYCONNECT_API_TOKEN`. The server binds `127.0.0.1` by default;
 CORS is disabled. Errors use `application/problem+json`. Requests must finish
-within 15 seconds (`408 request_timeout`), except the file upload and the
-event stream.
+within 15 seconds (`408 request_timeout`), except the file uploads (the
+streaming routes) and the event stream.
 
 | Method | Path | Notes |
 | --- | --- | --- |
@@ -264,14 +274,14 @@ event stream.
 | `GET` | `/pairings/{pairingId}` | Pairing state, verification code, expiry. |
 | `POST` | `/pairings/{pairingId}/accept` | Confirm verification codes match (incoming only). |
 | `DELETE` | `/pairings/{pairingId}` | Reject/cancel/unpair. |
-| `POST` | `/transfers` | Streaming `multipart/form-data` (`deviceId` + `file`, whose part must carry a `Content-Length` header); `202` once the whole file has been forwarded. Has its own, larger body-size limit than the rest of the API, and no overall deadline: it fails with `408 request_timeout` only if the upload stalls for longer than the request timeout. |
+| `POST` | `/devices/{deviceId}/share` | Send a file: streaming `multipart/form-data` with one `file` part, which must carry a `Content-Length` header; `202` with the transfer once the whole file has been forwarded. Has its own, larger body-size limit than the rest of the API, and no overall deadline: it fails with `408 request_timeout` only if the upload stalls for longer than the request timeout. |
 | `GET` | `/transfers` | Active and recent transfers. |
 | `GET` | `/transfers/{transferId}` | State, byte counts, safe metadata. |
 | `DELETE` | `/transfers/{transferId}` | Cancel an active transfer. |
 | `GET` | `/devices/{deviceId}/files` | List a directory on a paired device (`?path=/absolute/path`), or without `path` the storage roots it shares, as `{path, entries: [{name, path, kind, size?, modifiedAt?}]}`. `kind` is `file`, `directory`, `symlink` or `other`; links are shown as what they point to. §12. |
 | `GET` | `/devices/{deviceId}/files/content` | Stream a file's bytes (`?path=`), with `Content-Length` and a media type guessed from the extension. For previews; not a transfer. |
 | `POST` | `/devices/{deviceId}/files/download` | `{"path": ...}`: save the file into the download directory as an incoming transfer; `202` with the transfer. |
-| `POST` | `/devices/{deviceId}/files/upload` | Streaming `multipart/form-data`: a `path` field naming the directory on the device, then a `file` part with `Content-Length`. Runs as an outgoing transfer; a taken name gets a ` (n)` suffix. Same body limit and idle timeout as `POST /transfers`. |
+| `POST` | `/devices/{deviceId}/files/upload` | Streaming `multipart/form-data`: a `path` field naming the directory on the device, then a `file` part with `Content-Length`. Runs as an outgoing transfer; a taken name gets a ` (n)` suffix. Same body limit and idle timeout as `POST /devices/{id}/share`. |
 | `POST` | `/devices/{deviceId}/files/directories` | `{"path": ...}`: create a directory; `201` with its entry. |
 | `POST` | `/devices/{deviceId}/files/move` | `{"from": ..., "to": ...}`: move or rename; `409 file_exists` rather than replacing anything. |
 | `DELETE` | `/devices/{deviceId}/files` | `?path=`: delete a file, or a directory and everything in it. Storage roots can't be moved or deleted (`400 invalid_path`). |

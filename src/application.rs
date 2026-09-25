@@ -29,18 +29,20 @@ use crate::{
 
 mod events;
 mod files;
+mod payload;
 mod plugin;
 mod service;
 mod settings;
 mod state;
 #[cfg(test)]
 pub(crate) mod testing;
-mod transfer;
+mod transfers;
 
 use settings::Settings;
 
 pub use events::{ApplicationEvent, EventBus, EventBusError, EventData};
 pub use files::{DirectoryListing, FileEntry, FileKind};
+pub use payload::{AcceptedPayload, DialedPayload, PayloadListener, PayloadPeer};
 pub use plugin::{
     Plugin, PluginContext, PluginEvent, PluginEventKind, PluginRegistry, PluginSettings,
     SettingsSection,
@@ -53,7 +55,10 @@ pub use state::{
     TransferDirection, TransferProgressError, TransferSnapshot, TransferStatus,
     TransferTransitionError,
 };
-pub use transfer::{DEFAULT_MAX_TRANSFER_BYTES, FileNameError, TransferConfig};
+pub use transfers::{
+    DEFAULT_MAX_TRANSFER_BYTES, FileNameError, PROGRESS_EVENT_INTERVAL, TransferConfig,
+    TransferHandle, Transfers, sanitize_file_name, upload_channel,
+};
 
 /// Options for starting the MyConnect service.
 #[derive(Debug, PartialEq, Eq)]

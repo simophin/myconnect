@@ -74,7 +74,7 @@ impl MockServer {
                 get(pairing).delete(reject_pairing),
             )
             .route("/api/v1/pairings/{pairing_id}/accept", post(accept_pairing))
-            .route("/api/v1/transfers", post(start_transfer))
+            .route("/api/v1/devices/{device_id}/share", post(start_transfer))
             .route("/api/v1/transfers/{transfer_id}", get(transfer))
             .route("/api/v1/clipboard", get(clipboard).put(set_clipboard))
             .route("/api/v1/events", get(events))
@@ -247,7 +247,12 @@ async fn reject_pairing(Path(pairing_id): Path<Uuid>) -> StatusCode {
     StatusCode::NO_CONTENT
 }
 
-async fn start_transfer(headers: HeaderMap, body: Bytes) -> (StatusCode, Json<TransferSnapshot>) {
+async fn start_transfer(
+    Path(device_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> (StatusCode, Json<TransferSnapshot>) {
+    assert_eq!(device_id, device().device_id);
     assert!(
         headers[CONTENT_TYPE]
             .to_str()
@@ -264,10 +269,6 @@ async fn start_transfer(headers: HeaderMap, body: Bytes) -> (StatusCode, Json<Tr
         body.to_ascii_lowercase()
             .windows(part_length.len())
             .any(|window| window == part_length.as_bytes())
-    );
-    assert!(
-        body.windows(device().device_id.len())
-            .any(|window| window == device().device_id.as_bytes())
     );
     (StatusCode::ACCEPTED, Json(transfer_snapshot()))
 }

@@ -128,12 +128,10 @@ void main() {
 
     expect(transfer.fileName, 'notes.txt');
     final request = adapter.requests.single;
-    expect(request.path, 'transfers');
+    expect(request.path, 'devices/device/share');
     expect(request.receiveTimeout, Duration.zero);
     final form = request.data as FormData;
-    expect(form.fields.single, isA<MapEntry<String, String>>());
-    expect(form.fields.single.key, 'deviceId');
-    expect(form.fields.single.value, 'device');
+    expect(form.fields, isEmpty);
     final part = form.files.single;
     expect(part.key, 'file');
     expect(part.value.filename, 'notes.txt');

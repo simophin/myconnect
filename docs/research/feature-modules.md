@@ -1,7 +1,7 @@
 # Research: one module per feature
 
 Status: proposal (2026-09-25), with phases 0 (ping, §7), 0b (find my
-phone), 1 (battery) and 2 (clipboard) implemented.
+phone), 1 (battery), 2 (clipboard) and 3 (share) implemented.
 Once it is accepted, the target shape moves into `ARCHITECTURE.md` §2 and
 this file becomes the history behind it.
 
@@ -25,8 +25,9 @@ Set by the owner:
   their shape for now, though they follow wire changes.
 - **Wire contract:** free to change where that makes the design cleaner.
   The pilot didn't need any change; phase 1 moved `battery` under
-  `plugins` (§5.5), and phase 2 moved `clipboardSyncEnabled` to
-  `plugins.clipboard.syncEnabled` (§5.6).
+  `plugins` (§5.5), phase 2 moved `clipboardSyncEnabled` to
+  `plugins.clipboard.syncEnabled` (§5.6), and phase 3 moved sending a file
+  from `POST /transfers` to `POST /devices/{id}/share` (§8).
 
 ## 2. Where we are
 
@@ -282,7 +283,7 @@ takes one new trait feature at a time.
 | 0b (done) | find my phone (ring), added after the plan the old way | a send-only plugin: `incoming()` and `handle_packet()` got defaults |
 | 1 (done) | battery | `device_state` + `device_changed`, `disconnected`/`unpaired` hooks, `DeviceSnapshot` extension (UI change) |
 | 2 (done) | clipboard | settings sections (UI + CLI change), `connected` hook, `broadcast`, plugin-owned global resource (`/clipboard`) |
-| 3 | share | transfers extracted into a core service; `streaming_routes`; payload/TLS access through the context |
+| 3 (done) | share | transfers extracted into a core service; `streaming_routes`; payload/TLS access through the context |
 | 4 | browse (sftp) | plugin-owned sessions, `shutdown` hook; `service/browse.rs` and `transport/sftp.rs` move into the plugin |
 | 5 | core cleanup | split what is left of `service.rs` into `devices`/`connections`/`pairing`; remove `ApplicationService`, `Query`, `Command`/`QueryResult` (the LAN command channel stays, as a core-internal type); rename `application` → `core`; move `RunningService` to a composition-root module; update ARCHITECTURE §2 and remove the "deliberately not a plugin system" notes |
 
@@ -495,3 +496,102 @@ Moving clipboard (phase 2) showed:
   the peer reached the app's X clipboard, a copy on the app's display
   reached the peer, a restarted peer got the app's text from the
   connect-time offer, and with the switch off neither direction synced.
+
+Moving share (phase 3) showed:
+
+- **Transfers are a core service with a handle, not a plugin export.**
+  `application/transfers.rs` holds every transfer behind its own lock, not
+  the core's state lock. `ctx.transfers().begin(device, direction, name,
+  size)` records a `queued` transfer, publishes `transfer.started`, and
+  returns a `TransferHandle`: `connecting()`, `transferring()`,
+  `progress(n)` (the 100 ms throttle moved here from `service.rs`), and
+  `complete`, `fail`, `cancelled` or `finish(result)` to end it. Ending
+  consumes the handle. `handle.spawn(|handle| async { .. })` runs the
+  transfer on a task the core can wait for at shutdown. The core keeps
+  `GET /transfers`, `DELETE /transfers/{id}` and cancelling a
+  disconnected device's transfers, whatever started them.
+- **Cleanup on drop.** A handle dropped without ending its transfer fails
+  it with `internal`, or marks it `cancelled` if cancellation was asked
+  for, so a transfer whose task panics or is aborted at shutdown never
+  stays `transferring`. Ending one in a state it can't reach from where it
+  is (completing a transfer that never started moving bytes) fails it
+  rather than leaving it running. Before this, each feature had to call
+  `cleanup_transfer_task` on every exit path, and browse tracked its task
+  after spawning it, so it had to check whether the task had already
+  finished.
+- **Shared copy loops live on the handle.** `handle.copy(reader, writer)`
+  and `handle.forward(chunks, writer)` wrap `transport::payload`'s bounded
+  loops with the handle's cancellation and progress.
+  `handle.save_to_downloads(reader, name)` is the whole "partial file,
+  rename into place, unique name, remove on failure" sequence, which share
+  and browse had each written out. `upload_channel()` is the one bounded
+  channel an HTTP upload feeds. Browse (still in core until phase 4) now
+  uses all of these, and its download, upload and cancellation still pass
+  `browse_e2e` and a live check against the fake phone. It touches its
+  session once a copy ends instead of on every chunk; the session's
+  `Arc` already keeps it open while a copy runs.
+- **Payload connections without the key.** `ctx.payload_peer(device)`
+  checks that the device is paired and connected, and captures its pinned
+  certificate, its address, and the payload settings. `peer.listen()`
+  returns a `PayloadListener` (`port()`, then `accept()`), and
+  `peer.connect(port)` dials. The TLS material is built inside
+  `application/payload.rs`, so plugins get authenticated streams and
+  never the key. Browsing still reads the key directly for its SSH
+  session; that goes behind the context in phase 4.
+- **`streaming_routes` replaced the path sniffing.** The server now builds
+  two routers. Normal routes get the deadline and the 64 KiB
+  `Content-Length` check. Streaming routes (every plugin's
+  `streaming_routes()`, plus browse's upload until phase 4) get the
+  transfer-sized `DefaultBodyLimit` and `Content-Length` check, no
+  deadline, and an `UploadIdleTimeout` request extension. Axum applies a
+  router's layers to the routes it has when they are added, so the two
+  sets keep their own limits after the merge. The multipart helpers
+  (`next_field`, `declared_size`, `forward_upload`, `skip_field`) moved to
+  `api/upload.rs` for plugins to share. A route registered through
+  `routes()` by mistake fails with a missing extension rather than
+  silently getting the small limit. `ApplicationService` gained
+  `plugin_streaming_routes()`, which phase 5 will remove with the trait.
+- **Wire change: sending a file is `POST /devices/{id}/share`.** It was
+  `POST /transfers` with a `deviceId` part that had to come before the
+  file. `/transfers` is a core resource, and a plugin adding `POST` to a
+  core path would have tied the core's URL space to one plugin. §5.4 puts
+  device actions under the device, like `/ping`, `/ring` and
+  `/clipboard`. The body is now just the `file` part.
+  `POST /transfers` answers `405`; there is no alias, since the project is
+  pre-release. The UI's `sendFile`, `client.rs` and so the CLI changed
+  with it. Transfer snapshots, the `transfer.*` events and every error code
+  are unchanged.
+- **The identity packet didn't change.** Share claims only
+  `kdeconnect.share.request`, in both directions. The old fixed table
+  parsed `kdeconnect.share.request.update` and ignored it. Now nothing
+  claims it, so the core drops it the same way, and it isn't advertised
+  (it never was).
+- **Core files only lost share code or gained shared code.** `service.rs`
+  lost 663 lines: the share handlers, both payload loops, the transfer map
+  and task bookkeeping, `ProgressEvents`, and the dead
+  `Command::StartTransfer`/`CancelTransfer`. It gained `device()`,
+  `transfers()` and `payload_peer()` for the context. `api.rs` lost 150
+  lines: `POST /transfers`, the path constants and the upload helpers, now
+  in `api/upload.rs`. `browse.rs` lost 208. `events.rs` and
+  `ApplicationError` didn't change: the transfer events and errors were
+  already shared by share and browse. `plugins/mod.rs` lost the share
+  arms of the fixed table and gained one `builtin()` line.
+- **Checked live**, isolated (temporary data and download dirs, loopback
+  discovery, a private Xvfb display and D-Bus session):
+  - Between two CLI daemons: files both ways, a 1 GiB upload through the
+    streaming route (156 `transfer.progress` events in 15.6 s, byte
+    identical), and cancelling mid-flight from either end, which left no
+    partial file.
+  - In the app against a CLI peer: receiving a file, cancelling a large
+    incoming one, and sending 1 GiB through the file picker, with
+    progress, then cancelling a second send.
+  - Against the fake phone: browse download, upload and cancel, and a
+    download stopped by the phone disconnecting.
+- **Pre-existing problems this surfaced, not fixed here:**
+  - `ApiClient::watch_transfer` reads the snapshot before subscribing to
+    `/events`, so a transfer that ends in between leaves
+    `myconnect send --watch` waiting.
+  - When an upload's transfer is cancelled, the handler still reads the
+    rest of the multipart body to look for further parts. A large upload
+    then ends in `408` after the idle timeout rather than at once. The
+    old `POST /transfers` did the same.

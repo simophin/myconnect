@@ -1,8 +1,8 @@
 //! The daemon's features.
 //!
 //! A feature implements [`crate::application::Plugin`] and is listed in
-//! [`builtin`]; so far ping, find my phone, battery and clipboard do. The others are still routed by
-//! the fixed table below ([`dispatch_incoming`], [`legacy_capabilities`])
+//! [`builtin`]; so far ping, find my phone, battery, clipboard and share
+//! do. Browsing is still routed by the fixed table below ([`dispatch_incoming`], [`legacy_capabilities`])
 //! while they move over (see `docs/research/feature-modules.md`). The set
 //! is fixed at compile time; nothing is loaded at runtime.
 
@@ -32,6 +32,7 @@ pub fn builtin(
         Arc::new(findmyphone::FindMyPhonePlugin),
         Arc::new(battery::BatteryPlugin::default()),
         Arc::new(clipboard::ClipboardPlugin::new(clipboard)),
+        Arc::new(share::SharePlugin),
     ]
 }
 
@@ -67,19 +68,14 @@ pub fn capabilities() -> PluginCapabilities {
 /// one-way: this build asks peers to serve files, but serves none.
 fn legacy_capabilities() -> PluginCapabilities {
     PluginCapabilities {
-        incoming: vec![share::PACKET_TYPE.to_owned(), sftp::PACKET_TYPE.to_owned()],
-        outgoing: vec![
-            share::PACKET_TYPE.to_owned(),
-            sftp::REQUEST_PACKET_TYPE.to_owned(),
-        ],
+        incoming: vec![sftp::PACKET_TYPE.to_owned()],
+        outgoing: vec![sftp::REQUEST_PACKET_TYPE.to_owned()],
     }
 }
 
 /// A packet successfully routed to a registered plugin handler.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IncomingPluginPacket {
-    ShareRequest(share::ShareRequestBody),
-    ShareRequestUpdate(share::ShareRequestUpdateBody),
     Sftp(sftp::SftpBody),
 }
 
@@ -99,10 +95,6 @@ pub enum PluginDispatchError {
 /// on the peer's advertised `incomingCapabilities`.
 pub fn dispatch_incoming(packet: &Packet) -> Result<IncomingPluginPacket, PluginDispatchError> {
     match packet.packet_type.as_str() {
-        share::PACKET_TYPE => Ok(IncomingPluginPacket::ShareRequest(packet.body_as()?)),
-        share::UPDATE_PACKET_TYPE => {
-            Ok(IncomingPluginPacket::ShareRequestUpdate(packet.body_as()?))
-        }
         sftp::PACKET_TYPE => Ok(IncomingPluginPacket::Sftp(packet.body_as()?)),
         other => Err(PluginDispatchError::Unrecognized(other.to_owned())),
     }
@@ -162,22 +154,6 @@ mod tests {
         assert!(matches!(
             dispatch_incoming(&packet),
             Ok(IncomingPluginPacket::Sftp(body)) if body.server_running == Some(false)
-        ));
-    }
-
-    #[test]
-    fn share_packets_dispatch_to_the_share_handlers() {
-        let packet =
-            share::build_request_packet(1_u64, "photo.jpg".into(), None, 10, 1741).unwrap();
-        assert!(matches!(
-            dispatch_incoming(&packet),
-            Ok(IncomingPluginPacket::ShareRequest(_))
-        ));
-
-        let update_packet = share::build_update_packet(1_u64, 1, 10).unwrap();
-        assert!(matches!(
-            dispatch_incoming(&update_packet),
-            Ok(IncomingPluginPacket::ShareRequestUpdate(_))
         ));
     }
 

@@ -273,8 +273,6 @@ pub enum Command {
     StartPairing { device_id: String },
     AcceptPairing { pairing_id: Uuid },
     CancelPairing { pairing_id: Uuid },
-    StartTransfer { device_id: String, file: PathBuf },
-    CancelTransfer { transfer_id: Uuid },
 }
 
 /// Transport-independent reads accepted by the application core.
