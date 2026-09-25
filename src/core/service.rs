@@ -23,12 +23,12 @@ use super::{
     settings::{Settings, SettingsDefaults, SettingsPatch, SettingsSnapshot},
     transfers::{TransferConfig, Transfers},
 };
-use crate::device::DeviceRegistry;
+use crate::core::DeviceRegistry;
 use crate::{
     config::{
         LocalIdentity, SettingsError, TrustError, TrustStore, TrustedDevice, TrustedIdentity,
     },
-    device::{DeviceReachability, DeviceSnapshot},
+    core::{DeviceReachability, DeviceSnapshot},
     protocol::{DeviceType, IdentityBody, Packet, PairingBody, verification_code},
     transport::tls::subject_public_key_info,
 };
@@ -1561,7 +1561,7 @@ mod tests {
                 assert!(!device.paired);
                 assert_eq!(
                     device.reachability,
-                    crate::device::DeviceReachability::Connected
+                    crate::core::DeviceReachability::Connected
                 );
             }
             other => panic!("unexpected event: {other:?}"),

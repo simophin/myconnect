@@ -24,8 +24,7 @@ use serde_json::Value;
 pub use packet::{BatteryBody, PACKET_TYPE};
 
 use crate::{
-    core::{Plugin, PluginContext},
-    device::DeviceSnapshot,
+    core::{DeviceSnapshot, Plugin, PluginContext},
     protocol::Packet,
 };
 

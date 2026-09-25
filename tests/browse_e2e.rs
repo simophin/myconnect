@@ -22,10 +22,9 @@ use myconnect::{
     client::{ApiClient, ClientError},
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     core::{
-        Core, LocalDeviceSnapshot, Plugin, TransferConfig, TransferDirection, TransferSnapshot,
-        TransferStatus,
+        Core, DeviceReachability, LocalDeviceSnapshot, Plugin, TransferConfig, TransferDirection,
+        TransferSnapshot, TransferStatus,
     },
-    device::DeviceReachability,
     plugins::clipboard::InMemoryClipboard,
     plugins::{
         battery::BatteryStatus,
@@ -111,7 +110,7 @@ fn test_config(bind: SocketAddr, target: SocketAddr) -> LanConfig {
 async fn wait_for_device(
     application: &Core,
     device_id: &str,
-    accept: impl Fn(&myconnect::device::DeviceSnapshot) -> bool,
+    accept: impl Fn(&myconnect::core::DeviceSnapshot) -> bool,
 ) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {

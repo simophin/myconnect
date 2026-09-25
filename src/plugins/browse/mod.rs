@@ -48,10 +48,9 @@ use session::{RemoteSession, Sessions};
 
 use crate::{
     core::{
-        CoreError, OperationErrorCode, Plugin, PluginContext, TransferDirection, TransferHandle,
-        TransferSnapshot, sanitize_file_name, upload_channel,
+        CoreError, DeviceSnapshot, OperationErrorCode, Plugin, PluginContext, TransferDirection,
+        TransferHandle, TransferSnapshot, sanitize_file_name, upload_channel,
     },
-    device::DeviceSnapshot,
     protocol::Packet,
     transport::payload::PayloadError,
 };

@@ -32,10 +32,9 @@ pub use packet::{
 
 use crate::{
     core::{
-        CoreError, OperationErrorCode, PayloadPeer, Plugin, PluginContext, TransferDirection,
-        TransferHandle, TransferSnapshot, sanitize_file_name, upload_channel,
+        CoreError, DeviceSnapshot, OperationErrorCode, PayloadPeer, Plugin, PluginContext,
+        TransferDirection, TransferHandle, TransferSnapshot, sanitize_file_name, upload_channel,
     },
-    device::DeviceSnapshot,
     protocol::Packet,
 };
 

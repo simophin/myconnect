@@ -3,8 +3,10 @@ use std::{sync::Arc, time::Duration};
 use myconnect::{
     api::{ApiServer, ApiServerConfig},
     config::{ApiToken, FilesystemTrustStore, LocalIdentity},
-    core::{Core, EventData, LanCommand, LocalDeviceSnapshot, PluginEvent, TransferConfig},
-    device::DeviceRegistry,
+    core::{
+        Core, DeviceRegistry, EventData, LanCommand, LocalDeviceSnapshot, PluginEvent,
+        TransferConfig,
+    },
     plugins::clipboard::{ClipboardSettings, ClipboardSnapshot, InMemoryClipboard},
     protocol::{DeviceType, IdentityBody},
 };

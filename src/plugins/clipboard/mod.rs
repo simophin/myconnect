@@ -44,10 +44,9 @@ pub use packet::{
 
 use crate::{
     core::{
-        CoreError, Plugin, PluginContext, PluginEventKind, PluginSettings, SettingsPatch,
-        SettingsSection, SettingsSnapshot,
+        CoreError, DeviceSnapshot, Plugin, PluginContext, PluginEventKind, PluginSettings,
+        SettingsPatch, SettingsSection, SettingsSnapshot,
     },
-    device::DeviceSnapshot,
     protocol::Packet,
 };
 

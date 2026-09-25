@@ -19,10 +19,9 @@ use crate::{
     api::DEFAULT_API_PORT,
     config::ApiToken,
     core::{
-        CoreEvent, EventData, PairingSnapshot, PluginEventKind, SettingsPatch, SettingsSnapshot,
-        TransferSnapshot, TransferStatus,
+        CoreEvent, DeviceSnapshot, EventData, PairingSnapshot, PluginEventKind, SettingsPatch,
+        SettingsSnapshot, TransferSnapshot, TransferStatus,
     },
-    device::DeviceSnapshot,
     plugins::{
         browse::{DirectoryListing, FileEntry},
         clipboard::ClipboardSnapshot,

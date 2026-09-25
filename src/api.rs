@@ -43,10 +43,9 @@ pub(crate) use upload::{
 use crate::{
     config::ApiToken,
     core::{
-        Core, CoreError, CoreEvent, DEFAULT_MAX_TRANSFER_BYTES, PairingSnapshot, SettingsPatch,
-        SettingsSnapshot, StatusSnapshot, TransferSnapshot,
+        Core, CoreError, CoreEvent, DEFAULT_MAX_TRANSFER_BYTES, DeviceSnapshot, PairingSnapshot,
+        SettingsPatch, SettingsSnapshot, StatusSnapshot, TransferSnapshot,
     },
-    device::DeviceSnapshot,
 };
 
 pub const DEFAULT_API_PORT: u16 = 24_816;

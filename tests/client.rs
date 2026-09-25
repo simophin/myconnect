@@ -25,10 +25,10 @@ use myconnect::{
     },
     config::ApiToken,
     core::{
-        CoreEvent, EventData, PairingDirection, PairingSnapshot, PairingStatus, PluginEvent,
-        TransferDirection, TransferSnapshot, TransferStatus,
+        CoreEvent, DeviceReachability, DeviceSnapshot, EventData, PairingDirection,
+        PairingSnapshot, PairingStatus, PluginEvent, TransferDirection, TransferSnapshot,
+        TransferStatus,
     },
-    device::{DeviceReachability, DeviceSnapshot},
     plugins::clipboard::ClipboardSnapshot,
     protocol::DeviceType,
 };

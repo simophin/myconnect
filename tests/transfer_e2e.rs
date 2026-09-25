@@ -20,10 +20,9 @@ use bytes::Bytes;
 use myconnect::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     core::{
-        Core, CoreError, EventData, LocalDeviceSnapshot, TransferConfig, TransferDirection,
-        TransferSnapshot, TransferStatus,
+        Core, CoreError, DeviceReachability, EventData, LocalDeviceSnapshot, TransferConfig,
+        TransferDirection, TransferSnapshot, TransferStatus,
     },
-    device::DeviceReachability,
     plugins::{clipboard::InMemoryClipboard, share},
     protocol::DeviceType,
     transport::{

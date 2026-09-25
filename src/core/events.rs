@@ -8,7 +8,7 @@ use thiserror::Error;
 use tokio::sync::broadcast;
 
 use super::{PairingSnapshot, PluginEvent, SettingsSnapshot, TransferSnapshot};
-use crate::device::DeviceSnapshot;
+use crate::core::DeviceSnapshot;
 
 /// Data carried by an application event: one of the core's own, or a
 /// plugin's. Both serialize as `{"type": ..., "data": ...}`; any type the

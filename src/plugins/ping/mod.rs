@@ -17,8 +17,7 @@ use serde::{Deserialize, Serialize};
 pub use packet::{PACKET_TYPE, PingBody, build_packet};
 
 use crate::{
-    core::{CoreError, Plugin, PluginContext, PluginEventKind},
-    device::DeviceSnapshot,
+    core::{CoreError, DeviceSnapshot, Plugin, PluginContext, PluginEventKind},
     protocol::Packet,
 };
 

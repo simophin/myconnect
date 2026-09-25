@@ -40,7 +40,7 @@ use super::{
     TransferSnapshot, TransferStatus, settings::Settings,
 };
 use crate::{
-    device::DeviceSnapshot,
+    core::DeviceSnapshot,
     transport::payload::{self, PayloadError},
 };
 
@@ -631,8 +631,7 @@ pub enum FileNameError {
 mod tests {
     use super::*;
     use crate::{
-        core::settings::SettingsDefaults,
-        device::{DeviceReachability, DeviceSnapshot},
+        core::{DeviceReachability, DeviceSnapshot, settings::SettingsDefaults},
         protocol::DeviceType,
     };
 

@@ -12,10 +12,10 @@ use myconnect::{
     },
     config::ApiToken,
     core::{
-        CoreEvent, EventData, PairingSnapshot, SettingsPatch, SettingsSnapshot, TransferSnapshot,
+        CoreEvent, DeviceSnapshot, EventData, PairingSnapshot, SettingsPatch, SettingsSnapshot,
+        TransferSnapshot,
     },
     daemon::RunRequest,
-    device::DeviceSnapshot,
     plugins::{
         battery::BatteryStatus,
         browse::{DirectoryListing, FileEntry, FileKind},

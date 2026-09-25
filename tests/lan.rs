@@ -6,8 +6,7 @@ use std::{
 
 use myconnect::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
-    core::{Core, EventData, LanCommand, LocalDeviceSnapshot, SettingsPatch},
-    device::DeviceReachability,
+    core::{Core, DeviceReachability, EventData, LanCommand, LocalDeviceSnapshot, SettingsPatch},
     plugins::clipboard::InMemoryClipboard,
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
     transport::{

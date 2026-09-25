@@ -3,6 +3,7 @@
 //! It knows no feature by name; [`crate::daemon`] decides which plugins
 //! run.
 
+mod devices;
 mod events;
 mod payload;
 mod plugin;
@@ -15,6 +16,7 @@ mod transfers;
 
 pub(crate) use settings::Settings;
 
+pub use devices::{DeviceReachability, DeviceRegistry, DeviceRegistryError, DeviceSnapshot};
 pub use events::{CoreEvent, EventBus, EventBusError, EventData};
 pub use payload::{AcceptedPayload, DialedPayload, PayloadListener, PayloadPeer, SshAuthError};
 pub use plugin::{

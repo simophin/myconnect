@@ -10,8 +10,10 @@ use std::{
 
 use myconnect::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
-    core::{Core, EventData, LanCommand, LocalDeviceSnapshot, PairingDirection, PairingStatus},
-    device::DeviceReachability,
+    core::{
+        Core, DeviceReachability, EventData, LanCommand, LocalDeviceSnapshot, PairingDirection,
+        PairingStatus,
+    },
     plugins::clipboard::InMemoryClipboard,
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
     transport::{

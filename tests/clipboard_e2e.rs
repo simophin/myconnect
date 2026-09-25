@@ -11,8 +11,7 @@ use std::{
 
 use myconnect::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
-    core::{Core, LanCommand, LocalDeviceSnapshot, Plugin},
-    device::DeviceReachability,
+    core::{Core, DeviceReachability, LanCommand, LocalDeviceSnapshot, Plugin},
     plugins,
     plugins::clipboard::{
         ClipboardPlugin, ClipboardSnapshot, ClipboardSyncError, InMemoryClipboard,

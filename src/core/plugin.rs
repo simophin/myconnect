@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
 use super::{Core, CoreError, EventData, PayloadPeer, Transfers};
-use crate::{device::DeviceSnapshot, protocol::Packet};
+use crate::{core::DeviceSnapshot, protocol::Packet};
 
 /// A feature of the daemon, plugged into the core.
 pub trait Plugin: Send + Sync + 'static {
