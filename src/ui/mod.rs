@@ -651,16 +651,26 @@ impl App {
         }
     }
 
-    /// Show `route`. Opening Add device from elsewhere scans, as opening
-    /// the Flutter page did; coming back to it from a pairing doesn't.
+    /// Show `route`, and tell every plugin. Opening Add device from
+    /// elsewhere scans, as opening the Flutter page did; coming back to it
+    /// from a pairing doesn't.
     fn go(&mut self, route: Route) -> Task<Message> {
         let entering_add_device = route == Route::AddDevice
             && !matches!(self.route, Route::AddDevice | Route::Pairing(_));
         self.route = route;
+        let told = match &mut self.phase {
+            Phase::Running(running) => Task::batch(
+                running
+                    .plugins
+                    .iter_mut()
+                    .map(|plugin| shell_task(plugin.on_route(&running.ctx, &self.route))),
+            ),
+            _ => Task::none(),
+        };
         if entering_add_device {
-            self.scan()
+            Task::batch([told, self.scan()])
         } else {
-            Task::none()
+            told
         }
     }
 
@@ -1011,6 +1021,7 @@ impl App {
                 title,
                 label,
                 initial,
+                selection,
                 confirm_label,
                 validate,
                 then,
@@ -1020,6 +1031,7 @@ impl App {
                     value: initial,
                     label: Some(label),
                     validate: Some(validate),
+                    selection,
                     ..Field::default()
                 },
                 confirm_label,
@@ -1232,12 +1244,22 @@ impl App {
         device: &str,
         page: &str,
     ) -> Element<'a, Message> {
+        let Some(device) = running.ctx.device(device) else {
+            return widgets::page(
+                widgets::page_header("", Some(Message::Back), vec![]),
+                widgets::empty_state(
+                    lucide::circle_alert,
+                    "This device is no longer known.",
+                    None,
+                    None,
+                ),
+            );
+        };
         running
             .plugins
             .iter()
             .find(|plugin| plugin.id() == id)
-            .zip(running.ctx.device(device))
-            .and_then(|(plugin, device)| plugin.view_page(&running.ctx, device, page))
+            .and_then(|plugin| plugin.view_page(&running.ctx, device, page))
             .map_or_else(
                 || {
                     widgets::page(
@@ -2172,6 +2194,80 @@ mod tests {
         assert_eq!(sharing.app.route, Route::Device(peer));
         assert!(sharing.app.drop_hint().is_none(), "the hint goes");
         assert!(sharing.app.toasts.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn files_dropped_on_a_browse_folder_upload_there_and_elsewhere_send() {
+        use crate::plugins::browse::{
+            self,
+            ui::tests::{Call, phone_files},
+        };
+
+        let mut sharing = Sharing::new();
+        let phone = phone_files();
+        let Phase::Running(running) = &mut sharing.app.phase else {
+            panic!("the app runs");
+        };
+        running
+            .plugins
+            .push(Box::new(browse::ui::BrowseUi::with_files(phone.clone())));
+        let (peer, sent) = testing::connect_peer(
+            &sharing.core,
+            testing::PEER_ID,
+            &[
+                crate::plugins::share::PACKET_TYPE,
+                browse::REQUEST_PACKET_TYPE,
+            ],
+        );
+        std::mem::forget(sent);
+        settle(&mut sharing.app, Message::Reload).await;
+        let peer = peer.device_id;
+
+        // The device page's action opens the storage.
+        settle(
+            &mut sharing.app,
+            Message::Navigate(Route::Device(peer.clone())),
+        )
+        .await;
+        click(&mut sharing.app, "Browse files").await;
+        assert_eq!(sharing.app.route, browse::ui::route(&peer, None));
+        assert!(shows(&sharing.app, "Files on Peer"));
+        click(&mut sharing.app, "All files").await;
+        let folder = "/storage/emulated/0";
+        assert_eq!(sharing.app.route, browse::ui::route(&peer, Some(folder)));
+
+        let photo = sharing.file("photo.jpg");
+        sharing.hover(std::slice::from_ref(&photo)).await;
+        assert_eq!(
+            sharing.app.drop_hint().as_deref(),
+            Some("Drop to upload to All files")
+        );
+        sharing
+            .window(window::Event::FileDropped(photo.clone()))
+            .await;
+        assert!(phone.calls().contains(&Call::Upload {
+            folder: folder.into(),
+            local: photo.clone(),
+        }));
+        assert!(sharing.sent().is_empty(), "uploaded, not sent");
+        assert!(sharing.app.choosing.is_none());
+
+        // The storage isn't a folder: a drop there sends to the device.
+        click(&mut sharing.app, "Storage").await;
+        sharing.drop(std::slice::from_ref(&photo)).await;
+        assert_eq!(sharing.sent(), [(peer.clone(), "photo.jpg".into())]);
+    }
+
+    #[tokio::test]
+    async fn a_plugin_page_of_a_forgotten_device_says_so() {
+        let (plugin, _) = opener();
+        let mut app = running(vec![plugin]);
+        app.route = Route::Plugin {
+            plugin: "opener",
+            device: "gone".into(),
+            page: "files".into(),
+        };
+        assert!(shows(&app, "This device is no longer known."));
     }
 
     #[tokio::test(start_paused = true)]

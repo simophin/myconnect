@@ -6,7 +6,7 @@
 //! stores it as a [`ErasedUiPlugin`], which every `UiPlugin` is, and sees
 //! its messages only as [`PluginMessage`]s, routed back to it by id.
 
-use std::{any::Any, fmt, future::Future, path::PathBuf, sync::Arc};
+use std::{any::Any, fmt, future::Future, ops::Range, path::PathBuf, sync::Arc};
 
 use iced::{Element, Subscription, Task, widget::Text};
 
@@ -66,6 +66,13 @@ pub trait UiPlugin: Send + 'static {
         None
     }
 
+    /// The window now shows `route`, whoever's page it is. A plugin loads
+    /// what its page needs here, and lets go of it when the route isn't its
+    /// own.
+    fn on_route(&mut self, _ctx: &UiContext, _route: &Route) -> Command<Self::Message> {
+        Command::none()
+    }
+
     /// Every core event, the plugin's own (`ping.received`) and the rest.
     fn on_event(&mut self, _ctx: &UiContext, _event: &CoreEvent) -> Command<Self::Message> {
         Command::none()
@@ -107,6 +114,7 @@ pub trait ErasedUiPlugin: Send {
         &'a self,
         settings: &'a SettingsSnapshot,
     ) -> Option<Element<'a, PluginMessage>>;
+    fn on_route(&mut self, ctx: &UiContext, route: &Route) -> Command<PluginMessage>;
     fn on_event(&mut self, ctx: &UiContext, event: &CoreEvent) -> Command<PluginMessage>;
     /// Handle a message this plugin produced. Panics if it came from
     /// another plugin: the shell routes by [`PluginMessage::plugin`].
@@ -160,6 +168,11 @@ impl<T: UiPlugin> ErasedUiPlugin for T {
         let id = UiPlugin::id(self);
         UiPlugin::view_settings(self, settings)
             .map(|element| element.map(move |message| PluginMessage::new(id, message)))
+    }
+
+    fn on_route(&mut self, ctx: &UiContext, route: &Route) -> Command<PluginMessage> {
+        let id = UiPlugin::id(self);
+        UiPlugin::on_route(self, ctx, route).map(move |message| PluginMessage::new(id, message))
     }
 
     fn on_event(&mut self, ctx: &UiContext, event: &CoreEvent) -> Command<PluginMessage> {
@@ -344,6 +357,10 @@ pub enum ShellRequest<M> {
         title: String,
         label: String,
         initial: String,
+        /// The characters of `initial` selected when the dialog opens (a
+        /// file's name without its extension); otherwise the cursor is at
+        /// the end.
+        selection: Option<Range<usize>>,
         confirm_label: String,
         validate: Validator,
         then: Callback<String, M>,
@@ -389,6 +406,7 @@ impl<M: 'static> ShellRequest<M> {
                 title,
                 label,
                 initial,
+                selection,
                 confirm_label,
                 validate,
                 then,
@@ -396,6 +414,7 @@ impl<M: 'static> ShellRequest<M> {
                 title,
                 label,
                 initial,
+                selection,
                 confirm_label,
                 validate,
                 then: Arc::new(move |text| f(then(text))),

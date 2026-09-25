@@ -28,7 +28,7 @@ use myconnect::{
     plugins::clipboard::InMemoryClipboard,
     plugins::{
         battery::BatteryStatus,
-        browse::{BrowsePlugin, FileKind},
+        browse::{BrowseError, BrowsePlugin, FileKind, UploadPathError},
     },
     protocol::DeviceType,
     transport::{
@@ -398,6 +398,58 @@ async fn uploads_never_replace_an_existing_file() {
         .await
         .unwrap_err();
     assert_eq!(failure_code(into_file), "not_a_directory");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_local_file_uploads_from_its_path() {
+    let harness = harness(android_roots(), false).await;
+    let ctx = harness.desktop.plugin_context();
+    let local = harness._desktop_dir.path().join("notes.txt");
+    std::fs::write(&local, pattern(300_000)).unwrap();
+
+    let upload = harness
+        .browse
+        .upload_path(&ctx, &harness.phone_id, INTERNAL, &local)
+        .await
+        .unwrap();
+    assert_eq!(upload.direction, TransferDirection::Outgoing);
+    assert_eq!(upload.file_name, "notes (1).txt");
+    let upload = harness.wait_for_transfer(upload.id).await;
+    assert_eq!(upload.status, TransferStatus::Completed);
+    assert_eq!(
+        std::fs::read(harness.phone_path(&format!("{INTERNAL}/notes (1).txt"))).unwrap(),
+        pattern(300_000)
+    );
+
+    // Not a file: refused before anything is created on the phone.
+    let folder = harness
+        .browse
+        .upload_path(
+            &ctx,
+            &harness.phone_id,
+            INTERNAL,
+            harness._desktop_dir.path(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(folder, UploadPathError::File(_)), "{folder:?}");
+    let into_file = harness
+        .browse
+        .upload_path(
+            &ctx,
+            &harness.phone_id,
+            &format!("{INTERNAL}/notes.txt"),
+            &local,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            into_file,
+            UploadPathError::Browse(BrowseError::NotADirectory)
+        ),
+        "{into_file:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -47,6 +47,7 @@ pub struct Builtin {
 #[cfg(feature = "gui")]
 pub fn builtin_with_ui(clipboard: Arc<dyn clipboard::ClipboardService + Send + Sync>) -> Builtin {
     let clipboard = Arc::new(clipboard::ClipboardPlugin::new(clipboard));
+    let browse = Arc::new(browse::BrowsePlugin::default());
     Builtin {
         core: vec![
             Arc::new(ping::PingPlugin),
@@ -54,7 +55,7 @@ pub fn builtin_with_ui(clipboard: Arc<dyn clipboard::ClipboardService + Send + S
             Arc::new(battery::BatteryPlugin::default()),
             clipboard.clone(),
             Arc::new(share::SharePlugin),
-            Arc::new(browse::BrowsePlugin::default()),
+            browse.clone(),
         ],
         ui: vec![
             Box::new(ping::ui::PingUi),
@@ -62,6 +63,7 @@ pub fn builtin_with_ui(clipboard: Arc<dyn clipboard::ClipboardService + Send + S
             Box::new(battery::ui::BatteryUi),
             Box::new(clipboard::ui::ClipboardUi::new(clipboard)),
             Box::new(share::ui::ShareUi),
+            Box::new(browse::ui::BrowseUi::new(browse)),
         ],
     }
 }

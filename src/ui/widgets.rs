@@ -232,7 +232,10 @@ pub fn empty_state<'a, M: Clone + 'a>(
 
 /// A button that reads as a link: primary-coloured text, a light
 /// background on hover.
-pub fn link_button<'a, M: Clone + 'a>(label: &'a str, on_press: M) -> Element<'a, M> {
+pub fn link_button<'a, M: Clone + 'a>(
+    label: impl text::IntoFragment<'a>,
+    on_press: M,
+) -> Element<'a, M> {
     button(text(label))
         .padding([6, 12])
         .style(|theme: &Theme, status| {
@@ -447,8 +450,23 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Unix milliseconds as local `YYYY-MM-DD HH:MM`, as the Flutter app
+/// wrote file dates. Empty for a time that can't be shown.
+pub fn format_timestamp(millis: u64) -> String {
+    i64::try_from(millis)
+        .ok()
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .map(|time| {
+            time.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
+    use chrono::TimeZone;
     use iced::widget::column;
 
     use super::*;
@@ -473,6 +491,16 @@ mod tests {
         ] {
             assert_eq!(format_bytes(bytes), expected, "{bytes}");
         }
+    }
+
+    #[test]
+    fn timestamps_are_local_minutes() {
+        let at = chrono::Local
+            .with_ymd_and_hms(2026, 9, 24, 14, 3, 59)
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(format_timestamp(at.try_into().unwrap()), "2026-09-24 14:03");
+        assert_eq!(format_timestamp(u64::MAX), "");
     }
 
     #[derive(Debug, Clone)]

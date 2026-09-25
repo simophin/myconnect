@@ -6,7 +6,7 @@
 //! or stays open and busy while its work runs and shows the work's error
 //! under the field ([`Submit::Run`], for the shell's rename and add by IP).
 
-use std::{collections::VecDeque, fmt, sync::Arc};
+use std::{collections::VecDeque, fmt, ops::Range, sync::Arc};
 
 use iced::{
     Alignment, Background, Border, Color, Element, Length, Task, Theme,
@@ -45,6 +45,9 @@ pub struct Field {
     pub max_len: Option<usize>,
     /// Checked on submit: the error to show, if any.
     pub validate: Option<Validator>,
+    /// The characters of `value` selected when the dialog opens; without
+    /// it, the cursor is at the end.
+    pub selection: Option<Range<usize>>,
 }
 
 /// Work that runs while the dialog stays open: `Err` is shown in the
@@ -256,9 +259,14 @@ impl<M: Clone + 'static> Dialogs<M> {
     /// Focus the showing dialog's field, if it has one.
     pub fn focus<T: Send + 'static>(&self) -> Task<T> {
         match self.current() {
-            Some(Dialog { field: Some(_), .. }) => Task::batch([
+            Some(Dialog {
+                field: Some(field), ..
+            }) => Task::batch([
                 widget::operation::focus(FIELD),
-                widget::operation::move_cursor_to_end(FIELD),
+                match &field.selection {
+                    Some(range) => widget::operation::select_range(FIELD, range.start, range.end),
+                    None => widget::operation::move_cursor_to_end(FIELD),
+                },
             ]),
             _ => Task::none(),
         }
@@ -348,19 +356,22 @@ pub fn surface<'a, T: 'a>(content: impl Into<Element<'a, T>>) -> Element<'a, T> 
         .padding(24)
         .width(Length::Fill)
         .max_width(400)
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(Background::Color(palette.background.base.color)),
-                text_color: Some(palette.background.base.text),
-                border: Border::default()
-                    .rounded(16)
-                    .width(1)
-                    .color(palette.background.strong.color),
-                ..container::Style::default()
-            }
-        })
+        .style(surface_style)
         .into()
+}
+
+/// The dialog card's look, for dialogs of other sizes.
+pub fn surface_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+    container::Style {
+        background: Some(Background::Color(palette.background.base.color)),
+        text_color: Some(palette.background.base.text),
+        border: Border::default()
+            .rounded(16)
+            .width(1)
+            .color(palette.background.strong.color),
+        ..container::Style::default()
+    }
 }
 
 fn field_view<'a>(

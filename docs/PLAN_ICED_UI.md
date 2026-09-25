@@ -20,8 +20,10 @@ switches, the clipboard plugin's included. Step 10's desktop spike is
 done too: its findings and decisions for drops, the tray, notifications,
 placement and single instance are in ADR 0001's "Desktop integration".
 Step 11 is done: the device page sends files through a picker, and files
-dropped on the window go to the page's device or to a chooser. Next is
-step 12. Each finished step says so under its heading, with what differs
+dropped on the window go to the page's device or to a chooser. Step 12
+is done: *Browse files* opens a file browser that lists, previews,
+downloads, uploads (picked or dropped on the open folder), renames,
+creates folders and deletes. Next is step 13. Each finished step says so under its heading, with what differs
 from the plan.
 
 ## Read first
@@ -207,7 +209,7 @@ Rust function or method that `http.rs` also calls. Most already exist:
 | battery | device state only | — |
 | clipboard | `ClipboardPlugin::send_to(&self, ctx, id)`, `set_text`, `ClipboardSettings::sync_enabled_patch` | — |
 | share | `share::send_file(ctx, id, name, size, transfer_id)`, which returns a byte `Sender` the HTTP handler streams multipart into | `share::send_path(ctx, id, path)`: opens the file, calls `send_file` with its size, and spawns the copy from disk into the sender on the daemon runtime |
-| browse | `BrowsePlugin::{list_files, open_file, download, upload, create_directory, move_file, delete}` (async) | an upload from a local path, like share's |
+| browse | `BrowsePlugin::{list_files, open_file, download, upload, create_directory, move_file, delete}` (async) | an upload from a local path, like share's: `BrowsePlugin::upload_path` (step 12) |
 
 When a step needs something that isn't there, add it to the plugin's
 `mod.rs` and make `http.rs` call it, without changing behaviour. The HTTP
@@ -1146,6 +1148,81 @@ checked on Linux X11.
 
 ### 12. Browse: the file browser
 
+**Done (2026-09-26).** Where it differs from the text below:
+- The open folder is in the route: `browse::ui::route(device, folder)` is
+  `Route::Plugin` with page `files` (the storage) or `files:{path}`, so
+  Back, the drop target and the shell all see it. Folders, crumbs and Up
+  navigate through the shell.
+- New slot `UiPlugin::on_route(ctx, route)`: the shell's `App::go` tells
+  every plugin about each route change. Browse lists the folder there
+  (and the storage, if a folder opens without it, for the crumbs), and
+  lets go of everything when the route isn't its page, as Flutter's
+  auto-disposed providers did. `show hidden` and the sort reset when
+  another device's files open.
+- A device's files have no events, so a listing is refetched when its
+  folder opens, after every change (whether it worked or not), on
+  Refresh, and when the device can share its files again (`on_event`
+  compares `sharesFiles` before and after). An older answer for the same
+  folder is dropped. While a folder is listed again the old listing stays
+  on show.
+- `browse::ui::Files` is the seam for tests: `BrowsePlugin` implements it
+  (the shared instance, from `builtin_with_ui`), and the tests use an
+  in-memory phone. `BrowsePlugin::upload_path(ctx, device, folder, path)`
+  is new in the daemon, like `share::send_path`: it resolves once the
+  file has gone into the transfer, and refuses a path that isn't a
+  regular file (`UploadPathError::File`) before creating anything on the
+  device. `tests/browse_e2e.rs` covers it against the fake phone.
+- iced has no popup menu. *More* on a row opens the row's actions under
+  it (Preview, Download, Rename, Delete, as tonal buttons that wrap), and
+  closes them again; *Show hidden files* is a header toggle (an eye, its
+  tooltip says which way it goes).
+- The preview is the plugin's own modal over its page (`dialog::modal`,
+  `dialog::surface_style`), with `image::viewer` for pan and zoom; Close,
+  a click outside or Escape (a keyboard subscription while it shows)
+  close it. The image is decoded with the `image` crate on the daemon's
+  blocking pool, so one that can't be decoded says "This image can’t be
+  shown." (iced decodes at draw time and drops the error). At most 32 MiB
+  is read. New dependencies: iced's `image-without-codecs` feature, `image`
+  (five codecs) and `chrono` (ADR 0001's table).
+- `widgets::format_timestamp` (local `YYYY-MM-DD HH:MM`, through
+  `chrono`), moved here from step 3.
+- The name dialog pre-selects the name without its extension:
+  `ShellRequest::Prompt` and `dialog::Field` gained `selection`, which
+  `Dialogs::focus` applies with `select_range`. Renaming to the same name
+  does nothing.
+- A plugin page whose device is gone says "This device is no longer
+  known." (the shell's fallback), not the plugin.
+- `widgets::link_button` takes any text fragment, for the crumbs.
+- Tests (`plugins::browse::ui`): storage → folders → crumb and Up back
+  (and Back leaves the files), a folder opened directly still names its
+  root, hidden toggle, sorting both ways with folders first, Modified
+  only when wide, opening downloads with the Transfers toast, a small
+  image previews (a broken one says so), rename within the folder with
+  the pre-selection, slash refused locally, new folder, delete confirms
+  with folder wording, a failed change reported and listed again, drop
+  into a folder uploads (failures summed up once; none on the storage),
+  Upload files picks for the open folder, a refusing device says why with
+  Retry, browsing needs `sharesFiles`, relisting on reconnect, a stale
+  answer ignored. In the shell: the device page's *Browse files* opens
+  it, a drop on a folder uploads and on the storage sends. Snapshots
+  `files-storage`, `files-folder`, `files-folder-narrow` (a row's
+  actions), `files-empty`, `files-preview`, `files-not-shared`.
+- Checked in the real app against `examples/fake_phone.rs` (loopback,
+  Xvfb, private bus, the phone paired through the CLI): *Browse files*
+  lists the storage, a folder lists, a PNG previews and zooms with the
+  wheel, Escape closes it, a broken JPEG says it can't be shown, opening
+  a file downloads it into the download dir with the toast, New folder
+  creates one, Rename pre-selects `notes` and saves `todo.txt`, Delete
+  asks with the folder wording and deletes, a file dragged from a GTK
+  source onto the folder shows "Drop to upload to Internal storage" and
+  uploads, and stopping the phone shows "Connect Fake Phone to browse its
+  files." until it is back, when the folder is listed again.
+- Trap found: the app activates `xdg-desktop-portal` (which starts
+  `xdg-document-portal`) on the private bus as it starts, not only when a
+  picker opens; `iced_winit` reads the system theme through `mundy`, which
+  asks the settings portal. Stop them with the rest (see Traps, "Portals
+  on a private bus").
+
 The largest feature. It is all `plugins/browse/ui.rs`, over the shared
 `BrowsePlugin` instance's methods (list, content, download, mkdir, move,
 delete) plus a new upload from a local path. They are async over SFTP, so
@@ -1352,9 +1429,9 @@ app.
   `GDK_BACKEND=x11` (and `XDG_SESSION_TYPE=x11` for `display-info`); for
   a headless compositor give it its own short `XDG_RUNTIME_DIR` (socket
   paths are limited to 108 bytes, so not under the scratchpad).
-- **Portals on a private bus.** A file picker asks `xdg-desktop-portal`,
-  which D-Bus activates on your private bus, and it starts
-  `xdg-document-portal` too. That one mounts its FUSE file system at the
+- **Portals on a private bus.** The app itself (the theme, at start) and a
+  file picker ask `xdg-desktop-portal`, which D-Bus activates on your
+  private bus, and it starts `xdg-document-portal` too. That one mounts its FUSE file system at the
   owner's `$XDG_RUNTIME_DIR/doc` if nothing is mounted there. Stop every
   process on your bus when done (match `DBUS_SESSION_BUS_ADDRESS` in
   `/proc/<pid>/environ`), and check the mount is as you found it.
@@ -1401,7 +1478,7 @@ are to the Flutter app under `ui/lib/src/`.
 - [x] Header: large icon, name, status (with battery)
 - [x] Selectable facts: Device ID, Type, Protocol version
 - [x] Send file: enabled when `acceptsFiles`; multi-select picker "Send"; one summary toast for failures
-- [ ] Browse files: enabled when `sharesFiles`
+- [x] Browse files: enabled when `sharesFiles`
 - [x] Ping: enabled when `acceptsPings`; toast "Pinged {name}."
 - [x] Ring: enabled when `canRing`; toast "Asked {name} to ring."
 - [x] Send clipboard: listed if `supportsClipboard`, enabled if `acceptsClipboard`; toast "Sent the clipboard to {name}."
@@ -1429,11 +1506,11 @@ are to the Flutter app under `ui/lib/src/`.
 Dropping applies on X11, macOS and Windows, not on Wayland (see Owner decisions).
 - [x] Drop on a device that accepts files: sends directly (on its page; see step 11)
 - [x] Drop elsewhere / on a device that can't take files: chooser dialog ("Send {file}" / "Send N files", live list, empty text, Cancel); after choosing, go to the device
-- [ ] Drop on an open browser folder: uploads there
+- [x] Drop on an open browser folder: uploads there
 - [x] Folders refused: "Only files can be sent, not folders."
 - [x] Drag hint: window border + a pill (the target's label, or "Drop anywhere to choose a device")
 - [x] Drops disabled while the pairing prompt shows
-- [x] Files sent one at a time; failures summarised once (send wording; upload comes with step 12)
+- [x] Files sent one at a time; failures summarised once (send and upload wording)
 
 ### §7 Transfers (`features/transfers/`)
 - [x] Page: newest first; empty "No transfers yet"; loading; error + Retry
@@ -1445,19 +1522,19 @@ Dropping applies on X11, macOS and Windows, not on Wayland (see Owner decisions)
 - [x] Guard: newer / terminal wins
 
 ### §8 File browser (`features/files/`)
-- [ ] Title "Files on {name}"; Upload files, New folder (both only inside a folder), Refresh, Show hidden files
-- [ ] "no longer known" / "doesn't share its files" / "Connect {name} to browse its files."
-- [ ] Storage list; "Connecting to the device…"; "The device isn't sharing any storage."
-- [ ] Breadcrumbs: Up, Storage › root › segments, links, scroll to the end
-- [ ] Columns Name/Size/Modified (Modified at ≥600 px), sort toggle, folders first, name tie-break
-- [ ] Row: icon by extension, name, size, modified `YYYY-MM-DD HH:MM`, menu Preview/Download/Rename/Delete
-- [ ] Click: folder opens, previewable image (≤32 MiB, jpg/jpeg/png/gif/webp/bmp) previews, else downloads
-- [ ] Download toast with Transfers action
-- [ ] Preview dialog with pan/zoom; "This image can't be shown."
-- [ ] Name dialog: pre-selects the name without its extension; client validation ("Enter a name.", "That name is reserved.", "Names can't contain "/".")
-- [ ] Delete confirm with file / folder wording
-- [ ] Refetch after every change (success or failure), on Refresh, on reconnect
-- [ ] Empty folder: "This folder is empty. Drop files here to upload them."
+- [x] Title "Files on {name}"; Upload files, New folder (both only inside a folder), Refresh, Show hidden files (a toggle)
+- [x] "no longer known" / "doesn't share its files" / "Connect {name} to browse its files."
+- [x] Storage list; "Connecting to the device…"; "The device isn't sharing any storage."
+- [x] Breadcrumbs: Up, Storage › root › segments, links, scroll to the end
+- [x] Columns Name/Size/Modified (Modified at ≥600 px), sort toggle, folders first, name tie-break
+- [x] Row: icon by extension, name, size, modified `YYYY-MM-DD HH:MM`, menu Preview/Download/Rename/Delete (under the row, see step 12)
+- [x] Click: folder opens, previewable image (≤32 MiB, jpg/jpeg/png/gif/webp/bmp) previews, else downloads
+- [x] Download toast with Transfers action
+- [x] Preview dialog with pan/zoom; "This image can't be shown."
+- [x] Name dialog: pre-selects the name without its extension; client validation ("Enter a name.", "That name is reserved.", "Names can't contain "/".")
+- [x] Delete confirm with file / folder wording
+- [x] Refetch after every change (success or failure), on Refresh, on reconnect
+- [x] Empty folder: "This folder is empty. Drop files here to upload them."
 
 ### §9 Settings (`features/settings/`)
 - [x] Device name dialog: max 32 with counter, helper text, error in the field from the daemon, Save disabled while saving
