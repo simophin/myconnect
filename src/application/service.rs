@@ -20,9 +20,10 @@ use uuid::Uuid;
 use super::{
     ApplicationEvent, ClipboardSnapshot, Command, EventBus, EventBusError, LocalDeviceSnapshot,
     MAX_CLIPBOARD_TEXT_BYTES, OperationErrorCode, Pairing, PairingDirection, PairingSnapshot,
-    PairingStatus, PairingTransitionError, Query, QueryResult, ReceivedPing, StatusSnapshot,
-    Transfer, TransferDirection, TransferSnapshot, TransferStatus,
+    PairingStatus, PairingTransitionError, Query, QueryResult, StatusSnapshot, Transfer,
+    TransferDirection, TransferSnapshot, TransferStatus,
     files::{DirectoryListing, FileEntry},
+    plugin::{PluginContext, PluginRegistry},
     settings::{Settings, SettingsDefaults, SettingsPatch, SettingsSnapshot},
     transfer::{TransferConfig, sanitize_file_name, unique_destination},
 };
@@ -99,7 +100,8 @@ pub trait ApplicationService: Send + Sync {
     fn cancel_pairing(&self, pairing_id: Uuid) -> Result<PairingSnapshot, ApplicationError>;
     fn forget_device(&self, device_id: &str) -> Result<(), ApplicationError>;
     fn announce_to(&self, address: Ipv4Addr) -> Result<(), ApplicationError>;
-    fn send_ping(&self, device_id: &str, message: Option<String>) -> Result<(), ApplicationError>;
+    /// The HTTP routes of every plugin, merged.
+    fn plugin_routes(&self) -> axum::Router;
     fn ring_device(&self, device_id: &str) -> Result<(), ApplicationError>;
     fn send_clipboard(&self, device_id: &str) -> Result<(), ApplicationError>;
     fn set_clipboard(&self, text: String) -> Result<ClipboardSnapshot, ApplicationError>;
@@ -221,6 +223,7 @@ pub struct ApplicationHandle {
     commands: mpsc::Sender<Command>,
     events: EventBus,
     browsing: Arc<browse::Browsing>,
+    plugins: Arc<PluginRegistry>,
 }
 
 impl ApplicationHandle {
@@ -275,9 +278,15 @@ impl ApplicationHandle {
                 commands,
                 events,
                 browsing: Arc::default(),
+                plugins: Arc::new(PluginRegistry::new(plugins::builtin())),
             },
             receiver,
         ))
+    }
+
+    /// The core as plugins see it.
+    pub fn plugin_context(&self) -> PluginContext {
+        PluginContext::new(self.clone())
     }
 
     pub fn replace_devices(&self, devices: DeviceRegistry) -> Result<(), ApplicationError> {
@@ -782,9 +791,9 @@ impl ApplicationHandle {
     ///
     /// `kdeconnect.pair` packets are always handled, independent of pairing
     /// state, since pairing itself establishes trust. Every other packet
-    /// type is routed to the fixed plugin registry in [`crate::plugins`]
-    /// only if the sending device is currently paired; unpaired connections
-    /// cannot trigger any other behavior.
+    /// type is routed to the plugin that handles it, or else to the fixed
+    /// table in [`crate::plugins`], only if the sending device is currently
+    /// paired; unpaired connections cannot trigger any other behavior.
     pub fn handle_peer_packet(&self, device_id: &str, packet: Packet) {
         tracing::debug!(device_id, packet_type = %packet.packet_type, "packet received");
         if packet.packet_type == "kdeconnect.pair" {
@@ -806,22 +815,11 @@ impl ApplicationHandle {
             return;
         };
 
+        if let Some(plugin) = self.plugins.for_packet(&packet.packet_type) {
+            plugin.handle_packet(&self.plugin_context(), &device, &packet);
+            return;
+        }
         match plugins::dispatch_incoming(&packet) {
-            Ok(plugins::IncomingPluginPacket::Ping(body)) => {
-                // Only the presence of a message is logged, never its text.
-                tracing::debug!(
-                    device_id,
-                    has_message = body.message.is_some(),
-                    "ping received"
-                );
-                let _ = self
-                    .events
-                    .publish(super::EventData::PingReceived(ReceivedPing {
-                        device_id: device.device_id,
-                        device_name: device.device_name,
-                        message: body.message,
-                    }));
-            }
             Ok(plugins::IncomingPluginPacket::Clipboard(body)) => {
                 self.handle_clipboard(device_id, body, None)
             }
@@ -865,18 +863,15 @@ impl ApplicationHandle {
         self.command(Command::AnnounceTo { address })
     }
 
-    /// Send a `kdeconnect.ping` packet, optionally carrying a message, to a
-    /// paired, connected device. Sending is refused, with a typed error,
-    /// unless the device is paired, connected, and has advertised
-    /// `kdeconnect.ping` in its `incomingCapabilities`.
-    pub fn send_ping(
+    /// Queue `packet` to a paired, connected device. Refused, with a typed
+    /// error, unless the device has advertised the packet's type in its
+    /// `incomingCapabilities`.
+    pub(super) fn send_to_capable(
         &self,
         device_id: &str,
-        message: Option<String>,
+        packet: Packet,
     ) -> Result<(), ApplicationError> {
-        let connection = self.capable_connection(device_id, plugins::ping::PACKET_TYPE)?;
-        let packet = plugins::ping::build_packet(unix_millis(), message)
-            .map_err(|_| ApplicationError::Internal)?;
+        let connection = self.capable_connection(device_id, &packet.packet_type)?;
         connection
             .packets
             .try_send(packet)
@@ -884,15 +879,14 @@ impl ApplicationHandle {
     }
 
     /// Ask a paired, connected device to ring so it can be found, with a
-    /// `kdeconnect.findmyphone.request`. Refused like [`Self::send_ping`]
-    /// unless the device advertised that packet type.
+    /// `kdeconnect.findmyphone.request`. Refused like
+    /// [`Self::send_to_capable`] unless the device advertised that packet
+    /// type.
     pub fn ring_device(&self, device_id: &str) -> Result<(), ApplicationError> {
-        let connection =
-            self.capable_connection(device_id, plugins::findmyphone::REQUEST_PACKET_TYPE)?;
-        connection
-            .packets
-            .try_send(plugins::findmyphone::build_request_packet(unix_millis()))
-            .map_err(|_| ApplicationError::DeviceNotConnected)
+        self.send_to_capable(
+            device_id,
+            plugins::findmyphone::build_request_packet(unix_millis()),
+        )
     }
 
     /// Send this machine's clipboard text to one paired, connected device
@@ -2211,8 +2205,8 @@ impl ApplicationService for ApplicationHandle {
         ApplicationHandle::forget_device(self, device_id)
     }
 
-    fn send_ping(&self, device_id: &str, message: Option<String>) -> Result<(), ApplicationError> {
-        ApplicationHandle::send_ping(self, device_id, message)
+    fn plugin_routes(&self) -> axum::Router {
+        self.plugins.routes(&self.plugin_context())
     }
 
     fn ring_device(&self, device_id: &str) -> Result<(), ApplicationError> {
@@ -2462,66 +2456,8 @@ pub enum ApplicationError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
     use super::*;
-    use crate::config::TrustedDevice;
-
-    #[derive(Default)]
-    struct MemoryTrustStore(Mutex<Vec<TrustedDevice>>);
-
-    impl TrustStore for MemoryTrustStore {
-        fn get(&self, device_id: &str) -> Result<Option<TrustedDevice>, TrustError> {
-            Ok(self
-                .0
-                .lock()
-                .unwrap()
-                .iter()
-                .find(|d| d.device_id == device_id)
-                .cloned())
-        }
-        fn list(&self) -> Result<Vec<TrustedDevice>, TrustError> {
-            Ok(self.0.lock().unwrap().clone())
-        }
-        fn put(&self, device: &TrustedDevice) -> Result<(), TrustError> {
-            let mut devices = self.0.lock().unwrap();
-            devices.retain(|d| d.device_id != device.device_id);
-            devices.push(device.clone());
-            Ok(())
-        }
-        fn remove(&self, device_id: &str) -> Result<bool, TrustError> {
-            let mut devices = self.0.lock().unwrap();
-            let before = devices.len();
-            devices.retain(|d| d.device_id != device_id);
-            Ok(devices.len() != before)
-        }
-    }
-
-    fn handle() -> (ApplicationHandle, mpsc::Receiver<Command>) {
-        handle_with_trust(MemoryTrustStore::default())
-    }
-
-    fn handle_with_trust(
-        trust_store: MemoryTrustStore,
-    ) -> (ApplicationHandle, mpsc::Receiver<Command>) {
-        let directory = tempfile::tempdir().unwrap();
-        let identity = Arc::new(LocalIdentity::load_or_create(directory.path()).unwrap());
-        ApplicationHandle::new(
-            LocalDeviceSnapshot {
-                device_id: "local".into(),
-                device_name: "MyConnect".into(),
-            },
-            8,
-            b"local-pubkey".to_vec(),
-            Arc::new(trust_store),
-            crate::clipboard::InMemoryClipboard::shared(),
-            1,
-            1,
-            identity,
-            TransferConfig::new(directory.path().join("downloads")),
-        )
-        .unwrap()
-    }
+    use crate::application::testing::{MemoryTrustStore, handle, handle_with_trust, make_identity};
 
     #[test]
     fn status_and_empty_snapshots_are_queryable() {
@@ -2577,18 +2513,6 @@ mod tests {
         ));
     }
 
-    fn make_identity(device_id: &str, incoming_capabilities: Vec<String>) -> IdentityBody {
-        IdentityBody {
-            device_id: device_id.to_owned(),
-            device_name: "Peer".into(),
-            device_type: crate::protocol::DeviceType::Phone,
-            incoming_capabilities,
-            outgoing_capabilities: Vec::new(),
-            protocol_version: 8,
-            extra: Default::default(),
-        }
-    }
-
     #[test]
     fn paired_devices_are_listed_offline_and_keep_their_latest_identity() {
         let described = "740bd4b9b4184ee497d6caf1da8151be";
@@ -2599,7 +2523,7 @@ mod tests {
             last_trusted_protocol_version: 8,
             last_identity,
         };
-        let (handle, _commands) = handle_with_trust(MemoryTrustStore(Mutex::new(vec![
+        let (handle, _commands) = handle_with_trust(MemoryTrustStore::new(vec![
             trusted(
                 described,
                 Some(TrustedIdentity {
@@ -2610,7 +2534,7 @@ mod tests {
                 }),
             ),
             trusted(undescribed, None),
-        ])));
+        ]));
 
         let QueryResult::Devices(devices) = handle.query(Query::Devices).unwrap() else {
             panic!("expected devices");
@@ -2662,58 +2586,6 @@ mod tests {
     }
 
     #[test]
-    fn unpaired_devices_cannot_be_pinged() {
-        let (handle, _commands) = handle();
-        let device_id = "740bd4b9b4184ee497d6caf1da8151be";
-        let identity = make_identity(device_id, vec![plugins::ping::PACKET_TYPE.into()]);
-        handle.discover_device(&identity, false, 1).unwrap();
-        let (tx, _rx) = mpsc::channel(4);
-        handle
-            .register_connection(device_id, vec![1, 2, 3], 8, tx, CancellationToken::new(), 1)
-            .unwrap();
-
-        // Sending is refused before pairing, with a typed error rather than
-        // a silent no-op.
-        assert!(matches!(
-            handle.send_ping(device_id, None),
-            Err(ApplicationError::NotPaired)
-        ));
-    }
-
-    #[test]
-    fn capability_filtering_rejects_unsupported_peers_and_paired_devices_can_be_pinged() {
-        let (handle, _commands) = handle();
-        let device_id = "740bd4b9b4184ee497d6caf1da8151be";
-        let identity = make_identity(device_id, Vec::new());
-        handle.discover_device(&identity, true, 1).unwrap();
-        let (tx, mut rx) = mpsc::channel(4);
-        handle
-            .register_connection(device_id, vec![1, 2, 3], 8, tx, CancellationToken::new(), 1)
-            .unwrap();
-
-        // Paired and connected, but the peer never advertised the ping
-        // capability: sending must be refused with a typed rejection, not a
-        // silent no-op or a panic.
-        assert!(matches!(
-            handle.send_ping(device_id, None),
-            Err(ApplicationError::UnsupportedByPeer)
-        ));
-
-        // The peer re-announces (e.g. on reconnect) advertising the
-        // capability.
-        let identity_with_ping = make_identity(device_id, vec![plugins::ping::PACKET_TYPE.into()]);
-        handle
-            .discover_device(&identity_with_ping, true, 2)
-            .unwrap();
-
-        handle.send_ping(device_id, Some("hello".into())).unwrap();
-        let sent = rx.try_recv().unwrap();
-        assert_eq!(sent.packet_type, plugins::ping::PACKET_TYPE);
-        let body: plugins::ping::PingBody = sent.body_as().unwrap();
-        assert_eq!(body.message.as_deref(), Some("hello"));
-    }
-
-    #[test]
     fn devices_that_accept_it_can_be_asked_to_ring() {
         let (handle, _commands) = handle();
         let device_id = "740bd4b9b4184ee497d6caf1da8151be";
@@ -2739,42 +2611,6 @@ mod tests {
         let sent = rx.try_recv().unwrap();
         assert_eq!(sent.packet_type, plugins::findmyphone::REQUEST_PACKET_TYPE);
         assert!(sent.body.is_empty());
-    }
-
-    #[test]
-    fn pings_from_paired_devices_are_published_and_others_are_dropped() {
-        let (handle, _commands) = handle();
-        let paired_id = "740bd4b9b4184ee497d6caf1da8151be";
-        let unpaired_id = "850bd4b9b4184ee497d6caf1da8151be";
-        handle
-            .discover_device(&make_identity(paired_id, Vec::new()), true, 1)
-            .unwrap();
-        handle
-            .discover_device(&make_identity(unpaired_id, Vec::new()), false, 1)
-            .unwrap();
-        let mut events = handle.subscribe();
-
-        let ping = |message: Option<&str>| {
-            plugins::ping::build_packet(2_u64, message.map(str::to_owned)).unwrap()
-        };
-        let mut received = || match events.try_recv().unwrap().event {
-            super::super::EventData::PingReceived(ping) => ping,
-            other => panic!("unexpected event {other:?}"),
-        };
-        // The test bus holds one event, so check each ping as it lands.
-        handle.handle_peer_packet(unpaired_id, ping(Some("ignored")));
-        handle.handle_peer_packet(paired_id, ping(Some("pong")));
-        assert_eq!(
-            received(),
-            ReceivedPing {
-                device_id: paired_id.into(),
-                device_name: "Peer".into(),
-                message: Some("pong".into()),
-            }
-        );
-        handle.handle_peer_packet(paired_id, ping(None));
-        assert_eq!(received().message, None);
-        assert!(events.try_recv().is_err());
     }
 
     #[test]

@@ -283,18 +283,6 @@ pub struct ClipboardSnapshot {
     pub source_device_id: Option<String>,
 }
 
-/// A `kdeconnect.ping` received from a paired device. Pings are one-off
-/// notifications, not a resource: there is no list endpoint, and a client
-/// that misses the event has simply missed the ping.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReceivedPing {
-    pub device_id: String,
-    pub device_name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-}
-
 /// Transport-independent mutations accepted by the application core.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {

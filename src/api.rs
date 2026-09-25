@@ -228,8 +228,10 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
             &format!("/devices/{{device_id}}{FILE_UPLOAD_PATH}"),
             post(post_file_upload),
         )
-        .layer(DefaultBodyLimit::max(config.max_transfer_body_bytes));
+        .layer(DefaultBodyLimit::max(config.max_transfer_body_bytes))
+        .with_state(state.clone());
 
+    let plugin_routes = state.application.plugin_routes();
     let api = Router::new()
         .route("/status", get(get_status))
         .route("/discovery", post(post_discovery))
@@ -238,7 +240,6 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
             "/devices/{device_id}",
             get(get_device).delete(delete_device),
         )
-        .route("/devices/{device_id}/ping", post(post_ping))
         .route("/devices/{device_id}/ring", post(post_ring))
         .route(
             "/devices/{device_id}/clipboard",
@@ -272,6 +273,10 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
         .route("/clipboard", get(get_clipboard).put(put_clipboard))
         .route("/settings", get(get_settings).patch(patch_settings))
         .route("/events", get(get_events))
+        .with_state(state)
+        // Plugins' routes get the same deadline, limits and authentication
+        // as the core's.
+        .merge(plugin_routes)
         .fallback(api_not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn_with_state(
@@ -294,8 +299,7 @@ fn router(state: ApiState, token: Option<ApiToken>, config: &ApiServerConfig) ->
             require_authentication,
         )),
         None => api,
-    }
-    .with_state(state);
+    };
 
     Router::new()
         .nest("/api/v1", api)
@@ -450,26 +454,6 @@ async fn delete_device(
         .forget_device(&device_id)
         .map_err(map_error)?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-#[derive(Deserialize)]
-struct PingRequest {
-    message: Option<String>,
-}
-
-/// Queue a `kdeconnect.ping` to a paired, connected device. The JSON body
-/// is optional; without one, a plain ping carrying no message is sent.
-async fn post_ping(
-    State(state): State<ApiState>,
-    Path(device_id): Path<String>,
-    request: Option<Json<PingRequest>>,
-) -> Result<StatusCode, ApiProblem> {
-    let message = request.and_then(|Json(request)| request.message);
-    state
-        .application
-        .send_ping(&device_id, message)
-        .map_err(map_error)?;
-    Ok(StatusCode::ACCEPTED)
 }
 
 /// Ask a paired, connected device that advertises
@@ -1151,13 +1135,21 @@ struct ProblemBody {
     detail: Option<String>,
 }
 
-struct ApiProblem {
+/// An `application/problem+json` error response. Plugin handlers return it
+/// too, converting core errors with `?`.
+pub(crate) struct ApiProblem {
     status: StatusCode,
     body: ProblemBody,
 }
 
+impl From<ApplicationError> for ApiProblem {
+    fn from(error: ApplicationError) -> Self {
+        map_error(error)
+    }
+}
+
 impl ApiProblem {
-    fn new(status: StatusCode, title: &'static str, code: &'static str) -> Self {
+    pub(crate) fn new(status: StatusCode, title: &'static str, code: &'static str) -> Self {
         Self {
             status,
             body: ProblemBody {

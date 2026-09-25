@@ -37,13 +37,14 @@ recorded in [`ui/docs/adr/`](../ui/docs/adr/README.md).
 binary (src/bin/myconnect) → client → api
 ffi (myconnect-ffi) → application::RunningService
 api → application
-application → config, device, plugins, transport, clipboard
-device, plugins, transport → protocol
+application → config, device, plugins::builtin, transport, clipboard
+plugins → application (the Plugin API), protocol
+device, transport → protocol
 ```
 
 `protocol` and `transport` never depend on Axum, Clap, or API response
-types — they know nothing about HTTP. `plugins` depends only on `protocol`,
-so packet handling can be exercised without a live connection.
+types — they know nothing about HTTP. A plugin reaches the core only through
+`application::PluginContext`, and never another plugin.
 
 | Module | File(s) | Responsibility |
 | --- | --- | --- |
@@ -51,18 +52,19 @@ so packet handling can be exercised without a live connection.
 | `config` | `src/config/{mod,identity,settings,token,trust}.rs` | Local device identity (UUID + self-signed cert), the optional API bearer token (never persisted), filesystem-backed `TrustStore` of pinned peer certificates (one `trusted-devices/<id>.json` each, with the name, type and capabilities the peer last reported over an authenticated connection), and `settings.json` (user settings, written atomically). |
 | `transport` | `src/transport/{lan,tls,payload,sftp}.rs` | UDP discovery, TCP control-channel connect/accept, the real rustls TLS handshake and certificate pinning, the auxiliary TLS payload connection used for file transfer, and the SSH/SFTP client connection to a peer's file server (§12). |
 | `device` | `src/device.rs` | `DeviceSnapshot`, `DeviceReachability`, `BatteryStatus`, and the in-memory device registry keyed by device ID. It starts with every paired device from the `TrustStore`, as `unavailable`, so paired devices are listed while offline. |
-| `plugins` | `src/plugins/{mod,ping,clipboard,share,sftp,battery,findmyphone}.rs` | Fixed (non-dynamic) packet-type routing table for the packet families this build understands: ping, clipboard, share, sftp, battery, findmyphone. Advertises capability strings for the identity packet: ping, clipboard and share in both directions; `kdeconnect.sftp.request` outgoing and `kdeconnect.sftp` incoming only, since this build browses peers but serves no files; `kdeconnect.battery` incoming only, since it reads peers' batteries but reports none; `kdeconnect.findmyphone.request` outgoing only, since this build asks peers to ring but doesn't ring itself. |
-| `application` | `src/application.rs`, `src/application/{state,events,service,settings,transfer,files}.rs`, `src/application/service/browse.rs` | Orchestration: connection registry, pairing state machine, transfer state machine, clipboard sync, user settings, browse sessions with peers' files (§12), bounded event bus. Everything HTTP-facing is a snapshot type defined here. `RunningService` starts/stops a whole daemon (LAN + API) for the CLI and embedders. |
+| `plugins` | `src/plugins/mod.rs`, `src/plugins/ping/{mod,packet,http}.rs`, `src/plugins/{clipboard,share,sftp,battery,findmyphone}.rs` | The features. `builtin()` lists those that implement `application::Plugin` (so far ping, which owns its packet handling, `ping.received` event and `POST /devices/{id}/ping` route). The rest are still routed by a fixed table (`dispatch_incoming`) into `application`. Advertises capability strings for the identity packet: ping, clipboard and share in both directions; `kdeconnect.sftp.request` outgoing and `kdeconnect.sftp` incoming only, since this build browses peers but serves no files; `kdeconnect.battery` incoming only, since it reads peers' batteries but reports none; `kdeconnect.findmyphone.request` outgoing only, since this build asks peers to ring but doesn't ring itself. |
+| `application` | `src/application.rs`, `src/application/{state,events,plugin,service,settings,transfer,files}.rs`, `src/application/service/browse.rs` | Orchestration: connection registry, pairing state machine, transfer state machine, clipboard sync, user settings, browse sessions with peers' files (§12), bounded event bus, and the plugin API (`Plugin`, `PluginContext`, `PluginRegistry`; plugin events travel as `EventData::Plugin` with the same `{type, data}` shape). `testing` is a real core for unit tests. `RunningService` starts/stops a whole daemon (LAN + API) for the CLI and embedders. |
 | `clipboard` | `src/clipboard.rs`, `src/clipboard/system.rs` | `ClipboardService` trait, the desktop clipboard (`SystemClipboard`, over `arboard`) and an in-memory implementation (§6). |
 | `api` | `src/api.rs` | Axum HTTP transport only — translates HTTP requests to `ApplicationService` calls and snapshots back to JSON. Optional bearer-token auth, body-size limits, SSE. |
 | `client` | `src/client.rs` | Typed HTTP client used by the CLI (and any future frontend) to talk to `api`. |
 | `src/bin/myconnect` | `cli.rs`, `main.rs` | Argument parsing and daemon bootstrap only. |
 | `myconnect-ffi` | `ffi/src/lib.rs` | `cdylib` exporting `myconnect_start` / `myconnect_stop` / `myconnect_free_string` (JSON in, JSON out) so a GUI process can embed a daemon. See §9. |
 
-Adding a new packet family means adding a match arm in `plugins::mod::dispatch_incoming`
-and an entry in `plugins::capabilities()` — not registering a trait object at
-runtime. This is deliberate: the MVP has a small, fixed plugin set, not a
-plugin marketplace.
+A new feature is a module under `plugins/` implementing `application::Plugin`
+(packet types, packet handler, routes) plus one line in `plugins::builtin()`.
+The set is fixed at compile time; nothing is loaded at runtime. The older
+features are moving over one at a time; see
+[`research/feature-modules.md`](research/feature-modules.md) for the plan.
 
 ## 3. Connection lifecycle
 

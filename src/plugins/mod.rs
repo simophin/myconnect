@@ -1,12 +1,10 @@
-//! Fixed packet-type routing for the small set of plugin behaviors the MVP
-//! implements.
+//! The daemon's features.
 //!
-//! This is deliberately not a generic or dynamic plugin system: adding a new
-//! packet family means adding a match arm to [`dispatch_incoming`] and an
-//! entry to [`capabilities`], not registering a trait object at runtime.
-//! `plugins` depends only on `protocol`; it has no knowledge of HTTP,
-//! transport sockets, or CLI types, so it can be exercised without a
-//! connection or an application handle.
+//! A feature implements [`crate::application::Plugin`] and is listed in
+//! [`builtin`]; ping is the first to do so. The others are still routed by
+//! the fixed table below ([`dispatch_incoming`], [`legacy_capabilities`])
+//! while they move over (see `docs/research/feature-modules.md`). The set
+//! is fixed at compile time; nothing is loaded at runtime.
 
 pub mod battery;
 pub mod clipboard;
@@ -15,9 +13,19 @@ pub mod ping;
 pub mod sftp;
 pub mod share;
 
+use std::sync::Arc;
+
 use thiserror::Error;
 
-use crate::protocol::{BodyError, Packet};
+use crate::{
+    application::{Plugin, PluginRegistry},
+    protocol::{BodyError, Packet},
+};
+
+/// Every plugin in this build.
+pub fn builtin() -> Vec<Arc<dyn Plugin>> {
+    vec![Arc::new(ping::PingPlugin)]
+}
 
 /// Capability strings advertised by all packet handlers registered here.
 /// These are copied verbatim into the `incomingCapabilities` and
@@ -28,14 +36,32 @@ pub struct PluginCapabilities {
     pub outgoing: Vec<String>,
 }
 
-/// The fixed set of packet types this build can send and receive. Browsing,
+/// The packet types this build can send and receive: those of the
+/// [`builtin`] plugins, then those still in the fixed table.
+pub fn capabilities() -> PluginCapabilities {
+    let registry = PluginRegistry::new(builtin());
+    let legacy = legacy_capabilities();
+    PluginCapabilities {
+        incoming: registry
+            .incoming()
+            .map(str::to_owned)
+            .chain(legacy.incoming)
+            .collect(),
+        outgoing: registry
+            .outgoing()
+            .map(str::to_owned)
+            .chain(legacy.outgoing)
+            .collect(),
+    }
+}
+
+/// The packet types of the features not yet moved to a plugin. Browsing,
 /// battery reports and ringing are one-way: this build asks peers to serve
 /// files and to ring, and reads their battery, but serves no files, doesn't
 /// ring and reports no battery.
-pub fn capabilities() -> PluginCapabilities {
+fn legacy_capabilities() -> PluginCapabilities {
     PluginCapabilities {
         incoming: vec![
-            ping::PACKET_TYPE.to_owned(),
             clipboard::PACKET_TYPE.to_owned(),
             clipboard::CONNECT_PACKET_TYPE.to_owned(),
             share::PACKET_TYPE.to_owned(),
@@ -43,7 +69,6 @@ pub fn capabilities() -> PluginCapabilities {
             battery::PACKET_TYPE.to_owned(),
         ],
         outgoing: vec![
-            ping::PACKET_TYPE.to_owned(),
             clipboard::PACKET_TYPE.to_owned(),
             clipboard::CONNECT_PACKET_TYPE.to_owned(),
             share::PACKET_TYPE.to_owned(),
@@ -56,7 +81,6 @@ pub fn capabilities() -> PluginCapabilities {
 /// A packet successfully routed to a registered plugin handler.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IncomingPluginPacket {
-    Ping(ping::PingBody),
     Clipboard(clipboard::ClipboardBody),
     ClipboardConnect(clipboard::ClipboardConnectBody),
     ShareRequest(share::ShareRequestBody),
@@ -73,7 +97,7 @@ pub enum PluginDispatchError {
     InvalidBody(#[from] BodyError),
 }
 
-/// Route a decoded packet to its registered plugin handler by packet type.
+/// Route a packet of a feature still in the fixed table by packet type.
 ///
 /// Callers are responsible for enforcing that only paired devices reach
 /// this function (see `ApplicationHandle::handle_peer_packet`); capability
@@ -81,7 +105,6 @@ pub enum PluginDispatchError {
 /// on the peer's advertised `incomingCapabilities`.
 pub fn dispatch_incoming(packet: &Packet) -> Result<IncomingPluginPacket, PluginDispatchError> {
     match packet.packet_type.as_str() {
-        ping::PACKET_TYPE => Ok(IncomingPluginPacket::Ping(packet.body_as()?)),
         clipboard::PACKET_TYPE => Ok(IncomingPluginPacket::Clipboard(packet.body_as()?)),
         clipboard::CONNECT_PACKET_TYPE => {
             Ok(IncomingPluginPacket::ClipboardConnect(packet.body_as()?))
@@ -164,15 +187,6 @@ mod tests {
         assert!(matches!(
             dispatch_incoming(&packet),
             Err(PluginDispatchError::Unrecognized(t)) if t == "kdeconnect.mock.echo"
-        ));
-    }
-
-    #[test]
-    fn ping_packets_dispatch_to_the_ping_handler() {
-        let packet = ping::build_packet(1_u64, Some("hi".into())).unwrap();
-        assert!(matches!(
-            dispatch_incoming(&packet),
-            Ok(IncomingPluginPacket::Ping(body)) if body.message.as_deref() == Some("hi")
         ));
     }
 

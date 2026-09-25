@@ -12,12 +12,15 @@ use std::{
 use myconnect::{
     application::{
         ApplicationError, ApplicationHandle, ApplicationService, Command, EventData,
-        LocalDeviceSnapshot, Query, QueryResult, ReceivedPing,
+        LocalDeviceSnapshot, Query, QueryResult,
     },
     clipboard::InMemoryClipboard,
     config::{FilesystemTrustStore, LocalIdentity, TrustStore, TrustedDevice},
     device::DeviceReachability,
-    plugins,
+    plugins::{
+        self,
+        ping::{ReceivedPing, send_ping},
+    },
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
     transport::{
         lan::{LanConfig, LanService, LocalDeviceInfo, MAX_DISCOVERY_DATAGRAM, TCP_PORT_RANGE},
@@ -291,10 +294,12 @@ async fn ping_reaches_a_paired_kde_connect_peer_over_tls() {
     .await;
     wait_for_paired(&local_peer.application, &kde_id, true).await;
 
-    local_peer
-        .application
-        .send_ping(&kde_id, Some("hello from MyConnect".into()))
-        .unwrap();
+    send_ping(
+        &local_peer.application.plugin_context(),
+        &kde_id,
+        Some("hello from MyConnect".into()),
+    )
+    .unwrap();
     let ping: Value = serde_json::from_str(&read_line(&mut tls_stream).await).unwrap();
     assert_eq!(ping["type"], json!(plugins::ping::PACKET_TYPE));
     assert_eq!(ping["body"]["message"], json!("hello from MyConnect"));
@@ -339,19 +344,28 @@ async fn paired_myconnect_peers_ping_each_other() {
 
     // Before pairing, a ping is refused for lack of trust.
     assert!(matches!(
-        a.application.send_ping(&b_id, Some("too early".into())),
+        send_ping(
+            &a.application.plugin_context(),
+            &b_id,
+            Some("too early".into())
+        ),
         Err(ApplicationError::NotPaired)
     ));
 
     pair(&a.application, &b.application, &a_id, &b_id).await;
 
     let mut b_events = b.application.subscribe();
-    a.application
-        .send_ping(&b_id, Some("hello B".into()))
-        .unwrap();
+    send_ping(
+        &a.application.plugin_context(),
+        &b_id,
+        Some("hello B".into()),
+    )
+    .unwrap();
     let received = timeout(Duration::from_secs(3), async {
         loop {
-            if let EventData::PingReceived(ping) = b_events.recv().await.unwrap().event {
+            if let EventData::Plugin(event) = b_events.recv().await.unwrap().event
+                && let Some(ping) = event.decode::<ReceivedPing>()
+            {
                 return ping;
             }
         }
@@ -368,10 +382,12 @@ async fn paired_myconnect_peers_ping_each_other() {
     );
 
     let mut a_events = a.application.subscribe();
-    b.application.send_ping(&a_id, None).unwrap();
+    send_ping(&b.application.plugin_context(), &a_id, None).unwrap();
     let received = timeout(Duration::from_secs(3), async {
         loop {
-            if let EventData::PingReceived(ping) = a_events.recv().await.unwrap().event {
+            if let EventData::Plugin(event) = a_events.recv().await.unwrap().event
+                && let Some(ping) = event.decode::<ReceivedPing>()
+            {
                 return ping;
             }
         }
