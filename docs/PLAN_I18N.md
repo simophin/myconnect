@@ -65,7 +65,7 @@ Split into four commits, one per step, each passing the checks.
       settings, about
 - [x] 2c. Overlays (dialog, drop, incoming, toast) and features: share,
       clipboard, ping, findmyphone, battery, notifications, browse
-- [ ] 2d. Tray menu, desktop notifications (incl. the "Open" action),
+- [x] 2d. Tray menu, desktop notifications (incl. the "Open" action),
       file-dialog titles, `background.rs`; then a sweep:
       `grep` `src/ui` for remaining user-visible literals
 
@@ -193,3 +193,24 @@ Anything a later phase must know, one line each, newest last.
   Figtree font (#45), which has no CJK glyphs, so phase 5 must check
   fallback to a system CJK font; and SQLite-backed typed configs (#47),
   which is where phase 7's `language` setting goes.
+- 2d: keys are `tray-` (the menu; a device's submenu is `tray-device-status`,
+  `{ $name } · { $status }`) and `notify-` (the pairing and received-file
+  notifications, and Linux's "Open" button, looked up per notification in
+  `desktop::notify`'s D-Bus loop, so phase 7 needs nothing there). About's
+  licenses row (from main's #46) is `about-licenses`. File-dialog titles
+  were already done (`shell-download-dir-title`, 2c's pickers).
+- 2d sweep: what's left in `src/ui` on purpose is the app's name ("Ferry":
+  tray tooltip, SNI title, notification app name, `about::NAME`), `--demo`'s
+  made-up device names and notifications, the fake phone's storages,
+  `format_bytes`' units (phase 3), and errors only logged (`open`,
+  `autostart`, which the UI words as `shell-open-failed` and
+  `shell-start-on-login-failed`). macOS's app menu (winit's default "Quit
+  Ferry" etc.) isn't ours; phase 5's `.lproj` covers it.
+- 2d: the tray menu is rebuilt with `fl!` on each `update_tray` and sent
+  when its layout (labels included) changes, so phase 7 only has to call
+  `update_tray` after switching language.
+- 2d was checked on macOS, as 2c was: the same `tests/lan.rs` loopback
+  failure and skipped real-clipboard tests; `transfer_e2e` passed. The
+  Linux-only code (`desktop::notify`'s D-Bus, the SNI tray) was
+  type-checked with `cargo clippy --target x86_64-unknown-linux-musl` and
+  HANDOFF's fake `cc`/`ar`; the real app wasn't run (no Xvfb on macOS).

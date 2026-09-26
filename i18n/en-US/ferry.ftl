@@ -129,6 +129,33 @@ shell-rename-confirm = Save
 # The title of the folder picker for the download folder.
 shell-download-dir-title = Save received files in
 
+## The tray menu (src/ui/background.rs)
+
+tray-open = Open Ferry
+# In place of the devices, when none is paired.
+tray-no-paired-devices = No paired devices
+# In place of the devices, when none of the paired ones is connected.
+tray-no-devices-connected = No devices connected
+# A connected device's submenu; `status` is its first status chip, like
+# its battery ("82%").
+tray-device-status = { $name } · { $status }
+# The last item of a device's submenu: opens its page.
+tray-show-details = Show details
+tray-settings = Settings
+tray-about = About Ferry
+tray-quit = Quit
+
+## Desktop notifications (src/ui/background.rs, src/ui/desktop/notify.rs)
+
+notify-pairing-title = Pairing request
+# `name` is the device asking.
+notify-pairing-body = { $name } wants to pair with this computer.
+notify-file-received-title = File received
+# `file` is the file's name, `name` the device's.
+notify-file-received-body = { $file } from { $name }
+# The button on a notification (on Linux) that opens the window.
+notify-open = Open
+
 ## Widgets the pages share (src/ui/widgets.rs)
 
 widget-back = Back
@@ -253,6 +280,8 @@ about-author = Made by Fanchao
 about-source = Source code
 about-support = Support development
 about-support-detail = Sponsor on GitHub
+about-licenses = Open source licenses
+about-licenses-detail = The software Ferry is built on
 
 ## Ping (src/ui/features/ping.rs)
 

@@ -83,8 +83,8 @@ pub fn view<'a, M: Clone + 'a>(version: &'a str, actions: Actions<M>) -> Element
         ),
         widgets::setting(
             lucide::scroll_text,
-            "Open source licenses",
-            "The software Ferry is built on",
+            fl!("about-licenses"),
+            fl!("about-licenses-detail"),
             Some(
                 lucide::external_link()
                     .size(16)
