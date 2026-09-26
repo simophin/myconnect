@@ -2,10 +2,10 @@
 //! closed or unfocused. A click on one shows the window
 //! ([`DesktopEvent::NotificationClicked`]).
 //!
-//! On Linux the shell talks to `org.freedesktop.Notifications` itself, so it
-//! can withdraw a notification and hear its click without a thread per
-//! notification (ADR 0001). macOS and Windows have none yet (HANDOFF,
-//! "Open work").
+//! On Linux the shell talks to `org.freedesktop.Notifications` itself, and on
+//! macOS to `UNUserNotificationCenter` (`mac-usernotifications`), so it can
+//! withdraw a notification and hear its click without a thread per
+//! notification (ADR 0001). Windows has none yet (HANDOFF, "Open work").
 
 use std::sync::Arc;
 
@@ -35,10 +35,121 @@ pub fn start(runtime: &tokio::runtime::Handle, events: Events) -> Arc<dyn Notifi
     {
         Arc::new(dbus::DbusNotifier::start(runtime, events))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        Arc::new(macos::MacNotifier::start(runtime, events))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (runtime, events);
         Arc::new(NoNotifier)
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::collections::HashMap;
+
+    use mac_usernotifications::{Error, Notification};
+    use tokio::sync::mpsc;
+
+    use super::{super::DesktopEvent, Events, Notifier};
+
+    enum Request {
+        Show {
+            id: u32,
+            title: String,
+            body: String,
+        },
+        Withdraw(u32),
+        /// The user clicked or dismissed it, so there is nothing to withdraw.
+        Gone(u32),
+    }
+
+    /// Talks to the notification center on the daemon's runtime, one
+    /// request at a time, so a withdrawal never overtakes its show. The
+    /// center needs the app's bundle: outside it (`cargo run`) nothing shows.
+    pub struct MacNotifier {
+        requests: mpsc::UnboundedSender<Request>,
+    }
+
+    impl MacNotifier {
+        pub fn start(runtime: &tokio::runtime::Handle, events: Events) -> Self {
+            let (requests, received) = mpsc::unbounded_channel();
+            let gone = requests.downgrade();
+            runtime.spawn(async move {
+                if let Err(error) = serve(received, gone, events).await {
+                    tracing::warn!(%error, "desktop notifications unavailable");
+                }
+            });
+            Self { requests }
+        }
+    }
+
+    impl Notifier for MacNotifier {
+        fn show(&self, id: u32, title: &str, body: &str) {
+            let _ = self.requests.send(Request::Show {
+                id,
+                title: title.into(),
+                body: body.into(),
+            });
+        }
+
+        fn withdraw(&self, id: u32) {
+            let _ = self.requests.send(Request::Withdraw(id));
+        }
+    }
+
+    async fn serve(
+        mut requests: mpsc::UnboundedReceiver<Request>,
+        gone: mpsc::WeakUnboundedSender<Request>,
+        events: Events,
+    ) -> Result<(), Error> {
+        mac_usernotifications::check_bundle()?;
+        // Asks the user the first time; after that, it answers at once.
+        if !mac_usernotifications::request_auth().await? {
+            tracing::info!("notifications are turned off for MyConnect in System Settings");
+        }
+        // The center's id for each notification showing, by the shell's.
+        let mut showing: HashMap<u32, String> = HashMap::new();
+        while let Some(request) = requests.recv().await {
+            match request {
+                Request::Show { id, title, body } => {
+                    let shown = Notification::new().title(title).message(body).send().await;
+                    let handle = match shown {
+                        Ok(handle) => handle,
+                        Err(error) => {
+                            tracing::warn!(%error, "notification not shown");
+                            continue;
+                        }
+                    };
+                    showing.insert(id, handle.notification_id().to_owned());
+                    let (events, gone) = (events.clone(), gone.clone());
+                    // Resolves on a click, or once the user dismisses it.
+                    tokio::spawn(async move {
+                        if handle
+                            .response()
+                            .await
+                            .is_ok_and(|response| response.is_default_action())
+                        {
+                            let _ = events.send(DesktopEvent::NotificationClicked);
+                        }
+                        if let Some(gone) = gone.upgrade() {
+                            let _ = gone.send(Request::Gone(id));
+                        }
+                    });
+                }
+                Request::Withdraw(id) => {
+                    if let Some(center_id) = showing.remove(&id) {
+                        mac_usernotifications::close_delivered(&center_id).await;
+                    }
+                }
+                Request::Gone(id) => {
+                    showing.remove(&id);
+                }
+            }
+        }
+        Ok(())
     }
 }
 

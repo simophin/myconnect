@@ -104,8 +104,9 @@ the CLI, and for tagged builds an Arch Linux PKGBUILD. The scripts are in
 
 ## Open work
 
-**The tray and notifications on macOS and Windows** (the plan's step
-13b). The tray works on macOS (checked by the owner) and is untested on
+**The tray on macOS and Windows, and notifications on Windows** (the
+plan's step 13b). Notifications work on Linux and macOS (ADR 0001,
+"Desktop integration"). The tray works on macOS (checked by the owner) and is untested on
 Windows: `tray-icon` + `muda`
 in `src/ui/desktop/tray.rs` (`native`), created from `Tray::start`, which
 `update` calls on the main thread once the event loop runs
@@ -126,8 +127,16 @@ right one. It type-checks for both (below). Still to do:
   `applicationShouldHandleReopen:`. Check that the window comes to the
   front when opened from the tray, and that no Dock icon flashes at a
   start in the tray.
-- `notify-rust` for `Notifier`: clicks work on Windows and are best effort
-  on macOS; nothing is withdrawn (ADR 0001, "Desktop integration").
+- `notify-rust` for Windows' `Notifier`: clicks work; nothing is
+  withdrawn (ADR 0001, "Desktop integration").
+- macOS notifications were checked from an ad-hoc signed bundle with the
+  app's id, driving the real `Notifier` in an iced event loop (show, a
+  click reaching `NotificationClicked`, and withdrawal), not yet in the
+  full app with a peer: loopback discovery doesn't work on macOS (see
+  "Traps"). They need the bundle, so `cargo run` shows none; run a bundle
+  from outside `/tmp` (macOS refuses those), e.g. under `target/`. Check
+  that a click brings the window (and its Dock icon) back while the app
+  is in the menu bar only.
 - macOS's menu-bar Quit and logout take the quit path. They go through
   `terminate:`, which exits after winit's `exiting`, so the daemon's
   shutdown after `program.run()` likely doesn't run.

@@ -19,6 +19,7 @@ gui = [
     "dep:interprocess",
     "dep:ksni",
     "dep:libc",
+    "dep:mac-usernotifications",
     "dep:objc2",
     "dep:objc2-app-kit",
     "dep:opener",
@@ -92,6 +93,10 @@ zbus = { version = "5", default-features = false, features = ["async-io"], optio
 tray-icon = { version = "0.25", default-features = false, optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# Notifications (`gui`), through `UNUserNotificationCenter`: the crate
+# `notify-rust` builds its macOS backend on, used directly for its async
+# API, so a click and a withdrawal need no thread per notification.
+mac-usernotifications = { version = "0.3.1", optional = true }
 # The Dock icon (`gui`), shown only while the window is open. Already in
 # the tree through `tray-icon`.
 objc2 = { version = "0.6", optional = true }
