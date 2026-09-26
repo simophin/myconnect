@@ -1,4 +1,4 @@
-//! One device: what it is, what can be done with it (each plugin's
+//! One device: what it is, what can be done with it (the features'
 //! actions), its recent transfers, and Unpair.
 
 use iced::{
@@ -15,7 +15,7 @@ use crate::{
     core::DeviceSnapshot,
     protocol::DeviceType,
     ui::{
-        plugin::{DeviceAction, ErasedUiPlugin, PluginMessage},
+        features::{DeviceAction, DeviceStatus, Feature},
         route::Route,
         store::Store,
         widgets,
@@ -29,27 +29,33 @@ const RECENT_TRANSFERS: usize = 5;
 pub struct Actions<M> {
     /// Open a page. Back goes to the device list.
     pub navigate: fn(Route) -> M,
-    /// Wrap a plugin action's message.
-    pub plugin: fn(PluginMessage) -> M,
+    /// Wrap a feature action's message.
+    pub feature: fn(Feature) -> M,
     /// Ask to unpair the device.
     pub unpair: fn(&DeviceSnapshot) -> M,
     /// The recent transfers' buttons.
     pub transfer: transfers::Actions<M>,
 }
 
-/// The page of the device `device_id`, from what `store` holds, with each
-/// plugin's status and actions. `unpairing` disables Unpair while an unpair
-/// runs.
+/// What the features show for a device: its chips and its actions.
+pub struct DeviceFeatures<'a> {
+    pub statuses: &'a dyn Fn(&DeviceSnapshot) -> Vec<DeviceStatus>,
+    pub actions: &'a dyn Fn(&DeviceSnapshot) -> Vec<DeviceAction>,
+}
+
+/// The page of the device `device_id`, from what `store` holds, with the
+/// `features`' chips and actions. `unpairing` disables Unpair while an
+/// unpair runs.
 pub fn view<'a, Message: Clone + 'a>(
     store: &'a Store,
-    plugins: &'a [Box<dyn ErasedUiPlugin>],
+    features: &DeviceFeatures<'_>,
     device_id: &str,
     unpairing: bool,
     actions: &Actions<Message>,
 ) -> Element<'a, Message> {
     let Actions {
         navigate,
-        plugin,
+        feature,
         unpair,
         transfer: transfer_actions,
     } = actions;
@@ -67,14 +73,9 @@ pub fn view<'a, Message: Clone + 'a>(
     };
 
     let mut content = column![
-        summary(device, plugins),
+        summary(device, (features.statuses)(device)),
         facts(device),
-        action_buttons(
-            plugins
-                .iter()
-                .flat_map(|each| each.device_actions(device))
-                .map(|action| action.map(plugin)),
-        ),
+        action_buttons((features.actions)(device), *feature),
     ]
     .spacing(16);
 
@@ -108,11 +109,11 @@ pub fn view<'a, Message: Clone + 'a>(
     )
 }
 
-/// A large icon, the name, and how the device is: reachability and each
-/// plugin's status.
+/// A large icon, the name, and how the device is: reachability and the
+/// features' chips.
 fn summary<'a, Message: 'a>(
     device: &'a DeviceSnapshot,
-    plugins: &'a [Box<dyn ErasedUiPlugin>],
+    statuses: Vec<DeviceStatus>,
 ) -> Element<'a, Message> {
     let connected = is_connected(device);
     let badge = container(device_icon(device.device_type).size(30))
@@ -135,7 +136,7 @@ fn summary<'a, Message: 'a>(
         badge,
         column![
             text(&device.device_name).size(18).font(widgets::bold()),
-            status_row(device, plugins),
+            status_row(device, statuses),
         ]
         .spacing(4),
     ]
@@ -176,19 +177,20 @@ fn type_name(device_type: DeviceType) -> &'static str {
     }
 }
 
-/// The plugins' actions as buttons, wrapping onto more lines as needed. A
-/// disabled action is shown, but can't be pressed.
+/// The features' actions as buttons, wrapping onto more lines as needed.
+/// A disabled action is shown, but can't be pressed.
 fn action_buttons<'a, Message: Clone + 'a>(
-    actions: impl Iterator<Item = DeviceAction<Message>>,
+    actions: Vec<DeviceAction>,
+    feature: fn(Feature) -> Message,
 ) -> Element<'a, Message> {
-    let buttons = actions.map(|action| {
+    let buttons = actions.into_iter().map(|action| {
         let content = row![(action.icon)().size(16), text(action.label)]
             .spacing(8)
             .align_y(Alignment::Center);
         button(content)
             .padding([8, 14])
             .style(widgets::tonal)
-            .on_press_maybe(action.enabled.then_some(action.message))
+            .on_press_maybe(action.enabled.then(|| feature(action.message)))
             .into()
     });
     row(buttons).spacing(8).wrap().vertical_spacing(8).into()
@@ -232,97 +234,74 @@ mod tests {
     use super::*;
     use crate::{
         core::{DeviceReachability, TransferDirection, TransferStatus},
-        ui::{
-            pages::transfers::tests::transfer,
-            plugin::{Command, DeviceStatus, UiContext, UiPlugin},
-            store::Snapshot,
-            testing,
-        },
+        ui::{features::ping, pages::transfers::tests::transfer, store::Snapshot, testing},
     };
 
-    /// Stands in for any plugin with a status and actions: "Wave" when the
-    /// device takes waves, always listed; "Hug" listed only for phones.
-    struct Waver;
+    /// Stand in for any feature with a chip and actions: "Waving", and
+    /// "Wave" when the device takes waves, always listed; "Hug" listed only
+    /// for phones.
+    fn waving(_device: &DeviceSnapshot) -> Vec<DeviceStatus> {
+        vec![DeviceStatus {
+            icon: lucide::hand,
+            label: "Waving".into(),
+        }]
+    }
 
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    enum WaveMessage {
-        Wave(String),
-        Hug(String),
+    fn wave_actions(device: &DeviceSnapshot) -> Vec<DeviceAction> {
+        let mut actions = vec![DeviceAction {
+            id: "wave",
+            label: "Wave".into(),
+            icon: lucide::hand,
+            enabled: is_connected(device) && device.incoming_capabilities.iter().any(|c| c == WAVE),
+            visible_in_tray: true,
+            message: gesture("Wave", device),
+        }];
+        if device.device_type == DeviceType::Phone {
+            actions.push(DeviceAction {
+                id: "hug",
+                label: "Hug".into(),
+                icon: lucide::heart,
+                enabled: true,
+                visible_in_tray: false,
+                message: gesture("Hug", device),
+            });
+        }
+        actions
+    }
+
+    /// A gesture at `device`, as some feature's message.
+    fn gesture(gesture: &str, device: &DeviceSnapshot) -> Feature {
+        Feature::Ping(ping::Message::Ping {
+            device_id: device.device_id.clone(),
+            name: gesture.into(),
+        })
     }
 
     const WAVE: &str = "example.wave";
-
-    impl UiPlugin for Waver {
-        type Message = WaveMessage;
-
-        fn id(&self) -> &'static str {
-            "waver"
-        }
-
-        fn device_status(&self, _device: &DeviceSnapshot) -> Option<DeviceStatus> {
-            Some(DeviceStatus {
-                icon: lucide::hand,
-                label: "Waving".into(),
-            })
-        }
-
-        fn device_actions(&self, device: &DeviceSnapshot) -> Vec<DeviceAction<WaveMessage>> {
-            let mut actions = vec![DeviceAction {
-                id: "wave",
-                label: "Wave".into(),
-                icon: lucide::hand,
-                enabled: is_connected(device)
-                    && device.incoming_capabilities.iter().any(|c| c == WAVE),
-                visible_in_tray: true,
-                message: WaveMessage::Wave(device.device_id.clone()),
-            }];
-            if device.device_type == DeviceType::Phone {
-                actions.push(DeviceAction {
-                    id: "hug",
-                    label: "Hug".into(),
-                    icon: lucide::heart,
-                    enabled: true,
-                    visible_in_tray: false,
-                    message: WaveMessage::Hug(device.device_id.clone()),
-                });
-            }
-            actions
-        }
-
-        fn update(&mut self, _ctx: &UiContext, _message: WaveMessage) -> Command<WaveMessage> {
-            Command::none()
-        }
-    }
 
     /// What the page asks for, in tests.
     #[derive(Debug, Clone, PartialEq)]
     enum Asked {
         Go(Route),
-        Plugin(String),
+        Feature(String),
         Unpair(String),
         Cancel(uuid::Uuid),
         Open(std::path::PathBuf),
         Reveal(std::path::PathBuf),
     }
 
-    fn plugins() -> Vec<Box<dyn ErasedUiPlugin>> {
-        vec![Box::new(Waver)]
-    }
-
-    fn page<'a>(
-        store: &'a Store,
-        plugins: &'a [Box<dyn ErasedUiPlugin>],
-        device_id: &str,
-        unpairing: bool,
-    ) -> Element<'a, Asked> {
+    fn page<'a>(store: &'a Store, device_id: &str, unpairing: bool) -> Element<'a, Asked> {
         view(
             store,
-            plugins,
+            &DeviceFeatures {
+                statuses: &waving,
+                actions: &wave_actions,
+            },
             device_id,
             unpairing,
             &Actions {
                 navigate: Asked::Go,
-                plugin: |message| Asked::Plugin(format!("{message:?}")),
+                feature: |message| Asked::Feature(format!("{message:?}")),
                 unpair: |device| Asked::Unpair(device.device_id.clone()),
                 transfer: transfers::Actions {
                     cancel: Asked::Cancel,
@@ -342,8 +321,7 @@ mod tests {
 
     /// What clicking `target` on the page of `device` asks for.
     fn click(store: &Store, device: &DeviceSnapshot, target: &str) -> Vec<Asked> {
-        let plugins = plugins();
-        let mut ui = Simulator::new(page(store, &plugins, &device.device_id, false));
+        let mut ui = Simulator::new(page(store, &device.device_id, false));
         ui.click(target).expect("the target is on the page");
         ui.into_messages().collect()
     }
@@ -352,8 +330,7 @@ mod tests {
     fn shows_the_device_its_status_and_facts() {
         let device = pixel(&[], DeviceReachability::Connected);
         let store = testing::store("Desk", vec![device.clone()]);
-        let plugins = plugins();
-        let mut ui = Simulator::new(page(&store, &plugins, &device.device_id, false));
+        let mut ui = Simulator::new(page(&store, &device.device_id, false));
         for shown in [
             "Connected",
             "Waving",
@@ -374,8 +351,7 @@ mod tests {
     #[test]
     fn a_device_that_is_gone_says_so() {
         let store = testing::store("Desk", Vec::new());
-        let plugins = plugins();
-        let mut ui = Simulator::new(page(&store, &plugins, "gone", false));
+        let mut ui = Simulator::new(page(&store, "gone", false));
         assert!(ui.find("This device is no longer known.").is_ok());
         ui.click(iced::widget::Id::from("Back")).unwrap();
         assert_eq!(
@@ -392,10 +368,10 @@ mod tests {
 
         let enabled = pixel(&[WAVE], DeviceReachability::Connected);
         let store = testing::store("Desk", vec![enabled.clone()]);
-        let [Asked::Plugin(message)] = &click(&store, &enabled, "Wave")[..] else {
-            panic!("the action's message");
-        };
-        assert!(message.contains("Wave"), "{message}");
+        assert_eq!(
+            click(&store, &enabled, "Wave"),
+            [Asked::Feature(format!("{:?}", gesture("Wave", &enabled)))]
+        );
 
         let offline = pixel(&[WAVE], DeviceReachability::Unavailable);
         let store = testing::store("Desk", vec![offline.clone()]);
@@ -403,12 +379,11 @@ mod tests {
     }
 
     #[test]
-    fn an_action_a_plugin_doesnt_list_isnt_shown() {
+    fn an_action_a_feature_doesnt_list_isnt_shown() {
         let mut laptop = pixel(&[], DeviceReachability::Connected);
         laptop.device_type = DeviceType::Laptop;
         let store = testing::store("Desk", vec![laptop.clone()]);
-        let plugins = plugins();
-        let mut ui = Simulator::new(page(&store, &plugins, &laptop.device_id, false));
+        let mut ui = Simulator::new(page(&store, &laptop.device_id, false));
         assert!(ui.find("Hug").is_err());
     }
 
@@ -420,8 +395,7 @@ mod tests {
             click(&store, &device, "Unpair"),
             [Asked::Unpair(device.device_id.clone())]
         );
-        let plugins = plugins();
-        let mut ui = Simulator::new(page(&store, &plugins, &device.device_id, true));
+        let mut ui = Simulator::new(page(&store, &device.device_id, true));
         ui.click("Unpair").unwrap();
         assert!(ui.into_messages().next().is_none());
     }
@@ -460,8 +434,7 @@ mod tests {
     fn lists_the_five_newest_transfers_and_links_to_all() {
         let device = pixel(&[], DeviceReachability::Connected);
         let store = with_transfers(&device, 7);
-        let plugins = plugins();
-        let mut ui = Simulator::new(page(&store, &plugins, &device.device_id, false));
+        let mut ui = Simulator::new(page(&store, &device.device_id, false));
         for index in 2..7 {
             assert!(ui.find(format!("photo-{index}.jpg")).is_ok(), "{index}");
         }
@@ -513,19 +486,16 @@ mod tests {
             transfers,
             settings: settings.ok_or_else(String::new),
         });
-        let plugins = plugins();
         testing::snapshot("device", (440.0, 720.0), || {
-            page(&store, &plugins, &device.device_id, false)
+            page(&store, &device.device_id, false)
         });
         let mut offline = device.clone();
         offline.reachability = DeviceReachability::Unavailable;
         let offline_store = testing::store("Desk", vec![offline.clone()]);
         testing::snapshot("device-offline", (440.0, 560.0), || {
-            page(&offline_store, &plugins, &offline.device_id, true)
+            page(&offline_store, &offline.device_id, true)
         });
         let gone = testing::store("Desk", Vec::new());
-        testing::snapshot("device-gone", (440.0, 320.0), || {
-            page(&gone, &plugins, "gone", false)
-        });
+        testing::snapshot("device-gone", (440.0, 320.0), || page(&gone, "gone", false));
     }
 }

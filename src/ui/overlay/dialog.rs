@@ -2,7 +2,7 @@
 //!
 //! One shows at a time; others wait their turn. Enter submits, Escape or a
 //! click outside cancels. A dialog either closes as soon as it is
-//! submitted ([`Submit::Close`], what plugins get through `ShellRequest`),
+//! submitted ([`Submit::Close`], what features get through `ui::shell`),
 //! or stays open and busy while its work runs and shows the work's error
 //! under the field ([`Submit::Run`], for the shell's rename and add by IP).
 
@@ -16,10 +16,13 @@ use iced::{
     },
 };
 
-use crate::ui::{
-    plugin::{Callback, Validator},
-    widgets::bold,
-};
+use crate::ui::widgets::bold;
+
+/// Checks a typed value: the error to show under the field, if any.
+pub type Validator = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
+/// Makes the message a dialog sends from what it got (the field's text).
+pub type Callback<A, M> = Arc<dyn Fn(A) -> M + Send + Sync>;
 
 /// The dialog's text field, for focusing it.
 const FIELD: &str = "dialog-field";

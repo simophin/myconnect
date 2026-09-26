@@ -2,7 +2,7 @@
 //!
 //! Messages are keyed by the error's code ([`CoreError::code`]), the same
 //! code the HTTP API reports, so the UI and the CLI name a failure the same
-//! way. A plugin with its own error type words its own codes and hands the
+//! way. A feature with its own error type words its own codes and hands the
 //! rest to [`describe_code`].
 
 use std::path::{Path, PathBuf};

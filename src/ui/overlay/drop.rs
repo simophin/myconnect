@@ -4,7 +4,7 @@
 //!
 //! No platform says where a drag is while it hovers (ADR 0001, "Desktop
 //! integration"), so a drop isn't hit-tested: it goes to the page's device
-//! if a plugin takes it there, and otherwise to the chooser.
+//! if a feature takes it there, and otherwise to the chooser.
 
 use std::{mem, path::PathBuf, time::Duration};
 

@@ -1,7 +1,7 @@
 //! The Settings page: the daemon's settings, which are where every user
-//! preference lives, each saved as soon as it changes. Plugins add their
+//! preference lives, each saved as soon as it changes. Features add their
 //! own sections (clipboard: "Sync clipboard") through
-//! [`view_settings`](crate::ui::plugin::UiPlugin::view_settings).
+//! [`settings_sections`](crate::ui::features::Features::settings_sections).
 
 use iced::{
     Element, Length,
@@ -12,7 +12,6 @@ use iced_fonts::lucide;
 use crate::{
     core::SettingsSnapshot,
     ui::{
-        plugin::{ErasedUiPlugin, PluginMessage},
         store::{Load, Store},
         widgets,
     },
@@ -28,16 +27,13 @@ pub struct Actions<M> {
     /// Pick the folder received files are saved in.
     pub choose_download_dir: M,
     pub set_close_to_tray: fn(bool) -> M,
-    /// A plugin section's message.
-    pub plugin: fn(PluginMessage) -> M,
 }
 
-/// The settings `store` holds, with every plugin's section, in
-/// `plugins::builtin_with_ui` order, after the download folder. `version`
-/// is the app's.
+/// The settings `store` holds, with the features' `sections` of them
+/// after the download folder. `version` is the app's.
 pub fn view<'a, M: Clone + 'a>(
     store: &'a Store,
-    plugins: &'a [Box<dyn ErasedUiPlugin>],
+    sections: impl FnOnce(&'a SettingsSnapshot) -> Vec<Element<'a, M>>,
     version: &'a str,
     actions: Actions<M>,
 ) -> Element<'a, M> {
@@ -45,14 +41,14 @@ pub fn view<'a, M: Clone + 'a>(
     let body = match store.settings() {
         Load::Loading => widgets::loading("Loading settings…"),
         Load::Failed(error) => widgets::error_view(error.as_str(), Some(actions.retry)),
-        Load::Loaded(settings) => list(settings, plugins, version, actions),
+        Load::Loaded(settings) => list(settings, sections(settings), version, actions),
     };
     widgets::page(header, body)
 }
 
 fn list<'a, M: Clone + 'a>(
     settings: &'a SettingsSnapshot,
-    plugins: &'a [Box<dyn ErasedUiPlugin>],
+    sections: Vec<Element<'a, M>>,
     version: &'a str,
     actions: Actions<M>,
 ) -> Element<'a, M> {
@@ -74,11 +70,8 @@ fn list<'a, M: Clone + 'a>(
         ),
     ]
     .spacing(8);
-    for section in plugins
-        .iter()
-        .filter_map(|plugin| plugin.view_settings(settings))
-    {
-        items = items.push(section.map(actions.plugin));
+    for section in sections {
+        items = items.push(section);
     }
     items = items
         .push(widgets::switch_setting(
@@ -103,11 +96,7 @@ mod tests {
     use iced_test::simulator::Simulator;
 
     use super::*;
-    use crate::ui::{
-        plugin::{Command, UiContext, UiPlugin},
-        store::Snapshot,
-        testing,
-    };
+    use crate::ui::{store::Snapshot, testing};
 
     #[derive(Debug, Clone, PartialEq)]
     enum Message {
@@ -116,7 +105,7 @@ mod tests {
         Rename,
         Choose,
         CloseToTray(bool),
-        Plugin(String),
+        Section(bool),
     }
 
     fn actions() -> Actions<Message> {
@@ -126,40 +115,18 @@ mod tests {
             rename: Message::Rename,
             choose_download_dir: Message::Choose,
             set_close_to_tray: Message::CloseToTray,
-            plugin: |message| Message::Plugin(message.plugin().into()),
         }
     }
 
-    /// A plugin with a switch of its own.
-    struct Section;
-
-    impl UiPlugin for Section {
-        type Message = bool;
-
-        fn id(&self) -> &'static str {
-            "section"
-        }
-
-        fn view_settings<'a>(
-            &'a self,
-            _settings: &'a SettingsSnapshot,
-        ) -> Option<Element<'a, bool>> {
-            Some(widgets::switch_setting(
-                lucide::clipboard_copy,
-                "Sync clipboard",
-                "Share copied text with paired devices",
-                true,
-                |on| on,
-            ))
-        }
-
-        fn update(&mut self, _ctx: &UiContext, _message: bool) -> Command<bool> {
-            Command::none()
-        }
-    }
-
-    fn plugins() -> Vec<Box<dyn ErasedUiPlugin>> {
-        vec![Box::new(Section)]
+    /// A feature's section: a switch of its own.
+    fn sections(_settings: &SettingsSnapshot) -> Vec<Element<'_, Message>> {
+        vec![widgets::switch_setting(
+            lucide::clipboard_copy,
+            "Sync clipboard",
+            "Share copied text with paired devices",
+            true,
+            Message::Section,
+        )]
     }
 
     fn store() -> Store {
@@ -171,8 +138,7 @@ mod tests {
         S: iced_test::selector::Selector + Send,
         S::Output: iced_test::selector::Bounded + Clone + Send + Sync + 'static,
     {
-        let plugins = plugins();
-        let mut ui = Simulator::new(view(store, &plugins, "1.2.3 (dev)", actions()));
+        let mut ui = Simulator::new(view(store, sections, "1.2.3 (dev)", actions()));
         ui.click(target).unwrap();
         ui.into_messages().collect()
     }
@@ -180,8 +146,7 @@ mod tests {
     #[test]
     fn every_setting_is_shown_with_its_value() {
         let store = store();
-        let plugins = plugins();
-        let mut ui = Simulator::new(view(&store, &plugins, "1.2.3 (dev)", actions()));
+        let mut ui = Simulator::new(view(&store, sections, "1.2.3 (dev)", actions()));
         for shown in [
             "Device name",
             "Desktop",
@@ -206,10 +171,7 @@ mod tests {
             clicked(&store, "Keep running when the window is closed"),
             [Message::CloseToTray(false)]
         );
-        assert_eq!(
-            clicked(&store, "Sync clipboard"),
-            [Message::Plugin("section".into())]
-        );
+        assert_eq!(clicked(&store, "Sync clipboard"), [Message::Section(false)]);
         assert_eq!(
             clicked(&store, iced::widget::Id::from("Back")),
             [Message::Back]
@@ -218,9 +180,8 @@ mod tests {
 
     #[test]
     fn loading_and_failure_have_their_own_views() {
-        let plugins = plugins();
         let loading = Store::default();
-        let mut ui = Simulator::new(view(&loading, &plugins, "", actions()));
+        let mut ui = Simulator::new(view(&loading, sections, "", actions()));
         assert!(ui.find("Loading settings…").is_ok());
 
         let mut failed = Store::default();
@@ -236,9 +197,8 @@ mod tests {
     #[test]
     fn snapshot_settings() {
         let store = store();
-        let plugins = plugins();
         testing::snapshot("settings", (440.0, 620.0), || {
-            view(&store, &plugins, "0.1.0 (v1.1.0-19-geeba428)", actions())
+            view(&store, sections, "0.1.0 (v1.1.0-19-geeba428)", actions())
         });
     }
 }

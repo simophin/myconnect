@@ -1,53 +1,37 @@
-//! Battery's UI half: a device's battery as its status chip.
+//! Battery's UI: a device's battery as its status chip. It has no
+//! messages: it only shows what the device reports.
 
 use iced_fonts::lucide;
 use serde_json::json;
 
-use super::{BatteryStatus, PACKET_TYPE};
+use super::DeviceStatus;
 use crate::{
     core::DeviceSnapshot,
+    plugins::battery::{BatteryStatus, PACKET_TYPE},
     protocol::{DeviceType, Packet},
-    ui::plugin::{Command, DeviceStatus, Icon, UiContext, UiPlugin},
+    ui::widgets::Icon,
 };
 
-pub struct BatteryUi;
+pub fn device_status(device: &DeviceSnapshot) -> Option<DeviceStatus> {
+    let battery = BatteryStatus::of(device)?;
+    Some(DeviceStatus {
+        icon: Level::of(battery).icon(),
+        label: format!("{}%", battery.charge),
+    })
+}
 
-/// Battery has nothing to do: it only shows what the device reports.
-#[derive(Debug, Clone)]
-pub enum Message {}
-
-impl UiPlugin for BatteryUi {
-    type Message = Message;
-
-    fn id(&self) -> &'static str {
-        super::ID
-    }
-
-    fn device_status(&self, device: &DeviceSnapshot) -> Option<DeviceStatus> {
-        let battery = BatteryStatus::of(device)?;
-        Some(DeviceStatus {
-            icon: Level::of(battery).icon(),
-            label: format!("{}%", battery.charge),
-        })
-    }
-
-    fn update(&mut self, _ctx: &UiContext, message: Message) -> Command<Message> {
-        match message {}
-    }
-
-    /// The phone drains 7% a step and recharges when nearly flat; the
-    /// tablet sits on its charger.
-    fn demo_packets(&self, device: &DeviceSnapshot, tick: u64) -> Vec<Packet> {
-        let (charge, charging) = match device.device_type {
-            DeviceType::Phone => (100 - (18 + 7 * tick) % 96, false),
-            DeviceType::Tablet => (45, true),
-            _ => return Vec::new(),
-        };
-        let body = json!({"currentCharge": charge, "isCharging": charging, "thresholdEvent": 0});
-        Packet::from_body(0, PACKET_TYPE, &body)
-            .into_iter()
-            .collect()
-    }
+/// `--demo`: the phone drains 7% a step and recharges when nearly flat;
+/// the tablet sits on its charger.
+pub fn demo_packets(device: &DeviceSnapshot, tick: u64) -> Vec<Packet> {
+    let (charge, charging) = match device.device_type {
+        DeviceType::Phone => (100 - (18 + 7 * tick) % 96, false),
+        DeviceType::Tablet => (45, true),
+        _ => return Vec::new(),
+    };
+    let body = json!({"currentCharge": charge, "isCharging": charging, "thresholdEvent": 0});
+    Packet::from_body(0, PACKET_TYPE, &body)
+        .into_iter()
+        .collect()
 }
 
 /// Which icon a battery shows.
@@ -87,14 +71,14 @@ mod tests {
     use super::*;
     use crate::{
         core::DeviceReachability,
-        ui::{pages::devices, plugin::ErasedUiPlugin, testing},
+        ui::{pages::devices, testing},
     };
 
     fn device(name: &str, battery: Option<BatteryStatus>) -> DeviceSnapshot {
         let mut device = testing::device(name);
         if let Some(battery) = battery {
             device.plugins.insert(
-                super::super::ID.into(),
+                crate::plugins::battery::ID.into(),
                 serde_json::to_value(battery).unwrap(),
             );
         }
@@ -116,14 +100,13 @@ mod tests {
             charge: 82,
             charging: false,
         };
-        let status =
-            UiPlugin::device_status(&BatteryUi, &device("Phone", Some(battery))).expect("a status");
+        let status = device_status(&device("Phone", Some(battery))).expect("a status");
         assert_eq!(status.label, "82%");
     }
 
     #[test]
     fn shows_nothing_until_the_device_reports() {
-        assert!(UiPlugin::device_status(&BatteryUi, &device("Phone", None)).is_none());
+        assert!(device_status(&device("Phone", None)).is_none());
     }
 
     #[test]
@@ -131,11 +114,9 @@ mod tests {
         let phone = device("Phone", None);
         let charges: Vec<i64> = (0..16)
             .map(|tick| {
-                let [packet] = UiPlugin::demo_packets(&BatteryUi, &phone, tick)
-                    .try_into()
-                    .unwrap();
+                let [packet] = demo_packets(&phone, tick).try_into().unwrap();
                 packet
-                    .body_as::<super::super::BatteryBody>()
+                    .body_as::<crate::plugins::battery::BatteryBody>()
                     .unwrap()
                     .current_charge
             })
@@ -176,9 +157,11 @@ mod tests {
                 laptop,
             ],
         );
-        let plugins: Vec<Box<dyn ErasedUiPlugin>> = vec![Box::new(BatteryUi)];
+        let statuses = |device: &DeviceSnapshot| -> Vec<DeviceStatus> {
+            device_status(device).into_iter().collect()
+        };
         testing::snapshot("devices-battery", (440.0, 400.0), || {
-            devices::view(&store, &plugins, |_| (), ())
+            devices::view(&store, &statuses, |_| (), ())
         });
     }
 }

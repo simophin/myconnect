@@ -10,19 +10,19 @@ use crate::{
     core::{DeviceReachability, DeviceSnapshot},
     protocol::DeviceType,
     ui::{
-        plugin::ErasedUiPlugin,
+        features::DeviceStatus,
         route::Route,
         store::{Load, Store},
         widgets::{self, HeaderAction},
     },
 };
 
-/// The home page, from what `store` holds, with each device's status from
-/// `plugins`. `navigate` makes the message that opens a page, and `retry`
+/// The home page, from what `store` holds, with each device's chips from
+/// `statuses`. `navigate` makes the message that opens a page, and `retry`
 /// takes a fresh snapshot after a failed one.
 pub fn view<'a, Message: Clone + 'a>(
     store: &'a Store,
-    plugins: &'a [Box<dyn ErasedUiPlugin>],
+    statuses: &dyn Fn(&DeviceSnapshot) -> Vec<DeviceStatus>,
     navigate: impl Fn(Route) -> Message,
     retry: Message,
 ) -> Element<'a, Message> {
@@ -88,7 +88,7 @@ pub fn view<'a, Message: Clone + 'a>(
             let cards = paired.into_iter().map(|device| {
                 device_card(
                     device,
-                    plugins,
+                    statuses(device),
                     navigate(Route::Device(device.device_id.clone())),
                 )
             });
@@ -105,7 +105,7 @@ pub fn view<'a, Message: Clone + 'a>(
 /// A device's card, which opens it.
 fn device_card<'a, Message: Clone + 'a>(
     device: &'a DeviceSnapshot,
-    plugins: &'a [Box<dyn ErasedUiPlugin>],
+    statuses: Vec<DeviceStatus>,
     open: Message,
 ) -> Element<'a, Message> {
     let connected = is_connected(device);
@@ -131,7 +131,7 @@ fn device_card<'a, Message: Clone + 'a>(
         badge,
         column![
             text(&device.device_name).size(15),
-            status_row(device, plugins)
+            status_row(device, statuses)
         ]
         .spacing(3),
         space::horizontal(),
@@ -148,11 +148,11 @@ fn device_card<'a, Message: Clone + 'a>(
         .into()
 }
 
-/// How reachable `device` is, with a coloured dot, then each plugin's
-/// status (battery).
+/// How reachable `device` is, with a coloured dot, then the features'
+/// chips (battery).
 pub fn status_row<'a, Message: 'a>(
     device: &DeviceSnapshot,
-    plugins: &[Box<dyn ErasedUiPlugin>],
+    statuses: Vec<DeviceStatus>,
 ) -> iced::widget::Row<'a, Message> {
     let mut status_row = row![
         status_dot(device.reachability),
@@ -162,10 +162,7 @@ pub fn status_row<'a, Message: 'a>(
     ]
     .spacing(6)
     .align_y(Alignment::Center);
-    for status in plugins
-        .iter()
-        .filter_map(|plugin| plugin.device_status(device))
-    {
+    for status in statuses {
         status_row = status_row.push(Space::new().width(6)).push(
             row![
                 (status.icon)().size(14).style(text::secondary),
@@ -232,34 +229,23 @@ mod tests {
     use iced_test::simulator::Simulator;
 
     use super::*;
-    use crate::ui::{
-        plugin::{Command, DeviceStatus, UiContext, UiPlugin},
-        store::Snapshot,
-        testing,
-    };
+    use crate::ui::{store::Snapshot, testing};
 
-    /// A feature that shows a device's signal, if it reports one, as a
-    /// stand-in for any plugin's status.
-    struct Signal;
+    /// A device's signal, if it reports one, as a stand-in for any
+    /// feature's chip.
+    fn signal(device: &DeviceSnapshot) -> Vec<DeviceStatus> {
+        let bars = device.plugins.get("signal").and_then(|bars| bars.as_u64());
+        bars.map(|bars| DeviceStatus {
+            icon: lucide::signal,
+            label: format!("{bars} bars"),
+        })
+        .into_iter()
+        .collect()
+    }
 
-    impl UiPlugin for Signal {
-        type Message = ();
-
-        fn id(&self) -> &'static str {
-            "signal"
-        }
-
-        fn device_status(&self, device: &DeviceSnapshot) -> Option<DeviceStatus> {
-            let bars = device.plugins.get("signal")?.as_u64()?;
-            Some(DeviceStatus {
-                icon: lucide::signal,
-                label: format!("{bars} bars"),
-            })
-        }
-
-        fn update(&mut self, _ctx: &UiContext, _message: ()) -> Command<()> {
-            Command::none()
-        }
+    /// No chips.
+    fn none(_device: &DeviceSnapshot) -> Vec<DeviceStatus> {
+        Vec::new()
     }
 
     fn device(
@@ -284,8 +270,11 @@ mod tests {
         Retry,
     }
 
-    fn page<'a>(store: &'a Store, plugins: &'a [Box<dyn ErasedUiPlugin>]) -> Element<'a, Asked> {
-        view(store, plugins, Asked::Go, Asked::Retry)
+    fn page<'a>(
+        store: &'a Store,
+        statuses: fn(&DeviceSnapshot) -> Vec<DeviceStatus>,
+    ) -> Element<'a, Asked> {
+        view(store, &statuses, Asked::Go, Asked::Retry)
     }
 
     fn some_devices() -> Vec<DeviceSnapshot> {
@@ -324,8 +313,7 @@ mod tests {
             Output: iced_test::selector::Bounded + Clone + Send + Sync + 'static,
         > + Send,
     ) -> Vec<Asked> {
-        let plugins: Vec<Box<dyn ErasedUiPlugin>> = vec![Box::new(Signal)];
-        let mut ui = Simulator::new(page(store, &plugins));
+        let mut ui = Simulator::new(page(store, signal));
         ui.click(target).expect("the target is on the page");
         ui.into_messages().collect()
     }
@@ -342,8 +330,7 @@ mod tests {
         let mut devices = some_devices();
         devices.push(stranger);
         let store = testing::store("Demo desktop", devices);
-        let plugins: Vec<Box<dyn ErasedUiPlugin>> = vec![Box::new(Signal)];
-        let mut ui = Simulator::new(page(&store, &plugins));
+        let mut ui = Simulator::new(page(&store, signal));
 
         for shown in [
             "This computer: Demo desktop",
@@ -363,8 +350,7 @@ mod tests {
     #[test]
     fn connected_devices_come_first_then_by_name() {
         let store = testing::store("Demo desktop", some_devices());
-        let plugins: Vec<Box<dyn ErasedUiPlugin>> = vec![];
-        let mut ui = Simulator::new(page(&store, &plugins));
+        let mut ui = Simulator::new(page(&store, none));
         let top = |ui: &mut Simulator<'_, Asked>, name: &str| {
             ui.find(name).unwrap().visible_bounds().unwrap().y
         };
@@ -436,15 +422,12 @@ mod tests {
     #[test]
     fn snapshot_device_list() {
         let store = testing::store("Demo desktop", some_devices());
-        let plugins: Vec<Box<dyn ErasedUiPlugin>> = vec![Box::new(Signal)];
-        testing::snapshot("devices", (440.0, 620.0), || page(&store, &plugins));
+        testing::snapshot("devices", (440.0, 620.0), || page(&store, signal));
         let loading = Store::default();
-        testing::snapshot("devices-loading", (440.0, 400.0), || {
-            page(&loading, &plugins)
-        });
+        testing::snapshot("devices-loading", (440.0, 400.0), || page(&loading, signal));
         let empty = testing::store("Demo desktop", Vec::new());
-        testing::snapshot("devices-empty", (440.0, 400.0), || page(&empty, &plugins));
+        testing::snapshot("devices-empty", (440.0, 400.0), || page(&empty, signal));
         let failed = failed();
-        testing::snapshot("devices-failed", (440.0, 400.0), || page(&failed, &plugins));
+        testing::snapshot("devices-failed", (440.0, 400.0), || page(&failed, signal));
     }
 }

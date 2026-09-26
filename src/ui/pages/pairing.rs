@@ -10,7 +10,12 @@ use uuid::Uuid;
 
 use crate::{
     core::{PairingSnapshot, PairingStatus},
-    ui::{activity::activity_bar, plugin::Icon, route::Route, store::Store, widgets},
+    ui::{
+        activity::activity_bar,
+        route::Route,
+        store::Store,
+        widgets::{self, Icon},
+    },
 };
 
 /// The messages the page sends.

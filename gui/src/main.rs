@@ -1,8 +1,7 @@
 //! The MyConnect desktop app: the composition root for the daemon and its
 //! UI in one process. It reads the flags and runs the UI
-//! (`myconnect::ui`) with a way to start the daemon with every plugin and
-//! its UI half; the UI starts it (again on Retry) and shuts it down on
-//! exit.
+//! (`myconnect::ui`) with a way to start the daemon with every plugin; the
+//! UI starts it (again on Retry) and shuts it down on exit.
 
 // No console window behind the app on Windows, except in debug builds,
 // where it shows the logs.
@@ -93,13 +92,14 @@ fn main() -> Result<()> {
     let start = move || -> ui::StartFuture {
         let request = request.clone();
         Box::pin(async move {
-            let mut ui_plugins = Vec::new();
+            let mut ui_plugins = None;
             let service = RunningService::start_with(request, |clipboard| {
-                let builtin = plugins::builtin_with_ui(clipboard);
-                ui_plugins = builtin.ui;
-                builtin.core
+                let parts = plugins::builtin_parts(clipboard);
+                ui_plugins = Some((parts.clipboard, parts.browse));
+                parts.core
             })
             .await?;
+            let (clipboard, browse) = ui_plugins.expect("the daemon built its plugins");
             tracing::info!(
                 device_id = service.core().local_device_id(),
                 api = %service.api_addr(),
@@ -107,7 +107,8 @@ fn main() -> Result<()> {
             );
             Ok(ui::Started {
                 service,
-                plugins: ui_plugins,
+                clipboard,
+                browse,
             })
         })
     };

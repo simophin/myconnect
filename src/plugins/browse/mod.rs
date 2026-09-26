@@ -13,13 +13,11 @@
 //!
 //! Never log a file name, a path, or the offer's password.
 
-mod files;
+pub(crate) mod files;
 mod http;
 pub mod packet;
 mod session;
 mod ssh;
-#[cfg(feature = "gui")]
-pub mod ui;
 
 use std::{
     io,

@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use super::Events;
-use crate::ui::plugin::PluginMessage;
+use crate::ui::features::Feature;
 
 /// What choosing a tray menu item does.
 #[derive(Debug, Clone)]
@@ -21,8 +21,8 @@ pub enum TrayCommand {
     Quit,
     /// Show the window on this device's page.
     ShowDevice(String),
-    /// A plugin's device action, run without showing the window.
-    Action(PluginMessage),
+    /// A feature's device action, run without showing the window.
+    Action(Feature),
 }
 
 /// One entry of the tray menu.
