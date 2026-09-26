@@ -118,7 +118,7 @@ store.changes();         // broadcast of ConfigChange { key, scope, id }, untype
 | Today | After |
 | --- | --- |
 | `identity.json` | The key `core.identity` (the certificate and key as base64); `LocalIdentity::load_or_create(&Store)` |
-| `trusted-devices/*.json`, `FilesystemTrustStore` | The `devices` table behind the `TrustStore` trait (renamed `DeviceStore`); tests use `Store::open_in_memory()` instead of `MemoryTrustStore` |
+| `trusted-devices/*.json`, `FilesystemTrustStore` | The `devices` table: `Store::device`, `devices`, `put_device` and `remove_device`. The `TrustStore` trait goes: the core and the transport take the `Store`, and tests use `Store::open_in_memory()` instead of `MemoryTrustStore` |
 | `settings.json`, `SettingsFile`, `StoredSettings` | `core.deviceName`, `core.downloadDir`, `ui.closeToTray`, and one key per plugin section, `<id>.settings`, holding the fields the user set. `PATCH` merging, `null` resets and `PluginSettings` validation are unchanged; a `PATCH` is one transaction |
 | No plugin storage | `PluginContext::store()`: plugins declare their own `ConfigKey`s |
 | `window.json` | Unchanged: the UI's one piece of state stays the UI's |
@@ -135,8 +135,9 @@ The HTTP API doesn't change, so neither do the CLI and the UI.
    reads as `None`; a write of the same value tells no one; a rolled-back
    transaction tells no one; a commit of several keys tells each watcher
    once; `remove_scope` clears a device's entries.
-4. The `devices` table and `DeviceStore`, wired into `daemon.rs`, the core,
-   `lan.rs` and the integration tests; `trust.rs` goes.
+4. The `devices` table, wired into `daemon.rs`, the core, `lan.rs` and
+   the integration tests; `trust.rs`, the `TrustStore` trait and
+   `MemoryTrustStore` go.
 5. The identity as `core.identity`; `identity.json` handling goes.
 6. Settings on configs, and `PluginContext::store()`; `config/settings.rs`
    goes.

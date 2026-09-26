@@ -1,9 +1,8 @@
-//! Persistent local identity, peer trust, and user settings.
+//! Persistent local identity and user settings, and the API token.
 
 mod identity;
 mod settings;
 mod token;
-mod trust;
 
 use std::path::PathBuf;
 
@@ -12,7 +11,6 @@ use directories::ProjectDirs;
 pub use identity::{IdentityError, LocalIdentity};
 pub use settings::{SettingsError, SettingsFile, StoredSettings};
 pub use token::{ApiToken, ApiTokenError};
-pub use trust::{FilesystemTrustStore, TrustError, TrustStore, TrustedDevice, TrustedIdentity};
 
 /// Return the platform-specific directory used for Ferry configuration.
 pub fn default_config_dir() -> Option<PathBuf> {

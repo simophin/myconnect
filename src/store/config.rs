@@ -6,7 +6,6 @@ use std::{
     fmt,
     marker::PhantomData,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -14,7 +13,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::sync::{broadcast, watch};
 
-use super::{Store, StoreError, Transaction};
+use super::{Store, StoreError, Transaction, now_millis};
 
 /// Whether a key takes a secondary id, and which kind: [`Global`] keys
 /// take none, and [`IdScope`]s one, e.g. a device id for [`PerDevice`].
@@ -425,12 +424,6 @@ const fn is_valid_name(name: &str) -> bool {
         index += 1;
     }
     matches!(dot, Some(dot) if dot > 0 && dot + 1 < bytes.len())
-}
-
-fn now_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_millis() as i64)
 }
 
 #[cfg(test)]

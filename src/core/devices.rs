@@ -11,8 +11,8 @@ use super::{
     Core, CoreError, EventData, OperationErrorCode, pairing::fail_active_pairing, unix_millis,
 };
 use crate::{
-    config::{TrustStore, TrustedDevice, TrustedIdentity},
     protocol::{DeviceType, IdentityBody, IdentityValidationError, Packet, PairingBody},
+    store::{Store, TrustedDevice, TrustedIdentity},
 };
 
 /// Whether a known peer can currently be reached.
@@ -307,9 +307,9 @@ impl Core {
         let Some(forgotten) = forgotten else {
             return Err(CoreError::UnknownDevice);
         };
-        self.trust_store
-            .remove(device_id)
-            .map_err(CoreError::Trust)?;
+        self.store
+            .remove_device(device_id)
+            .map_err(CoreError::Store)?;
         let ctx = self.plugin_context();
         if let Some(cancellation) = cancellation {
             cancellation.cancel();
@@ -363,7 +363,7 @@ impl Core {
         if !device.paired {
             return;
         }
-        let Ok(Some(mut trusted)) = self.trust_store.get(&device.device_id) else {
+        let Ok(Some(mut trusted)) = self.store.device(&device.device_id) else {
             return;
         };
         let identity = trusted_identity(device);
@@ -371,16 +371,16 @@ impl Core {
             return;
         }
         trusted.last_identity = Some(identity);
-        if let Err(error) = self.trust_store.put(&trusted) {
+        if let Err(error) = self.store.put_device(&trusted) {
             tracing::debug!(device_id = device.device_id, %error, "could not update trust record");
         }
     }
 }
 
-/// The paired peers in `trust_store`, as unreachable until they are seen.
-pub(super) fn paired_devices(trust_store: &(dyn TrustStore + Send + Sync)) -> DeviceRegistry {
+/// The paired peers in `store`, as unreachable until they are seen.
+pub(super) fn paired_devices(store: &Store) -> DeviceRegistry {
     let mut registry = DeviceRegistry::new();
-    match trust_store.list() {
+    match store.devices() {
         Ok(devices) => {
             for device in devices {
                 registry.restore(paired_device_snapshot(device));
@@ -432,7 +432,10 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::core::testing::{MemoryTrustStore, handle, handle_with_trust, make_identity};
+    use crate::{
+        core::testing::{handle, handle_with_trust, make_identity},
+        store::testing::trusted_device,
+    };
 
     fn identity() -> IdentityBody {
         IdentityBody {
@@ -512,12 +515,10 @@ mod tests {
         let described = "740bd4b9b4184ee497d6caf1da8151be";
         let undescribed = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         let trusted = |device_id: &str, last_identity| TrustedDevice {
-            device_id: device_id.into(),
-            certificate_der: vec![1, 2, 3],
-            last_trusted_protocol_version: 8,
             last_identity,
+            ..trusted_device(device_id)
         };
-        let (handle, _commands) = handle_with_trust(MemoryTrustStore::new(vec![
+        let (handle, _commands) = handle_with_trust(vec![
             trusted(
                 described,
                 Some(TrustedIdentity {
@@ -528,7 +529,7 @@ mod tests {
                 }),
             ),
             trusted(undescribed, None),
-        ]));
+        ]);
 
         let devices = handle.devices().unwrap();
         let names: Vec<_> = devices.iter().map(|d| d.device_name.as_str()).collect();
@@ -553,7 +554,7 @@ mod tests {
                 5,
             )
             .unwrap();
-        let stored = handle.trust_store.get(undescribed).unwrap().unwrap();
+        let stored = handle.store.device(undescribed).unwrap().unwrap();
         assert_eq!(
             stored.last_identity,
             Some(TrustedIdentity {

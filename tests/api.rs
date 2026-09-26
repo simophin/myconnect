@@ -2,13 +2,14 @@ use std::{sync::Arc, time::Duration};
 
 use ferry::{
     api::{ApiServer, ApiServerConfig},
-    config::{ApiToken, FilesystemTrustStore, LocalIdentity},
+    config::{ApiToken, LocalIdentity},
     core::{
         Core, DeviceRegistry, EventData, LanCommand, LocalDeviceSnapshot, PluginEvent,
         TransferConfig,
     },
     plugins::clipboard::{ClipboardSettings, ClipboardSnapshot, InMemoryClipboard},
     protocol::{DeviceType, IdentityBody},
+    store::Store,
 };
 use serde_json::Map;
 use tokio::{
@@ -46,7 +47,7 @@ impl TestServer {
             },
             8,
             b"test-local-pubkey".to_vec(),
-            Arc::new(FilesystemTrustStore::new(directory.path())),
+            Store::open(directory.path()).unwrap(),
             ferry::plugins::builtin(InMemoryClipboard::shared()),
             4,
             4,

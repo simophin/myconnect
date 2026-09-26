@@ -7,12 +7,13 @@
 //! The lock is a leaf: nothing else is locked while it's held.
 
 mod config;
+mod devices;
 
 use std::{
     collections::{BTreeMap, HashMap},
     path::Path,
     sync::{Arc, Mutex, PoisonError},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use rusqlite::Connection;
@@ -23,6 +24,9 @@ pub use config::{
     ConfigChange, ConfigKey, ConfigWatch, Entry, Global, IdScope, PerDevice, Scope, Scoped,
 };
 use config::{EntryId, RawValue};
+#[cfg(test)]
+pub(crate) use devices::testing;
+pub use devices::{TrustedDevice, TrustedIdentity};
 
 use crate::config::create_private_dir;
 
@@ -159,6 +163,12 @@ pub struct Transaction<'a> {
     changed: BTreeMap<EntryId, config::Change>,
 }
 
+fn now_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as i64)
+}
+
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("the data directory could not be created")]
@@ -167,6 +177,14 @@ pub enum StoreError {
     Database(#[from] rusqlite::Error),
     #[error("a value could not be encoded")]
     Encoding(#[source] serde_json::Error),
+    #[error("peer device ID is invalid")]
+    InvalidDeviceId,
+    #[error("peer certificate is invalid")]
+    InvalidCertificate,
+    #[error("peer protocol version is unsupported")]
+    UnsupportedProtocolVersion,
+    #[error("a paired device's record is corrupt")]
+    CorruptDevice,
     #[error("the database has schema version {0}, which this build can't read; delete {FILE_NAME}")]
     UnsupportedVersion(i32),
 }

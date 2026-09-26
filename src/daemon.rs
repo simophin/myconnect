@@ -15,16 +15,14 @@ use tracing::{info, warn};
 
 use crate::{
     api::{ApiServer, ApiServerConfig, DEFAULT_API_PORT},
-    config::{
-        ApiToken, FilesystemTrustStore, LocalIdentity, SettingsFile, StoredSettings, TrustStore,
-        default_config_dir,
-    },
+    config::{ApiToken, LocalIdentity, SettingsFile, StoredSettings, default_config_dir},
     core::{Core, LocalDeviceSnapshot, Plugin, Settings, SettingsDefaults, TransferConfig},
     plugins::{
         self,
         clipboard::{ClipboardService, InMemoryClipboard, SystemClipboard},
     },
     protocol::{DeviceType, is_forbidden_name_character, is_valid_device_name},
+    store::Store,
     transport::{
         lan::{DISCOVERY_PORT, LanConfig, LanService, LocalDeviceInfo},
         tls::subject_public_key_info,
@@ -111,8 +109,7 @@ impl RunningService {
             .or_else(default_config_dir)
             .context("could not determine configuration directory")?;
         let identity = Arc::new(LocalIdentity::load_or_create(&config_dir)?);
-        let trust_store: Arc<dyn TrustStore + Send + Sync> =
-            Arc::new(FilesystemTrustStore::new(&config_dir));
+        let store = Store::open(&config_dir)?;
         let local_public_key_der = subject_public_key_info(identity.certificate_der())
             .context("local identity certificate could not be parsed")?;
         let settings_file = SettingsFile::new(&config_dir);
@@ -160,7 +157,7 @@ impl RunningService {
             },
             8,
             local_public_key_der,
-            trust_store.clone(),
+            store.clone(),
             plugins(clipboard),
             32,
             256,
@@ -188,7 +185,7 @@ impl RunningService {
             core.clone(),
             commands,
             identity,
-            trust_store,
+            store,
             shutdown.clone(),
         )
         .await?;

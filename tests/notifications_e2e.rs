@@ -13,13 +13,14 @@ use std::{
 use ferry::{
     api::{ApiServer, ApiServerConfig},
     client::{ApiClient, ClientError},
-    config::{FilesystemTrustStore, LocalIdentity, TrustStore},
+    config::LocalIdentity,
     core::{Core, DeviceReachability, LocalDeviceSnapshot, TransferConfig},
     plugins::{
         clipboard::InMemoryClipboard,
         notifications::{Notification, REPLY_PACKET_TYPE, REQUEST_PACKET_TYPE},
     },
     protocol::{DeviceType, Packet},
+    store::Store,
     transport::{
         lan::{LanConfig, LanService, LocalDeviceInfo, TCP_PORT_RANGE},
         tls::subject_public_key_info,
@@ -51,8 +52,7 @@ async fn harness() -> Harness {
     let phone_dir = tempfile::tempdir().unwrap();
     let identity = Arc::new(LocalIdentity::load_or_create(desktop_dir.path()).unwrap());
     let desktop_id = identity.device_id().to_owned();
-    let trust_store: Arc<dyn TrustStore + Send + Sync> =
-        Arc::new(FilesystemTrustStore::new(desktop_dir.path()));
+    let store = Store::open(desktop_dir.path()).unwrap();
     let (desktop, commands) = Core::new(
         LocalDeviceSnapshot {
             device_id: desktop_id.clone(),
@@ -60,7 +60,7 @@ async fn harness() -> Harness {
         },
         8,
         subject_public_key_info(identity.certificate_der()).unwrap(),
-        trust_store.clone(),
+        store.clone(),
         ferry::plugins::builtin(InMemoryClipboard::shared()),
         32,
         256,
@@ -103,7 +103,7 @@ async fn harness() -> Harness {
         desktop.clone(),
         commands,
         identity,
-        trust_store,
+        store,
         CancellationToken::new(),
     )
     .await
