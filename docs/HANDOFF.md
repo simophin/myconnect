@@ -18,7 +18,7 @@ records are in [`archive/flutter-adr/`](archive/flutter-adr/README.md).
 1. [`ARCHITECTURE.md`](ARCHITECTURE.md): the core and its plugins, and
    the module map (§2), state machines, the full HTTP API, how the app
    embeds the daemon (§9), testing (§10), known gaps (§11), browsing a
-   device's files (§12).
+   device's files (§12), the app's languages (§13).
 2. [`adr/0001`](adr/0001-native-ui-in-iced.md): why the UI is Rust and
    iced in the daemon's process, its libraries, and its desktop
    integration per platform. It says which of the Flutter app's records
@@ -91,6 +91,37 @@ the en-XA pseudo-locale (`*-en-XA-light-*.png`: accented, longer, in
 brackets); look at them after a UI change. Plain English in an en-XA
 image is a string that wasn't extracted, or test data; a missing closing
 bracket is text cut off. `FERRY_LANG=en-XA` shows the real app in it.
+`SNAPSHOT_LANGUAGES=de,zh-CN` adds those translations
+(`*-de-light-*.png`); German is the longest, Chinese needs CJK fonts.
+
+## Strings and languages
+
+Everything the app shows goes through `fl!` and the `.ftl` files
+(ARCHITECTURE §13, [`PLAN_I18N.md`](PLAN_I18N.md)); the CLI, the API and
+logs stay English.
+
+- **Adding a string.** Add the message to `i18n/en-US/ferry.ftl` in its
+  feature's group, with a comment saying where it shows and what each
+  argument is, and call `fl!("key", arg = value)`. Whole sentences only,
+  names and numbers as arguments, counts through a plural selector (the
+  rules are in the plan). Then add the key to every other
+  `i18n/<lang>/ferry.ftl`: `ui::i18n::tests` fails while a language lacks
+  it or has one en-US doesn't. If you can't translate it, copy the English
+  there and say so in the PR, so a speaker can fix it; a removed key goes
+  from every file. `fl!`'s check reads the files at build time, and
+  editing only an `.ftl` doesn't trigger a rebuild: touch a `.rs` file.
+- **Adding a language.** Copy `i18n/en-US/ferry.ftl` to
+  `i18n/<tag>/ferry.ftl` (a BCP 47 tag, like `fr` or `pt-BR`) and
+  translate every message, `package-*` included; nothing needs
+  registering. Keep the header saying who wrote it and whether a native
+  speaker has reviewed it. Plural selectors take the language's CLDR
+  categories (`one`, `few`, `many`, `other`…; Chinese needs none).
+  `packaging/i18n.sh` needs its NSIS name (`nsis_language`) and, for
+  script variants, its `.lproj` name; the Windows build stops without the
+  former. Add the tags systems report for it (macOS's carry a script, as
+  in `zh-Hans-CN`) to `ui::i18n::tests::system_tags_reach_the_translations`,
+  then look at the snapshots with
+  `SNAPSHOT_LANGUAGES=<tag>`.
 
 Also run the real app for anything involving windows, the tray, drops,
 dialogs or notifications (see "Verifying in the real app" below):

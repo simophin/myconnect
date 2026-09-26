@@ -485,7 +485,9 @@ notifications. Each scenario discovers on a free UDP port of its own, not
 (§2, `transport`). The
 UI's unit tests sit next to each page and plugin UI half, over a real
 core from `core::testing` (on `Store::open_in_memory()`) with fake desktop services, and snapshot tests
-render each page to PNG in light and dark when `SNAPSHOT_DIR` is set.
+render each page to PNG in light and dark when `SNAPSHOT_DIR` is set,
+and in the en-XA pseudo-locale and any translations named in
+`SNAPSHOT_LANGUAGES` (§13).
 Most end-to-end tests spin up two in-process peers (real UDP/TCP/TLS on
 loopback, no mocked network layer) and exercise discovery through encrypted
 plugin dispatch.
@@ -577,3 +579,47 @@ which [`adr/0001`](adr/0001-native-ui-in-iced.md) carries over.
 - **Checked on Android.** A Pixel 8a (KDE Connect for Android, 2026-09)
   accepted our ECDSA key, its host key matched its certificate, and it
   offered one root, `/storage/emulated/0` ("Internal shared storage").
+
+## 13. The app's languages
+
+The desktop app is translated; the CLI, the HTTP API (it reports error
+codes, which the app words), logs and the website stay in English. The
+plan and its decisions are in [`PLAN_I18N.md`](PLAN_I18N.md).
+
+- **Messages.** Every word the app shows is a Fluent message in
+  `i18n/<lang>/ferry.ftl`, embedded in the binary (`rust-embed`). en-US is
+  the source and the fallback: a message a translation lacks shows in
+  English. Code gets one with `fl!("key", name = value)`
+  (`ui::i18n::fl`, over `i18n-embed-fl`), which checks at compile time
+  that the key exists in en-US and is given exactly the arguments its
+  message uses. Keys are prefixed by feature or page (`browse-…`,
+  `settings-…`), `error-<code>` for the API's error codes (`ui::error`).
+  Messages are whole sentences; device and file names, paths and numbers
+  are arguments, never glued to translated text; every count goes through
+  a plural selector (`{ $count -> [one] … *[other] … }`).
+- **Choosing the language.** `launch::run` calls
+  `i18n::select_system_language` once at start: `FERRY_LANG` if set,
+  else the system's preferred languages (`DesktopLanguageRequester`),
+  negotiated against the shipped ones (so macOS's `zh-Hans-CN` and
+  `de-AT` reach `zh-CN` and `de`), else en-US. Fluent's isolation marks
+  wrap each argument, so a right-to-left name can't reorder a sentence.
+  Unit tests and `tests/ui_e2e.rs` stay in en-US without the marks.
+- **Numbers and dates** in a message are written by ICU4X in the user's
+  locale (`i18n::format`, installed as Fluent's formatter); units and a
+  percent sign are the message's, so each language spaces them.
+- **Testing.** `ui::i18n::tests` checks that every `i18n/*/ferry.ftl`
+  parses and has exactly en-US's keys. en-XA (`i18n::pseudo`, made from
+  en-US at run time, never checked in) shows untranslated or clipped text:
+  `FERRY_LANG=en-XA` in the app, and in every snapshot. `SNAPSHOT_LANGUAGES=de,zh-CN`
+  also renders the snapshots in those translations (`i18n::in_locale`, per
+  thread, so parallel tests stay en-US).
+- **Outside the app.** `package-*` messages (plain text, one line) are
+  what the system shows about the app: `packaging/i18n.sh` copies them into
+  the `.desktop` entry, macOS's `<lang>.lproj` and `CFBundleLocalizations`,
+  and the Windows installer's languages. A language is shipped by having
+  its directory under `i18n/`.
+- **Fonts.** The bundled Figtree covers Latin; other scripts fall back to
+  the system's fonts through cosmic-text, which picks CJK fonts by the
+  system's locale, not the app's. On macOS bold CJK text mixes fonts:
+  PingFang has no bold (700) face, and cosmic-text's fallback only takes an
+  exact weight, so it lands on whichever bold font has the glyph.

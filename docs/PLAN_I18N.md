@@ -96,9 +96,10 @@ Split into four commits, one per step, each passing the checks.
       macOS snapshot only, see Notes)
 
 ### 6. First languages and workflow
-- [ ] `i18n/zh-CN/ferry.ftl` and `i18n/de/ferry.ftl`, complete
-- [ ] Look at snapshots in both for clipping
-- [ ] HANDOFF.md and ARCHITECTURE.md: how strings work, how to add a
+- [x] `i18n/zh-CN/ferry.ftl` and `i18n/de/ferry.ftl`, complete
+- [x] Look at snapshots in both for clipping (`SNAPSHOT_LANGUAGES`; none
+      found; bold CJK mixes fonts on macOS, see Notes)
+- [x] HANDOFF.md and ARCHITECTURE.md: how strings work, how to add a
       string and a language
 
 ### 7. Language setting
@@ -321,3 +322,33 @@ Anything a later phase must know, one line each, newest last.
   and zh-CN files (quotes, `$` and `\` in them; `plutil -lint` passes),
   but `build_deb.sh` (with `check_deb.sh`'s `desktop-file-validate`) and
   `makensis` weren't run here: the Build workflow runs both.
+- 6: de and zh-CN are complete and written by an agent; their headers ask
+  for a native speaker's review. German uses "du" and „…“ quotes, "koppeln"/
+  "Kopplung" for pairing and "Infobereich" for the tray; Chinese uses full-width punctuation, no plural selectors, and
+  keeps "Ping" as the action's name. Both keep English `package-keywords`
+  after their own so English searches still find the app.
+- 6: `i18n_embed::select` already negotiates `zh-Hans-CN`, `zh-Hans`,
+  `zh-SG` to zh-CN and `de-DE`/`de-AT`/`de-CH` to de, so no mapping was
+  needed (`ui::i18n::tests::system_tags_reach_the_translations`).
+- 6: `ui::i18n::in_locale(tag, f)` generalises `in_pseudo_locale`: `fl!`
+  on that thread uses that language (isolation marks on) and
+  `i18n::format` its locale (`format::set_thread_locale`, test-only).
+  `SNAPSHOT_LANGUAGES=de,zh-CN` renders every snapshot in those too, as
+  `<name>-<tag>-light-<backend>.png`.
+- 6: the snapshots show no clipping in either language (German's
+  "Weiterlaufen, wenn das Fenster geschlossen wird" and "Neues Token"
+  wrap; browse's Modified column fits "24.09.2026, 14:03" and
+  "2026年9月24日 14:03"). What stays English there is test data, as in 4.
+- 6: on macOS, bold CJK text (page titles, dialog titles, column headers)
+  mixes fonts glyph by glyph, some from a serif (Songti) face: PingFang has
+  no 700 face, and cosmic-text 0.15's fallback only takes fonts of the
+  exact weight, so each glyph lands on whichever Bold font has it. Regular
+  text is fine. Not fixed (iced is pinned; HANDOFF "Traps"); options are a
+  cosmic-text fix upstream, or drawing titles in Semibold with a Figtree
+  Semibold face bundled. Linux's Noto Sans CJK and Windows' YaHei have
+  bold faces, so check there before deciding.
+- 6 was checked on macOS, as 5 was: the same `tests/lan.rs` loopback
+  failure, real-clipboard tests skipped, `ui_e2e` doesn't run there. The
+  real app wasn't run in de or zh-CN (no Xvfb); `packaging/i18n.sh`'s
+  output for both was checked (`plutil -lint` passes), `makensis` and
+  `desktop-file-validate` weren't run.

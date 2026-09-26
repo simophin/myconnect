@@ -140,6 +140,8 @@ pub async fn outputs<T: 'static>(task: Task<T>) -> Vec<T> {
 /// `$SNAPSHOT_DIR/<name>-<light|dark>-<backend>.png`, and in the en-XA
 /// pseudo-locale, light only, to `<name>-en-XA-light-<backend>.png`, to
 /// look at the UI without a display. Does nothing without the variable.
+/// `SNAPSHOT_LANGUAGES`, a comma-separated list such as `de,zh-CN`, adds
+/// those translations, light only, as `<name>-<language>-light-…`.
 ///
 /// In en-XA, a string that reads as plain English wasn't extracted (or
 /// was made before `view` ran, like a toast's text), and a missing closing
@@ -153,12 +155,25 @@ pub fn snapshot<'a, Message>(
         return;
     };
     let directory = Path::new(&directory);
-    let english = |theme| (theme, false);
-    for (variant, (theme, pseudo)) in [
-        ("light", english(super::theme::light())),
-        ("dark", english(super::theme::dark())),
-        ("en-XA-light", (super::theme::light(), true)),
-    ] {
+    let languages = std::env::var("SNAPSHOT_LANGUAGES").unwrap_or_default();
+    let variants = [
+        ("light".to_owned(), super::theme::light(), None),
+        ("dark".to_owned(), super::theme::dark(), None),
+    ]
+    .into_iter()
+    .chain(
+        std::iter::once("en-XA")
+            .chain(languages.split(',').map(str::trim))
+            .filter(|language| !language.is_empty())
+            .map(|language| {
+                (
+                    format!("{language}-light"),
+                    super::theme::light(),
+                    Some(language),
+                )
+            }),
+    );
+    for (variant, theme, language) in variants {
         let stem = format!("{name}-{variant}");
         remove_old_images(directory, &stem);
         let settings = Settings {
@@ -174,10 +189,9 @@ pub fn snapshot<'a, Message>(
             let mut ui = Simulator::with_size(settings, size, view());
             ui.snapshot(&theme).expect("snapshot renders")
         };
-        let snapshot = if pseudo {
-            i18n::in_pseudo_locale(render)
-        } else {
-            render()
+        let snapshot = match language {
+            Some(language) => i18n::in_locale(language, render),
+            None => render(),
         };
         assert!(
             snapshot

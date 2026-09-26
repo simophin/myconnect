@@ -106,12 +106,41 @@ fn to_locale(language: &LanguageIdentifier) -> Locale {
     Locale::try_from_str(&language.to_string()).unwrap_or(Locale::UNKNOWN)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// In unit tests, this thread's locale instead of [`LOCALE`]: see
+    /// `i18n::in_locale`.
+    static THREAD_LOCALE: RefCell<Option<Locale>> = const { RefCell::new(None) };
+}
+
+/// Format on this thread only as [`set_locale`] would for `chosen`
+/// (requested, translation), or as [`LOCALE`] says again for `None`.
+#[cfg(test)]
+pub(super) fn set_thread_locale(chosen: Option<(&[LanguageIdentifier], &LanguageIdentifier)>) {
+    let locale =
+        chosen.map(|(requested, translation)| to_locale(locale_for(requested, translation)));
+    THREAD_LOCALE.set(locale);
+}
+
+/// This thread's locale in unit tests, if one was set.
+#[cfg(test)]
+fn thread_locale() -> Option<Locale> {
+    THREAD_LOCALE.with_borrow(Clone::clone)
+}
+
+#[cfg(not(test))]
+const fn thread_locale() -> Option<Locale> {
+    None
+}
+
 fn with_formatters<T>(f: impl FnOnce(&Formatters) -> T) -> T {
-    let locale = LOCALE
-        .read()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone()
-        .unwrap_or(icu_locale_core::locale!("en-US"));
+    let locale = thread_locale().unwrap_or_else(|| {
+        LOCALE
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .unwrap_or(icu_locale_core::locale!("en-US"))
+    });
     FORMATTERS.with_borrow_mut(|formatters| {
         if formatters
             .as_ref()

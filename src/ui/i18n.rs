@@ -44,7 +44,7 @@ pub static LOADER: Loader = Loader(LazyLock::new(|| {
 }));
 
 /// [`LOADER`]'s type: the app's one loader, except that in unit tests a
-/// thread inside [`in_pseudo_locale`] sees the pseudo-locale's.
+/// thread inside [`in_locale`] sees that language's.
 pub struct Loader(LazyLock<FluentLanguageLoader>);
 
 impl Deref for Loader {
@@ -52,8 +52,8 @@ impl Deref for Loader {
 
     fn deref(&self) -> &FluentLanguageLoader {
         #[cfg(test)]
-        if IN_PSEUDO_LOCALE.get() {
-            return &PSEUDO_LOADER;
+        if let Some(loader) = THREAD_LOADER.get() {
+            return loader;
         }
         &self.0
     }
@@ -61,30 +61,62 @@ impl Deref for Loader {
 
 #[cfg(test)]
 thread_local! {
-    static IN_PSEUDO_LOCALE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static THREAD_LOADER: std::cell::Cell<Option<&'static FluentLanguageLoader>> =
+        const { std::cell::Cell::new(None) };
 }
 
-/// en-XA, with isolation marks, as the app would show it.
-#[cfg(test)]
-static PSEUDO_LOADER: LazyLock<FluentLanguageLoader> = LazyLock::new(|| {
-    let loader: FluentLanguageLoader = fluent_language_loader!();
-    load(&loader, &[pseudo::language()]).expect("en-XA is made from en-US, which parses");
-    loader
-});
-
-/// Run `f` with `fl!` on this thread looking messages up in en-XA, for
+/// Run `f` with `fl!` on this thread looking messages up in `language`
+/// (`en-XA`, or a translation such as `de`), with isolation marks and
+/// numbers and dates in that language, as the app would show it, for
 /// snapshots: other tests running at the same time still see en-US.
 #[cfg(test)]
-pub fn in_pseudo_locale<T>(f: impl FnOnce() -> T) -> T {
+pub fn in_locale<T>(language: &str, f: impl FnOnce() -> T) -> T {
+    use std::{
+        collections::HashMap,
+        sync::{Mutex, PoisonError},
+    };
+
+    /// One loader per language, made on first use and kept for the run.
+    static LOADERS: Mutex<Option<HashMap<String, &'static FluentLanguageLoader>>> =
+        Mutex::new(None);
+
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
-            IN_PSEUDO_LOCALE.set(false);
+            THREAD_LOADER.set(None);
+            format::set_thread_locale(None);
         }
     }
-    IN_PSEUDO_LOCALE.set(true);
+
+    let requested: LanguageIdentifier = language
+        .parse()
+        .unwrap_or_else(|error| panic!("{language}: not a language tag: {error}"));
+    let loader = *LOADERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get_or_insert_default()
+        .entry(language.to_owned())
+        .or_insert_with(|| {
+            let loader: FluentLanguageLoader = fluent_language_loader!();
+            load(&loader, std::slice::from_ref(&requested))
+                .unwrap_or_else(|error| panic!("{language} loads: {error}"));
+            Box::leak(Box::new(loader))
+        });
+    let translation = loader
+        .current_languages()
+        .first()
+        .cloned()
+        .unwrap_or_else(en_us);
+    THREAD_LOADER.set(Some(loader));
+    format::set_thread_locale(Some((&[requested], &translation)));
     let _reset = Reset;
     f()
+}
+
+/// [`in_locale`] in the pseudo-locale, en-XA.
+#[cfg(test)]
+pub fn in_pseudo_locale<T>(f: impl FnOnce() -> T) -> T {
+    in_locale(&pseudo::language().to_string(), f)
 }
 
 /// Write `loader`'s numbers in the user's locale. Like isolation, this is
@@ -298,6 +330,45 @@ mod tests {
 
         let loader: FluentLanguageLoader = fluent_language_loader!();
         assert_eq!(load(&loader, &tags(&["en-GB"])).unwrap(), [en_us()]);
+    }
+
+    /// The tags systems report reach the shipped translations: macOS says
+    /// `zh-Hans-CN`, Windows and Linux `zh-CN`, a German system in
+    /// Austria `de-AT`.
+    #[test]
+    fn system_tags_reach_the_translations() {
+        for (requested, expected) in [
+            ("zh-CN", "zh-CN"),
+            ("zh-Hans-CN", "zh-CN"),
+            ("zh-Hans", "zh-CN"),
+            ("zh-SG", "zh-CN"),
+            ("de", "de"),
+            ("de-DE", "de"),
+            ("de-AT", "de"),
+            ("de-CH", "de"),
+        ] {
+            let loader: FluentLanguageLoader = fluent_language_loader!();
+            let requested: LanguageIdentifier = requested.parse().unwrap();
+            let chosen = load(&loader, std::slice::from_ref(&requested)).unwrap();
+            assert_eq!(
+                chosen.first().map(ToString::to_string).as_deref(),
+                Some(expected),
+                "{requested} chose {chosen:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn translations_are_used() {
+        let settings = |language| in_locale(language, || fl!("settings-title"));
+        assert_eq!(settings("de"), "Einstellungen");
+        assert_eq!(settings("zh-CN"), "设置");
+        // Numbers in the translation's locale, and Chinese's one plural;
+        // isolation marks on, as in the app.
+        let header = |language| in_locale(language, || fl!("drop-send-to-header", count = 1234));
+        assert_eq!(header("de"), "\u{2068}1.234\u{2069} Dateien senden an:");
+        assert_eq!(header("zh-CN"), "将 \u{2068}1,234\u{2069} 个文件发送到：");
+        assert_eq!(fl!("settings-title"), "Settings");
     }
 
     #[test]
