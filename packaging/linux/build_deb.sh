@@ -4,8 +4,8 @@
 #   build_deb.sh APP CLI VERSION OUT_DIR
 #
 # APP is cargo's myconnect-gui, installed as /usr/bin/myConnect; CLI is the
-# myconnect command line, installed next to it (docs/PLAN_ICED_UI.md, "Owner
-# decisions"). The menu entry and icons go to /usr/share. Runs on Debian or
+# myconnect command line, installed next to it (docs/adr/0001, "Packaging").
+# The menu entry and icons go to /usr/share. Runs on Debian or
 # Ubuntu: it needs dpkg-deb, and dpkg-shlibdeps to work out the dependencies
 # from the ELF files. Build on the oldest release you want to support, since
 # the glibc it links against is the oldest one the package will install on.

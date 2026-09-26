@@ -6,7 +6,8 @@ later decision that changes course supersedes an earlier one rather than
 editing it.
 
 The Flutter app was replaced by a native UI and deleted (git history
-before the commit for step 16 of `docs/PLAN_ICED_UI.md` has it):
+before the commit for step 16 of
+[`PLAN_ICED_UI.md`](../PLAN_ICED_UI.md) has it):
 [`docs/adr/0001`](../../adr/0001-native-ui-in-iced.md) says which of
 these records carry over to it.
 

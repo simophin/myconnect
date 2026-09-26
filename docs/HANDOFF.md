@@ -9,9 +9,9 @@ add by IP, packaging, browsing a device's files) was built in Flutter and is
 finished. It is kept in
 [`archive/HANDOFF_UI_MILESTONE.md`](archive/HANDOFF_UI_MILESTONE.md) for
 the detail behind each feature. The Flutter app was then replaced by a
-native one in Rust and iced ([`PLAN_ICED_UI.md`](PLAN_ICED_UI.md)) and
-deleted; its records are in
-[`archive/flutter-adr/`](archive/flutter-adr/README.md).
+native one in Rust and iced (the finished plan is
+[`archive/PLAN_ICED_UI.md`](archive/PLAN_ICED_UI.md)) and deleted; its
+records are in [`archive/flutter-adr/`](archive/flutter-adr/README.md).
 
 ## Read first
 
@@ -24,10 +24,8 @@ deleted; its records are in
    integration per platform. It says which of the Flutter app's records
    (in [`archive/flutter-adr/`](archive/flutter-adr/README.md)) still
    apply: 0003 (snapshot plus events), 0007 (tray), 0008 (browsing) and
-   0009 (window placement).
-3. [`PLAN_ICED_UI.md`](PLAN_ICED_UI.md): how the UI was built step by
-   step, the UI plugin seam, and what each step changed from the plan.
-   Its "Traps" are the UI's traps; the most common are below.
+   0009 (window placement), and what differs from the Flutter app on
+   purpose.
 
 The app is `gui/` (`myconnect-gui`), the UI core is `src/ui/`, and each
 feature's UI half is `src/plugins/<name>/ui.rs`, all behind the `gui`
@@ -105,16 +103,32 @@ the CLI, and for tagged builds an Arch Linux PKGBUILD. The scripts are in
 
 ## Open work
 
-**The tray and notifications on macOS and Windows** (`PLAN_ICED_UI.md`
-step 13b). They work on Linux only; macOS and Windows get no tray, so the
-app quits when its window closes there, and no notifications. That step
-needs a Mac and a Windows machine, and also owes the check that the macOS
-app launches from Finder.
+**The tray and notifications on macOS and Windows** (the plan's step
+13b). They work on Linux only; macOS and Windows get no tray, so the app
+quits when its window closes there, and no notifications. It needs a Mac
+and a Windows machine:
 
-**The rest of the UI's open work** is at the end of
-[`PLAN_ICED_UI.md`](PLAN_ICED_UI.md#open-work-not-parity-after-step-16):
-dragging files out of the browser, start on login, remembered add-by-IP
-addresses, a low-battery notification, and accessibility.
+- `tray-icon` + `muda` (ADR 0001), created in the first `update` on the
+  main thread, with its menu and icon events forwarded into the
+  `DesktopEvent` channel; a `Tray` over it, fed the same `TrayItem`s.
+  macOS uses `assets/tray_icon_template.png` as a template image.
+- `notify-rust` for `Notifier`: clicks work on Windows and are best effort
+  on macOS; nothing is withdrawn (ADR 0001, "Desktop integration").
+- macOS's menu-bar Quit and logout take the quit path.
+- Confirm single instance (the `/tmp` socket file on macOS, a named pipe
+  on Windows) and placement with several monitors.
+- Also check what packaging couldn't: the DMG's app launches from Finder
+  with its tray icon, and the installed Windows app's notifications carry
+  its name and icon.
+
+**The rest of the UI's open work:**
+
+- Drag files out of the browser to the desktop (ADR 0008 lists it).
+- Start on login.
+- Remembered add-by-IP addresses (see "Smaller follow-ups").
+- A low-battery notification (`thresholdEvent`).
+- Accessibility: check what iced 0.14 exposes to screen readers and
+  record the gap against Flutter.
 
 **Packaging.** Nothing is signed or notarized; the macOS app has only an
 ad-hoc signature. The macOS and Windows apps were built and the Windows
@@ -171,23 +185,36 @@ installer installed in CI, but neither was used on a real desktop yet.
 
 ## Traps
 
-The UI's traps are listed in full in
-[`PLAN_ICED_UI.md`](PLAN_ICED_UI.md#traps). The ones that bite most often:
+The UI's traps. Those about driving the app under Xvfb are in
+"Verifying in the real app" below.
 
 - **Two runtimes.** iced polls futures on its own executor. Anything that
   touches the daemon's tokio I/O (russh, payload sockets, file transfers)
   must run on the daemon's runtime (`UiContext::spawn`). Symptom: a panic
   "there is no reactor running", or a hang.
-- **Don't block `update`.** Anything that does I/O goes through a `Task`.
+- **Don't block `update`.** Core calls that take locks are fine. Anything
+  that does I/O (SFTP, file reads, `RunningService::start`) goes through a
+  `Task`.
+- **Event ordering after subscribe-then-snapshot.** Events already
+  reflected in the snapshot are replayed after it. Device events carry the
+  full device, so replaying one is harmless; transfers and pairings are
+  why the store's guards exist, so don't drop them.
 - **Actions outlive their page.** An event can remove the device while an
   action is in flight: messages carry ids, and handlers look the device up
   again rather than holding on to it.
+- **Plugins don't import each other in UI code either.** A helper two
+  plugins need (say, "upload files with a summary toast") belongs in
+  `src/ui/`.
+- **The tray is not a view.** It can't render an `Element`, which is why
+  device actions are data. Don't add widget-returning tray APIs.
 - **No shadows under tiny-skia.** The software renderer paints a shadow
   again on every partial redraw, turning the widget black. Dialogs use a
   border instead; check anything new under `ICED_BACKEND=tiny-skia` in the
-  real app.
+  real app. Snapshots render one frame and don't show it.
+- **macOS loopback.** `--discovery-loopback` can't find peers on macOS
+  (no `127.255.255.255`). Use `--demo` there, and do peer tests on Linux.
 - **iced is pinned** (`iced = "0.14"`, `iced_fonts = "0.3"`). Upgrading it
-  is its own change.
+  is its own change, never mixed into a feature.
 
 ## Verifying in the real app
 
@@ -236,7 +263,13 @@ their network without asking.
   inside, they get the owner's `DISPLAY`/`WAYLAND_DISPLAY` and open on the
   owner's desktop.
 - There is no window manager, so a click doesn't give the app's window
-  keyboard focus: call `XSetInputFocus` on it before sending keys.
+  keyboard focus: call `XSetInputFocus` on it (through `libX11` with
+  ctypes) before sending keys.
+- Unsetting `WAYLAND_DISPLAY` isn't enough to keep a GTK or Wayland helper
+  off the owner's desktop: they fall back to `$XDG_RUNTIME_DIR/wayland-0`.
+  Set `GDK_BACKEND=x11` (and `XDG_SESSION_TYPE=x11` for `display-info`);
+  a headless compositor needs its own short `XDG_RUNTIME_DIR` (socket
+  paths are limited to 108 bytes, so not under the scratchpad).
 - The "Send files" picker opens as a GTK dialog on the virtual display
   (through `xdg-desktop-portal`, which D-Bus starts on your private bus).
   Without a window manager it can be bigger than the screen and doesn't get
@@ -265,4 +298,6 @@ their network without asking.
   name with `ListNames`), and send `com.canonical.dbusmenu.Event --
   <Quit's id> clicked '<"">' 0`. Closing the window only hides it.
 - Don't clean up with `pkill -f <pattern>`: the pattern also matches the
-  shell running the command, and kills it. Kill by PID.
+  shell running the command, and kills it. Kill by PID. `setsid cmd &`
+  forks, so its `$!` is a wrapper that has already exited: record the PID
+  from `pgrep -f` with your run directory in the pattern.

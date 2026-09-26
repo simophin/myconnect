@@ -16,8 +16,9 @@ in its Rust plugin and once in Dart.
 A spike (`gui/`, PR #24) showed the device list in iced 0.14, running the
 daemon in-process and reading the core directly, with headless snapshot
 tests through `iced_test`. The owner decided to replace the Flutter app
-with it. [`../PLAN_ICED_UI.md`](../PLAN_ICED_UI.md) is the step-by-step
-plan; this record is the decision and the shape it fixes.
+with it. [`../archive/PLAN_ICED_UI.md`](../archive/PLAN_ICED_UI.md) is the
+finished step-by-step plan; this record is the decision and the shape it
+fixes.
 
 ## Decision
 
@@ -197,6 +198,32 @@ Decisions for steps 11 and 13:
   on a clean Debian 12: it installs with its Depends only (no GPU driver,
   so the app draws with tiny-skia), opens its window with its class and
   icon, and the CLI reaches its API.
+
+## Deliberate differences from the Flutter app
+
+These differ on purpose (owner's decisions). Don't "fix" them back.
+
+- **No external daemon mode.** Flutter could attach to a daemon through
+  `MYCONNECT_API_URL`; the app always embeds its daemon.
+- **Configuration is flags and environment variables**, not compile-time
+  defines (see Decision). The version in Settings is
+  `CARGO_PKG_VERSION`, plus `git describe` when available.
+- **No FFI.** `ffi/` existed only for Flutter and was deleted with it.
+- **Retry restarts only what failed.** The "could not start" screen's
+  Retry calls `RunningService::start` again; the tray keeps working.
+- **No reconnecting banner.** There is no connection to lose in-process;
+  a lagged receiver takes a fresh snapshot, silently.
+- **Start hidden works on every platform.** The window opens at start only
+  if the saved placement says it was visible, or if there is no tray.
+- **Single instance works everywhere**, through one local socket rather
+  than GApplication or LaunchServices.
+- **Wayland has no drag and drop** (winit has none there). Don't force X11
+  or XWayland to get it back; *Send files* and *Upload files* do the same
+  job.
+- **Not sandboxed on macOS.** Flutter's sandbox caused the download-folder
+  bookmark problem; the new app is a plain, ad-hoc-signed bundle unless
+  the owner later wants the App Store.
+- The window title is "MyConnect", not "myconnect_ui".
 
 ## Consequences
 

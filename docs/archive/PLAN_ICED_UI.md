@@ -1,5 +1,12 @@
 # Plan: replace the Flutter UI with a native Rust UI (iced)
 
+> **Archived.** This plan is finished and kept for the history behind each
+> step. What is still in force lives elsewhere: the design and the
+> owner's decisions, deliberate differences from Flutter included, in
+> [`adr/0001`](../adr/0001-native-ui-in-iced.md); the shape of the code in
+> [`ARCHITECTURE.md`](../ARCHITECTURE.md); the traps, step 13b and the
+> open work in [`HANDOFF.md`](../HANDOFF.md).
+
 For agents doing this work step by step. Each step says why it exists, what
 to build, what "done" means, and the traps already known. Work in order: the
 early steps build the ground the later ones stand on. Steps marked
@@ -41,9 +48,9 @@ step says so under its heading, with what differs from the plan.
 
 ## Read first
 
-1. [`HANDOFF.md`](HANDOFF.md): the ground rules and the "done means" checks.
+1. [`HANDOFF.md`](../HANDOFF.md): the ground rules and the "done means" checks.
    Both still apply. Only the UI-specific rules change, as described below.
-2. [`ARCHITECTURE.md`](ARCHITECTURE.md) §2: the core, the `Plugin` trait,
+2. [`ARCHITECTURE.md`](../ARCHITECTURE.md) §2: the core, the `Plugin` trait,
    and the rule that the core never names a feature. The UI copies that
    shape.
 3. The Flutter app was the **spec**. `ui/lib/src/` (deleted in step 16;
@@ -358,7 +365,7 @@ part of "done" any more (see Decisions).
 
 **Done (2026-09-25).** Where it differs from the text below:
 - The `gui` feature turns on only `iced` and `iced_fonts` for now. The
-  other UI crates are chosen in [`adr/0001`](adr/0001-native-ui-in-iced.md)'s
+  other UI crates are chosen in [`adr/0001`](../adr/0001-native-ui-in-iced.md)'s
   library table, and each is added to the feature by the step that first
   uses it (rfd: 9, opener: 8, notify-rust, interprocess, ksni and
   tray-icon: 13). `iced_test` is a dev-dependency of `myconnect`.
@@ -986,7 +993,7 @@ dark.
 ### 10. Desktop integration spike (do this before 11 and 13)
 
 **Done (2026-09-26).** The table and the decisions are in
-[`adr/0001`](adr/0001-native-ui-in-iced.md), "Desktop integration". In
+[`adr/0001`](../adr/0001-native-ui-in-iced.md), "Desktop integration". In
 short, and where it differs from the text below:
 - Tested on Linux only: X11 under Xvfb and Wayland under a headless labwc
   (`WLR_BACKENDS=headless WLR_RENDERER=pixman`, its own

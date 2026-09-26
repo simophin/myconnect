@@ -9,7 +9,7 @@
 # MyConnect.app next to it. Needs macOS: lipo, iconutil, codesign and
 # hdiutil.
 #
-# The bundle is ad-hoc signed and not sandboxed (docs/PLAN_ICED_UI.md,
+# The bundle is ad-hoc signed and not sandboxed (docs/adr/0001,
 # "Deliberate differences"): Gatekeeper blocks it until the user allows it in
 # System Settings → Privacy & Security.
 set -eu

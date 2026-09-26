@@ -4,8 +4,8 @@
 //!
 //! On Linux the shell talks to `org.freedesktop.Notifications` itself, so it
 //! can withdraw a notification and hear its click without a thread per
-//! notification (ADR 0001). macOS and Windows have none yet (plan step
-//! 13b).
+//! notification (ADR 0001). macOS and Windows have none yet (HANDOFF,
+//! "Open work").
 
 use std::sync::Arc;
 
