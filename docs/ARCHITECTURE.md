@@ -163,7 +163,10 @@ what each step taught.
 
 1. **Discovery** (`transport::lan`): UDP broadcast/listen on port 1716.
    Each peer broadcasts a protocol-v8 identity packet containing its chosen
-   TCP port (selected from `1716-1764`). Malformed, oversized, self, and
+   TCP port (selected from `1716-1764`: the first port no other socket
+   holds, on its address or an overlapping one, since macOS lets a
+   127.0.0.1 listener share a port with another process's on the wildcard
+   address; payload listeners pick theirs the same way). Malformed, oversized, self, and
    unsupported-version identities are dropped without affecting the device
    registry. Where broadcast doesn't reach a peer, its address can be given
    (`POST /discovery` with `address`): the identity is then sent by unicast

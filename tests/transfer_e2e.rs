@@ -170,10 +170,12 @@ async fn connected_and_paired_with(
 
     let a_transfer_config = configure_a(
         TransferConfig::new(a_dir.path().join("downloads"))
+            .with_payload_bind_ip(Ipv4Addr::LOCALHOST)
             .with_payload_connect_timeout(Duration::from_millis(500)),
     );
     let b_transfer_config = configure_b(
         TransferConfig::new(b_download_dir.clone())
+            .with_payload_bind_ip(Ipv4Addr::LOCALHOST)
             .with_payload_connect_timeout(Duration::from_millis(500)),
     );
 
@@ -391,7 +393,8 @@ async fn unpaired_device_cannot_initiate_a_transfer() {
         8,
         32,
         a_identity,
-        TransferConfig::new(a_dir.path().join("downloads")),
+        TransferConfig::new(a_dir.path().join("downloads"))
+            .with_payload_bind_ip(Ipv4Addr::LOCALHOST),
     )
     .unwrap();
 

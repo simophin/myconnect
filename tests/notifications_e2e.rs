@@ -65,7 +65,8 @@ async fn harness() -> Harness {
         32,
         256,
         identity.clone(),
-        TransferConfig::new(desktop_dir.path().join("downloads")),
+        TransferConfig::new(desktop_dir.path().join("downloads"))
+            .with_payload_bind_ip(Ipv4Addr::LOCALHOST),
     )
     .unwrap();
 
