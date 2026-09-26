@@ -7,13 +7,13 @@ ground rules, the done-means checks and how to run things in isolation
 (CLAUDE.md). **Where this plan and the docs disagree about where UI code
 lives, this plan wins**: PR 3 brings the docs in line.
 
-Status (2026-09-26): PR 1 done (branch `ui-flatten`); PR 2 and PR 3 not
-started.
+Status (2026-09-26): PR 1 done (#28); PR 2 done (branch `ui-split`); PR 3
+not started.
 
 | PR | What | Needs |
 | --- | --- | --- |
 | 1 | Move each feature's `ui.rs` into `src/ui/features/` **and** replace the erased `UiPlugin` seam with concrete messages and routes. **Done** | — |
-| 2 | Split the two big files: `ui/features/browse.rs` and `ui/mod.rs` | PR 1 merged |
+| 2 | Split the two big files: `ui/features/browse.rs` and `ui/mod.rs`. **Done** | PR 1 merged |
 | 3 | Docs: ADR 0001, `ARCHITECTURE.md`, `HANDOFF.md`, `README.md` | PR 1 merged; can run beside PR 2 |
 
 Each PR is its own branch off `main` and must pass every done-means check
@@ -356,6 +356,38 @@ spread across files are fine).
 
 Done means: the HANDOFF checks, pixel-identical snapshots against `main`
 (as in PR 1), and `git diff -M --stat` showing mostly moves.
+
+**Done (2026-09-26)**, in two commits, one per file. Every test moved
+with its code; the same 323 lib tests pass, and the 66 snapshots are
+byte-identical to `main`. Apart from imports and module docs, the only
+edits are visibility (`pub(super)` on what a parent now calls in a
+child) and paths that lost a prefix (`shell::Prompt` inside `shell.rs`).
+The split:
+
+- **`ui/features/browse/`** (2392 lines before): `mod.rs` (1276: state,
+  messages, `update`, routing, drops, and the `Browser` test harness),
+  `view.rs` (the page, breadcrumbs, listing, rows, sorting), `preview.rs`
+  (the image preview and decoding), `files.rs` (the `Files` trait over
+  `BrowsePlugin`, and the fake phone the tests use), `describe.rs` (error
+  wording). No `listing.rs`: fetching is `BrowseUi`'s state and stays
+  with it; sorting went to `view.rs`, where it is used.
+- **`ui/mod.rs`** (3614 lines before, 829 after): `launch.rs` (the public
+  entry points `run`, `program`, `UiOptions`, `Started`, `Service`,
+  `Desktop`, re-exported from `ui`; booting and Retry), `shell.rs` gained
+  the `App` side of what features ask (toasts, reports, dialogs, prompts,
+  pickers, timers), `background.rs` gained the window's life (show,
+  close to the tray, quit, placement) with the tray and notifications,
+  `drops.rs` (dropped files and the chooser), `actions.rs` (what the
+  shell's own pages ask of the core: scanning, add by address, pairing,
+  unpairing, transfers, received files, settings). The shared test
+  harness (fakes, app builders, `settle`, `click`) is `ui/tests.rs`,
+  with `mod.rs`'s own tests. `react` stays whole in `mod.rs`: it is the
+  dispatch.
+
+Checked in the real app (`--demo`, loopback, Xvfb, private bus): the
+device list, a device page, the Unpair confirmation and Cancel, the tray
+menu over dbusmenu (Show details, Browse files, which open the window on
+their page), Back, and Quit from the tray saving `window.json`.
 
 ## PR 3: docs
 
