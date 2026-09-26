@@ -189,7 +189,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            ca-certificates curl git gcc libc6-dev pkg-config libxcb1-dev dpkg-dev
+            ca-certificates curl git gcc libc6-dev pkg-config dpkg-dev
           # The checkout belongs to another user than the job's root, so git
           # (git describe, in gui/build.rs) refuses it as "dubious ownership".
           git config --global --add safe.directory '*'

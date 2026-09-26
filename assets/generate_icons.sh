@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Render every platform's app icon, and the tray icons, from the SVGs in
-# icon/. Run this after changing an SVG and commit the output.
+# Render every platform's app icon, the tray icons and the website's icon
+# from the SVGs in icon/. Run this after changing an SVG and commit the
+# output.
 #
 # icon/app_icon.svg is the full drawing; icon/app_icon_small.svg is the same
 # drawing simplified for 32 px and below, where the ribs and the wave would
@@ -78,6 +79,9 @@ for size in 16 24 32 48 64 128 256 512; do
 done
 mkdir -p "$hicolor/scalable/apps"
 cp "$full" "$hicolor/scalable/apps/$app_id.svg"
+
+# The website's favicon and header logo: the full drawing as is.
+cp "$full" ../site/icon.svg
 
 # The window's own icon (X11 and Windows title bars and task switchers).
 render "$full" 128 "$tmp/window.png"
