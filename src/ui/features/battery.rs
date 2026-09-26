@@ -3,7 +3,7 @@
 use iced_fonts::lucide;
 use serde_json::json;
 
-use super::{BatteryStatus, PACKET_TYPE};
+use crate::plugins::battery::{BatteryStatus, PACKET_TYPE};
 use crate::{
     core::DeviceSnapshot,
     protocol::{DeviceType, Packet},
@@ -20,7 +20,7 @@ impl UiPlugin for BatteryUi {
     type Message = Message;
 
     fn id(&self) -> &'static str {
-        super::ID
+        crate::plugins::battery::ID
     }
 
     fn device_status(&self, device: &DeviceSnapshot) -> Option<DeviceStatus> {
@@ -94,7 +94,7 @@ mod tests {
         let mut device = testing::device(name);
         if let Some(battery) = battery {
             device.plugins.insert(
-                super::super::ID.into(),
+                crate::plugins::battery::ID.into(),
                 serde_json::to_value(battery).unwrap(),
             );
         }
@@ -135,7 +135,7 @@ mod tests {
                     .try_into()
                     .unwrap();
                 packet
-                    .body_as::<super::super::BatteryBody>()
+                    .body_as::<crate::plugins::battery::BatteryBody>()
                     .unwrap()
                     .current_charge
             })

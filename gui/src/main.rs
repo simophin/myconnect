@@ -93,13 +93,14 @@ fn main() -> Result<()> {
     let start = move || -> ui::StartFuture {
         let request = request.clone();
         Box::pin(async move {
-            let mut ui_plugins = Vec::new();
+            let mut ui_plugins = None;
             let service = RunningService::start_with(request, |clipboard| {
-                let builtin = plugins::builtin_with_ui(clipboard);
-                ui_plugins = builtin.ui;
-                builtin.core
+                let parts = plugins::builtin_parts(clipboard);
+                ui_plugins = Some((parts.clipboard, parts.browse));
+                parts.core
             })
             .await?;
+            let (clipboard, browse) = ui_plugins.expect("the daemon built its plugins");
             tracing::info!(
                 device_id = service.core().local_device_id(),
                 api = %service.api_addr(),
@@ -107,7 +108,8 @@ fn main() -> Result<()> {
             );
             Ok(ui::Started {
                 service,
-                plugins: ui_plugins,
+                clipboard,
+                browse,
             })
         })
     };

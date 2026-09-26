@@ -21,8 +21,6 @@
 mod backend;
 mod http;
 pub mod packet;
-#[cfg(feature = "gui")]
-pub mod ui;
 
 use std::{
     sync::{Arc, Mutex, PoisonError},

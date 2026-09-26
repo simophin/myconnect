@@ -2,7 +2,7 @@
 
 use iced_fonts::lucide;
 
-use super::{REQUEST_PACKET_TYPE, ring_device};
+use crate::plugins::findmyphone::{REQUEST_PACKET_TYPE, ring_device};
 use crate::{
     core::{DeviceReachability, DeviceSnapshot},
     ui::{
@@ -24,7 +24,7 @@ impl UiPlugin for FindMyPhoneUi {
     type Message = Message;
 
     fn id(&self) -> &'static str {
-        super::ID
+        crate::plugins::findmyphone::ID
     }
 
     /// Listed for every device, enabled while it is connected and can ring.

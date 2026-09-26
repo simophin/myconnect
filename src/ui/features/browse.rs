@@ -18,7 +18,7 @@ use iced::{
 use iced_fonts::lucide;
 use tokio::io::AsyncReadExt;
 
-use super::{
+use crate::plugins::browse::{
     BrowseError, BrowsePlugin, DirectoryListing, FileEntry, FileKind, ID, REQUEST_PACKET_TYPE,
     UploadPathError,
     files::{join_remote_path, split_remote_path},

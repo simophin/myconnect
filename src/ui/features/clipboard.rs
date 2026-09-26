@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use iced_fonts::lucide;
 
-use super::{ClipboardPlugin, ClipboardSettings, ClipboardSyncError, PACKET_TYPE};
+use crate::plugins::clipboard::{
+    ClipboardPlugin, ClipboardSettings, ClipboardSyncError, PACKET_TYPE,
+};
 use crate::{
     core::{DeviceReachability, DeviceSnapshot, SettingsSnapshot},
     ui::{
@@ -48,7 +50,7 @@ impl UiPlugin for ClipboardUi {
     type Message = Message;
 
     fn id(&self) -> &'static str {
-        super::ID
+        crate::plugins::clipboard::ID
     }
 
     /// Listed for a device that takes clipboard text at all, enabled while

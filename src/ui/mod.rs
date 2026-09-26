@@ -17,6 +17,7 @@ pub mod background;
 pub mod demo;
 pub mod desktop;
 pub mod error;
+pub mod features;
 pub mod overlay;
 pub mod pages;
 pub mod plugin;
@@ -53,6 +54,7 @@ use crate::{
     config,
     core::{Core, CoreError, PairingSnapshot, SettingsPatch, SettingsSnapshot},
     daemon::RunningService,
+    plugins::{browse::BrowsePlugin, clipboard::ClipboardPlugin},
 };
 use desktop::{
     DesktopEvent,
@@ -92,11 +94,12 @@ pub struct UiOptions {
     pub data_dir: Option<PathBuf>,
 }
 
-/// A started daemon, and the UI halves of the plugins it runs.
+/// A started daemon, and the plugins it runs that the UI calls too
+/// (`plugins::builtin_parts`).
 pub struct Started {
     pub service: RunningService,
-    /// Every feature's UI half, in `plugins::builtin_with_ui` order.
-    pub plugins: Vec<Box<dyn ErasedUiPlugin>>,
+    pub clipboard: Arc<ClipboardPlugin>,
+    pub browse: Arc<BrowsePlugin>,
 }
 
 /// Starting the daemon, which may fail.
@@ -405,7 +408,7 @@ enum Phase {
 /// The UI once the daemon runs.
 struct Running {
     ctx: UiContext,
-    /// Every feature's UI half, in `plugins::builtin_with_ui` order.
+    /// Every feature's UI, in `plugins::builtin` order.
     plugins: Vec<Box<dyn ErasedUiPlugin>>,
 }
 
@@ -474,13 +477,11 @@ impl App {
     fn started(&mut self, started: Started) -> Task<Message> {
         let core = started.service.core().clone();
         self.service.set(started.service);
-        let ids: Vec<_> = started.plugins.iter().map(|plugin| plugin.id()).collect();
-        tracing::debug!(plugins = ?ids, "UI plugins");
         let mut ctx = UiContext::new(core, self.options.runtime.clone());
         ctx.set_window_focused(self.focused());
         self.phase = Phase::Running(Box::new(Running {
             ctx,
-            plugins: started.plugins,
+            plugins: features::all(started.clipboard, started.browse),
         }));
         if self.options.demo
             && let Phase::Running(running) = &self.phase
@@ -2513,7 +2514,7 @@ mod tests {
                 crate::plugins::clipboard::InMemoryClipboard::shared(),
             ),
         );
-        let clipboard = crate::plugins::clipboard::ui::ClipboardUi::new(plugin);
+        let clipboard = crate::ui::features::clipboard::ClipboardUi::new(plugin);
         let mut app = running_on(core.clone(), vec![Box::new(clipboard)]);
         settle(&mut app, Message::Reload).await;
         settle(&mut app, Message::Navigate(Route::Settings)).await;
@@ -2633,7 +2634,7 @@ mod tests {
                 crate::core::testing::handle_with_plugin(crate::plugins::share::SharePlugin);
             let app = running_on(
                 core.clone(),
-                vec![Box::new(crate::plugins::share::ui::ShareUi)],
+                vec![Box::new(crate::ui::features::share::ShareUi)],
             );
             let files = tempfile::tempdir().unwrap();
             std::fs::write(files.path().join("photo.jpg"), "jpg").unwrap();
@@ -2731,9 +2732,9 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn files_dropped_on_a_browse_folder_upload_there_and_elsewhere_send() {
-        use crate::plugins::browse::{
-            self,
-            ui::tests::{Call, phone_files},
+        use crate::{
+            plugins::browse,
+            ui::features::browse::tests::{Call, phone_files},
         };
 
         let mut sharing = Sharing::new();
@@ -2743,7 +2744,9 @@ mod tests {
         };
         running
             .plugins
-            .push(Box::new(browse::ui::BrowseUi::with_files(phone.clone())));
+            .push(Box::new(features::browse::BrowseUi::with_files(
+                phone.clone(),
+            )));
         let (peer, sent) = testing::connect_peer(
             &sharing.core,
             testing::PEER_ID,
@@ -2763,11 +2766,14 @@ mod tests {
         )
         .await;
         click(&mut sharing.app, "Browse files").await;
-        assert_eq!(sharing.app.route, browse::ui::route(&peer, None));
+        assert_eq!(sharing.app.route, features::browse::route(&peer, None));
         assert!(shows(&sharing.app, "Files on Peer"));
         click(&mut sharing.app, "All files").await;
         let folder = "/storage/emulated/0";
-        assert_eq!(sharing.app.route, browse::ui::route(&peer, Some(folder)));
+        assert_eq!(
+            sharing.app.route,
+            features::browse::route(&peer, Some(folder))
+        );
 
         let photo = sharing.file("photo.jpg");
         sharing.hover(std::slice::from_ref(&photo)).await;
@@ -3086,8 +3092,8 @@ mod tests {
         running_on_desktop(
             core,
             vec![
-                Box::new(crate::plugins::ping::ui::PingUi),
-                Box::new(crate::plugins::findmyphone::ui::FindMyPhoneUi),
+                Box::new(crate::ui::features::ping::PingUi),
+                Box::new(crate::ui::features::findmyphone::FindMyPhoneUi),
             ],
             fakes,
         )
@@ -3450,8 +3456,8 @@ mod tests {
             core.clone(),
             vec![
                 Box::new(Charge),
-                Box::new(crate::plugins::ping::ui::PingUi),
-                Box::new(crate::plugins::findmyphone::ui::FindMyPhoneUi),
+                Box::new(crate::ui::features::ping::PingUi),
+                Box::new(crate::ui::features::findmyphone::FindMyPhoneUi),
             ],
             &fakes,
         );
@@ -3624,7 +3630,7 @@ mod tests {
             crate::core::testing::handle_with_plugin(crate::plugins::share::SharePlugin);
         let mut app = running_on_desktop(
             core.clone(),
-            vec![Box::new(crate::plugins::share::ui::ShareUi)],
+            vec![Box::new(crate::ui::features::share::ShareUi)],
             &fakes,
         );
         let files = tempfile::tempdir().unwrap();

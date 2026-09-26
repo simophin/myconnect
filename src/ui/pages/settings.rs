@@ -33,7 +33,7 @@ pub struct Actions<M> {
 }
 
 /// The settings `store` holds, with every plugin's section, in
-/// `plugins::builtin_with_ui` order, after the download folder. `version`
+/// `plugins::builtin` order, after the download folder. `version`
 /// is the app's.
 pub fn view<'a, M: Clone + 'a>(
     store: &'a Store,

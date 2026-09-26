@@ -3,7 +3,7 @@
 
 use iced_fonts::lucide;
 
-use super::{PACKET_TYPE, ReceivedPing, send_ping};
+use crate::plugins::ping::{PACKET_TYPE, ReceivedPing, send_ping};
 use crate::{
     core::{CoreEvent, DeviceReachability, DeviceSnapshot, EventData},
     ui::{
@@ -25,7 +25,7 @@ impl UiPlugin for PingUi {
     type Message = Message;
 
     fn id(&self) -> &'static str {
-        super::ID
+        crate::plugins::ping::ID
     }
 
     /// Listed for every device, enabled while it is connected and takes

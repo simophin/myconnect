@@ -22,33 +22,23 @@ use crate::core::Plugin;
 pub fn builtin(
     clipboard: Arc<dyn clipboard::ClipboardService + Send + Sync>,
 ) -> Vec<Arc<dyn Plugin>> {
-    vec![
-        Arc::new(ping::PingPlugin),
-        Arc::new(findmyphone::FindMyPhonePlugin),
-        Arc::new(battery::BatteryPlugin::default()),
-        Arc::new(clipboard::ClipboardPlugin::new(clipboard)),
-        Arc::new(share::SharePlugin),
-        Arc::new(browse::BrowsePlugin::default()),
-    ]
+    builtin_parts(clipboard).core
 }
 
-/// The plugins [`builtin_with_ui`] builds: the core's list, and the UI
-/// halves of the same instances.
-#[cfg(feature = "gui")]
-pub struct Builtin {
+/// The plugins [`builtin_parts`] builds: the core's list, and the
+/// instances in it that the desktop app's UI calls too.
+pub struct Parts {
     pub core: Vec<Arc<dyn Plugin>>,
-    pub ui: Vec<Box<dyn crate::ui::plugin::ErasedUiPlugin>>,
+    pub clipboard: Arc<clipboard::ClipboardPlugin>,
+    pub browse: Arc<browse::BrowsePlugin>,
 }
 
-/// Every plugin in this build, as [`builtin`] lists them, plus the UI half
-/// of each feature that has one, built from the same instance the core
-/// runs. Keep both lists in [`builtin`]'s order: the UI shows each plugin's
-/// actions and sections in this order.
-#[cfg(feature = "gui")]
-pub fn builtin_with_ui(clipboard: Arc<dyn clipboard::ClipboardService + Send + Sync>) -> Builtin {
+/// Every plugin in this build, and the instances among them that the UI
+/// calls too.
+pub fn builtin_parts(clipboard: Arc<dyn clipboard::ClipboardService + Send + Sync>) -> Parts {
     let clipboard = Arc::new(clipboard::ClipboardPlugin::new(clipboard));
     let browse = Arc::new(browse::BrowsePlugin::default());
-    Builtin {
+    Parts {
         core: vec![
             Arc::new(ping::PingPlugin),
             Arc::new(findmyphone::FindMyPhonePlugin),
@@ -57,14 +47,8 @@ pub fn builtin_with_ui(clipboard: Arc<dyn clipboard::ClipboardService + Send + S
             Arc::new(share::SharePlugin),
             browse.clone(),
         ],
-        ui: vec![
-            Box::new(ping::ui::PingUi),
-            Box::new(findmyphone::ui::FindMyPhoneUi),
-            Box::new(battery::ui::BatteryUi),
-            Box::new(clipboard::ui::ClipboardUi::new(clipboard)),
-            Box::new(share::ui::ShareUi),
-            Box::new(browse::ui::BrowseUi::new(browse)),
-        ],
+        clipboard,
+        browse,
     }
 }
 
@@ -72,29 +56,6 @@ pub fn builtin_with_ui(clipboard: Arc<dyn clipboard::ClipboardService + Send + S
 mod tests {
     use super::*;
     use crate::core::PluginRegistry;
-
-    #[cfg(feature = "gui")]
-    #[test]
-    fn builtin_with_ui_runs_the_same_plugins_in_the_same_order() {
-        fn ids(plugins: &[Arc<dyn Plugin>]) -> Vec<&'static str> {
-            plugins.iter().map(|plugin| plugin.id()).collect()
-        }
-        let clipboard = clipboard::InMemoryClipboard::shared;
-        let with_ui = builtin_with_ui(clipboard());
-        let core = ids(&with_ui.core);
-        assert_eq!(core, ids(&builtin(clipboard())));
-        // Each UI half belongs to a core plugin, in the same order.
-        let positions: Vec<_> = with_ui
-            .ui
-            .iter()
-            .map(|plugin| {
-                core.iter()
-                    .position(|id| *id == plugin.id())
-                    .expect("a core plugin")
-            })
-            .collect();
-        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
-    }
 
     #[test]
     fn advertises_ping_clipboard_and_share_both_directions_and_the_rest_one_way() {

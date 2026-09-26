@@ -5,7 +5,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use iced_fonts::lucide;
 
-use super::{PACKET_TYPE, SendPathError, send_path};
+use crate::plugins::share::{PACKET_TYPE, SendPathError, send_path};
 use crate::{
     core::{DeviceReachability, DeviceSnapshot},
     ui::{
@@ -40,7 +40,7 @@ impl UiPlugin for ShareUi {
     type Message = Message;
 
     fn id(&self) -> &'static str {
-        super::ID
+        crate::plugins::share::ID
     }
 
     /// Listed for every device, enabled while it takes files.
