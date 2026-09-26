@@ -103,6 +103,11 @@ the CLI, and for tagged builds an Arch Linux PKGBUILD. The scripts are in
 
 ## Open work
 
+**Moving the UI's feature code into `src/ui/`**, in three PRs:
+[`PLAN_UI_FLATTEN.md`](PLAN_UI_FLATTEN.md). Until it's done, that plan
+overrides what this file and `ARCHITECTURE.md` say about where a feature's
+UI lives.
+
 **The tray and notifications on macOS and Windows** (the plan's step
 13b). They work on Linux only; macOS and Windows get no tray, so the app
 quits when its window closes there, and no notifications. It needs a Mac
