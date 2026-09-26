@@ -219,11 +219,12 @@ Decisions for steps 11 and 13:
   notification id (AUMID), which the installer registers under
   `HKCU\Software\Classes\AppUserModelId`. The Flutter app had an id
   of its own, from before the app was named Ferry.
-- **Names** (owner's decision): `/usr/bin/Ferry` and the CLI as
-  `/usr/bin/ferry` in the same `.deb`; `Ferry.app/Contents/MacOS/Ferry`
-  (no CLI); `Ferry.exe` and the CLI as `cli\ferry.exe`. The
-  Windows installer is per user (`%LOCALAPPDATA%\Programs\Ferry`, no
-  administrator rights), with a Start menu shortcut.
+- **Names** (owner's decision): `/usr/bin/ferry-gui` (cargo's name for
+  the app) and the CLI as `/usr/bin/ferry` in the same `.deb`;
+  `Ferry.app/Contents/MacOS/Ferry` (no CLI); `Ferry.exe` and the CLI
+  as `cli\ferry.exe`. The Windows installer is per user
+  (`%LOCALAPPDATA%\Programs\Ferry`, no administrator rights), with a
+  Start menu shortcut.
 - **Icons** come from `assets/icon/*.svg` through `assets/generate_icons.sh`,
   which writes every platform's: the hicolor theme, the macOS iconset, the
   Windows `.ico`, the window icon and the tray icons.

@@ -22,7 +22,7 @@ apt-get update -qq
 apt-get install -y -qq --no-install-recommends "$package" \
   xvfb xauth dbus x11-utils python3 desktop-file-utils >/dev/null
 
-test -x /usr/bin/Ferry
+test -x /usr/bin/ferry-gui
 test -x /usr/bin/ferry
 # Debian 12's validator predates SingleMainWindow (Desktop Entry 1.5).
 problems=$(desktop-file-validate /usr/share/applications/dev.fanchao.Ferry.desktop |
@@ -32,7 +32,7 @@ if [ -n "$problems" ]; then
   exit 1
 fi
 test -f /usr/share/icons/hicolor/256x256/apps/dev.fanchao.Ferry.png
-Ferry --version
+ferry-gui --version
 ferry --version
 
 run=$(mktemp -d)
@@ -41,7 +41,7 @@ port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); pr
 
 cat >"$run/session.sh" <<SESSION
 set -eu
-Ferry --data-dir "$run/data" --download-dir "$run/downloads" \
+ferry-gui --data-dir "$run/data" --download-dir "$run/downloads" \
   --discovery-loopback --no-system-clipboard --device-name "Package check" \
   --api-port $port --api-token check >"$run/app.log" 2>&1 &
 app=\$!
