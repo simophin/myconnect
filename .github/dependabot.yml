@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # iced is pre-1.0, so its "minor" bumps break; keep its crates in
+      # their own PR, moving together.
+      iced:
+        patterns: ["iced*"]
+      cargo:
+        update-types: [minor, patch]
+        exclude-patterns: ["iced*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
