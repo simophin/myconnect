@@ -7,7 +7,8 @@
 //! an offer for its own SFTP server. That server behaves like Android's:
 //! its host key is the phone's TLS key, it accepts the paired desktop's TLS
 //! key or the one-off password, and it serves a directory on disk as the
-//! phone's storage.
+//! phone's storage. It also shares notifications as Android does, when a
+//! test posts one, and records what the desktop asks of them.
 
 #![allow(dead_code)]
 
@@ -29,6 +30,12 @@ use ferry::{
     plugins::{
         battery::PACKET_TYPE as BATTERY_PACKET_TYPE,
         browse::{PACKET_TYPE as SFTP_PACKET_TYPE, REQUEST_PACKET_TYPE},
+        notifications::{
+            ACTION_PACKET_TYPE as NOTIFICATION_ACTION_PACKET_TYPE,
+            PACKET_TYPE as NOTIFICATION_PACKET_TYPE,
+            REPLY_PACKET_TYPE as NOTIFICATION_REPLY_PACKET_TYPE,
+            REQUEST_PACKET_TYPE as NOTIFICATION_REQUEST_PACKET_TYPE,
+        },
     },
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
     transport::tls::{self, PeerPin, TlsMaterial},
@@ -88,6 +95,10 @@ pub struct PhoneLog {
     pub sftp_sessions: AtomicUsize,
     /// SSH connections currently open.
     pub open_connections: AtomicUsize,
+    /// The `kdeconnect.notification.*` packets the desktop sent.
+    pub notification_packets: Mutex<Vec<Packet>>,
+    /// Icons the desktop fetched.
+    pub icons_served: AtomicUsize,
 }
 
 struct Shared {
@@ -98,6 +109,9 @@ struct Shared {
     packets: Mutex<Option<mpsc::Sender<Packet>>>,
     sftp_port: u16,
     log: Arc<PhoneLog>,
+    identity: Arc<LocalIdentity>,
+    /// The desktop connected to, once it is.
+    desktop_id: Mutex<Option<String>>,
 }
 
 pub struct FakePhone {
@@ -130,6 +144,8 @@ impl FakePhone {
             packets: Mutex::new(None),
             sftp_port: sftp_listener.local_addr().unwrap().port(),
             log: log.clone(),
+            identity: identity.clone(),
+            desktop_id: Mutex::new(None),
         });
         let udp = bind_discovery(config.discovery_bind);
         let discovery_addr = udp.local_addr().unwrap();
@@ -188,6 +204,43 @@ impl FakePhone {
         self.send(battery_report(charge, charging)).await;
     }
 
+    /// Post (or update) a notification, as Android does: `body` is the
+    /// packet's body, and `icon`, if any, is offered as its payload on a
+    /// port of its own, served once over TLS.
+    pub async fn post_notification(&self, body: Value, icon: Option<Vec<u8>>) {
+        let mut packet = Packet::from_body(0_u64, NOTIFICATION_PACKET_TYPE, &body).unwrap();
+        if let Some(icon) = icon {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            packet.payload_size = Some(icon.len() as i64);
+            packet.payload_transfer_info = Some(json!({"port": port}).as_object().unwrap().clone());
+            let shared = self.shared.clone();
+            let cancellation = self.cancellation.clone();
+            tokio::spawn(async move {
+                let accepted = tokio::select! {
+                    _ = cancellation.cancelled() => return,
+                    accepted = listener.accept() => accepted,
+                };
+                let Ok((stream, _)) = accepted else { return };
+                let desktop_id = shared.desktop_id.lock().unwrap().clone().unwrap();
+                let material = TlsMaterial::new(
+                    shared.identity.certificate_der(),
+                    shared.identity.private_key_der(),
+                );
+                let Ok(mut stream) =
+                    tls::accept(stream, &material, &desktop_id, PeerPin::Unpinned).await
+                else {
+                    return;
+                };
+                if stream.write_all(&icon).await.is_ok() {
+                    let _ = stream.shutdown().await;
+                    shared.log.icons_served.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+        }
+        self.send(packet).await;
+    }
+
     pub async fn stop(mut self) {
         self.cancellation.cancel();
         while self.tasks.join_next().await.is_some() {}
@@ -220,11 +273,15 @@ fn identity_packet(device_id: &str, name: &str, extra: Map<String, Value>) -> Ve
             REQUEST_PACKET_TYPE.into(),
             "kdeconnect.ping".into(),
             "kdeconnect.findmyphone.request".into(),
+            NOTIFICATION_REQUEST_PACKET_TYPE.into(),
+            NOTIFICATION_REPLY_PACKET_TYPE.into(),
+            NOTIFICATION_ACTION_PACKET_TYPE.into(),
         ],
         outgoing_capabilities: vec![
             SFTP_PACKET_TYPE.into(),
             "kdeconnect.ping".into(),
             BATTERY_PACKET_TYPE.into(),
+            NOTIFICATION_PACKET_TYPE.into(),
         ],
         protocol_version: 8,
         extra,
@@ -287,6 +344,7 @@ async fn connect_to_desktop(
         .await
         .unwrap();
     let desktop_certificate = tls::server_peer_certificate(&tls_stream).unwrap();
+    *shared.desktop_id.lock().unwrap() = Some(desktop_id.clone());
     let (mut reader, mut writer) = tokio::io::split(tls_stream);
     writer
         .write_all(&identity_packet(
@@ -355,6 +413,16 @@ async fn connect_to_desktop(
                 REQUEST_PACKET_TYPE => {
                     shared.log.browse_requests.fetch_add(1, Ordering::SeqCst);
                     let _ = sender.send(browse_reply(&shared)).await;
+                }
+                NOTIFICATION_REQUEST_PACKET_TYPE
+                | NOTIFICATION_REPLY_PACKET_TYPE
+                | NOTIFICATION_ACTION_PACKET_TYPE => {
+                    shared
+                        .log
+                        .notification_packets
+                        .lock()
+                        .unwrap()
+                        .push(packet.clone());
                 }
                 _ => {}
             }

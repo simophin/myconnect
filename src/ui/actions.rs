@@ -340,7 +340,7 @@ mod tests {
             LanCommand, PairingDirection, PairingSnapshot, PairingStatus, SettingsSnapshot,
             TransferDirection, testing::handle,
         },
-        plugins::browse::BrowsePlugin,
+        plugins::{browse::BrowsePlugin, notifications::NotificationsPlugin},
         ui::{
             KeyCommand, Origin, Snapshot,
             desktop::{autostart::LoginItem, open::Open},
@@ -787,7 +787,11 @@ mod tests {
                 crate::plugins::clipboard::InMemoryClipboard::shared(),
             ),
         );
-        let features = Features::new(plugin, Arc::new(BrowsePlugin::default()));
+        let features = Features::new(
+            plugin,
+            Arc::new(BrowsePlugin::default()),
+            Arc::new(NotificationsPlugin::default()),
+        );
         let mut app = running_with(core.clone(), features, &Fakes::default());
         settle(&mut app, Message::Reload).await;
         settle(&mut app, Message::Navigate(Route::Settings, Origin::Window)).await;

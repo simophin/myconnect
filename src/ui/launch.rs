@@ -35,7 +35,9 @@ use super::{
 use crate::{
     config,
     daemon::RunningService,
-    plugins::{browse::BrowsePlugin, clipboard::ClipboardPlugin},
+    plugins::{
+        browse::BrowsePlugin, clipboard::ClipboardPlugin, notifications::NotificationsPlugin,
+    },
 };
 
 /// How the UI runs, besides the service it shows.
@@ -62,6 +64,7 @@ pub struct Started {
     pub service: RunningService,
     pub clipboard: Arc<ClipboardPlugin>,
     pub browse: Arc<BrowsePlugin>,
+    pub notifications: Arc<NotificationsPlugin>,
 }
 
 /// Starting the daemon, which may fail.
@@ -248,7 +251,7 @@ impl App {
         ctx.set_window_focused(self.focused());
         self.phase = Phase::Running(Box::new(Running {
             ctx,
-            features: Features::new(started.clipboard, started.browse),
+            features: Features::new(started.clipboard, started.browse, started.notifications),
         }));
         if self.options.demo
             && let Phase::Running(running) = &self.phase

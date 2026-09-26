@@ -23,6 +23,8 @@ pub enum Route {
         device: String,
         folder: Option<String>,
     },
+    /// A device's notifications, by the device's id.
+    Notifications(String),
 }
 
 impl Route {
@@ -36,7 +38,9 @@ impl Route {
             }
             Self::Pairing(_) => Some(Self::AddDevice),
             Self::About => Some(Self::Settings),
-            Self::Browse { device, .. } => Some(Self::Device(device.clone())),
+            Self::Browse { device, .. } | Self::Notifications(device) => {
+                Some(Self::Device(device.clone()))
+            }
         }
     }
 }
@@ -45,7 +49,9 @@ impl Route {
     /// The device this page is about, if any.
     pub fn device(&self) -> Option<&str> {
         match self {
-            Self::Device(device) | Self::Browse { device, .. } => Some(device),
+            Self::Device(device) | Self::Browse { device, .. } | Self::Notifications(device) => {
+                Some(device)
+            }
             _ => None,
         }
     }

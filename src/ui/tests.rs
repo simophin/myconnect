@@ -11,6 +11,7 @@ use crate::{
     plugins::{
         browse::BrowsePlugin,
         clipboard::{ClipboardPlugin, InMemoryClipboard},
+        notifications::NotificationsPlugin,
     },
     ui::desktop::{
         autostart::LoginItem,
@@ -197,12 +198,13 @@ pub(super) fn app_on(runtime: tokio::runtime::Handle, fakes: &Fakes) -> App {
     .0
 }
 
-/// The features, over clipboard and browse plugins of their own, which
+/// The features, over clipboard, browse and notifications plugins of their own, which
 /// the test's core doesn't run.
 pub(super) fn features() -> Features {
     Features::new(
         Arc::new(ClipboardPlugin::new(InMemoryClipboard::shared())),
         Arc::new(BrowsePlugin::default()),
+        Arc::new(NotificationsPlugin::default()),
     )
 }
 

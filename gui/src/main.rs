@@ -94,11 +94,12 @@ fn main() -> Result<()> {
             let mut ui_plugins = None;
             let service = RunningService::start_with(request, |clipboard| {
                 let parts = plugins::builtin_parts(clipboard);
-                ui_plugins = Some((parts.clipboard, parts.browse));
+                ui_plugins = Some((parts.clipboard, parts.browse, parts.notifications));
                 parts.core
             })
             .await?;
-            let (clipboard, browse) = ui_plugins.expect("the daemon built its plugins");
+            let (clipboard, browse, notifications) =
+                ui_plugins.expect("the daemon built its plugins");
             tracing::info!(
                 device_id = service.core().local_device_id(),
                 api = %service.api_addr(),
@@ -108,6 +109,7 @@ fn main() -> Result<()> {
                 service,
                 clipboard,
                 browse,
+                notifications,
             })
         })
     };

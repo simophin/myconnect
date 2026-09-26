@@ -1,0 +1,642 @@
+//! Notifications' UI: a desktop notification for each one that is news, the
+//! *Notifications* action, and the page listing a device's notifications
+//! ([`Route::Notifications`]) with Reply, their buttons, and Dismiss.
+//!
+//! The page shows a copy of the plugin's list, taken again whenever one of
+//! the device's notifications changes, the device's connection changes,
+//! the page opens, or the shell takes a fresh snapshot.
+
+use std::{collections::HashMap, sync::Arc};
+
+use iced::{
+    Alignment, Element, Length, Task, Theme,
+    widget::{button, column, container, image, row, scrollable, space, text},
+};
+use iced_fonts::lucide;
+use serde_json::json;
+
+use super::{DeviceAction, Feature};
+use crate::{
+    core::{CoreEvent, DeviceReachability, DeviceSnapshot, EventData},
+    plugins::notifications::{
+        Notification, NotificationError, NotificationPosted, NotificationRemoved,
+        NotificationsPlugin, PACKET_TYPE,
+    },
+    protocol::{DeviceType, Packet},
+    ui::{
+        self, Origin,
+        context::UiContext,
+        error::describe_code,
+        route::Route,
+        shell::{self, Prompt},
+        widgets,
+    },
+};
+
+#[derive(Debug, Clone)]
+pub enum Message {
+    /// Show the device's notifications.
+    Open {
+        device_id: String,
+    },
+    /// Back to the device's page.
+    Close {
+        device_id: String,
+    },
+    /// Ask for a reply to a notification; `title` names it in the prompt.
+    Reply {
+        device_id: String,
+        id: String,
+        title: String,
+    },
+    /// Send the reply the prompt got.
+    SendReply {
+        device_id: String,
+        id: String,
+        message: String,
+    },
+    /// Press one of a notification's buttons.
+    Action {
+        device_id: String,
+        id: String,
+        action: String,
+    },
+    Dismiss {
+        device_id: String,
+        id: String,
+    },
+}
+
+/// A notification as the page shows it: the plugin's, and its icon ready
+/// to draw.
+#[derive(Clone)]
+struct Shown {
+    notification: Notification,
+    icon: Option<image::Handle>,
+}
+
+pub(crate) struct NotificationsUi {
+    plugin: Arc<NotificationsPlugin>,
+    /// Each device's notifications, newest first, as last taken from the
+    /// plugin.
+    devices: HashMap<String, Vec<Shown>>,
+}
+
+impl NotificationsUi {
+    pub(crate) fn new(plugin: Arc<NotificationsPlugin>) -> Self {
+        Self {
+            plugin,
+            devices: HashMap::new(),
+        }
+    }
+
+    /// Listed for a device that shares its notifications, enabled while it
+    /// is connected, with how many it shows.
+    pub fn device_actions(&self, device: &DeviceSnapshot) -> Vec<DeviceAction> {
+        if !shares_notifications(device) {
+            return Vec::new();
+        }
+        let count = self.devices.get(&device.device_id).map_or(0, Vec::len);
+        vec![DeviceAction {
+            id: "notifications",
+            label: match count {
+                0 => "Notifications".into(),
+                count => format!("Notifications ({count})"),
+            },
+            icon: lucide::inbox,
+            enabled: device.reachability == DeviceReachability::Connected,
+            visible_in_tray: false,
+            message: Feature::Notifications(Message::Open {
+                device_id: device.device_id.clone(),
+            }),
+        }]
+    }
+
+    pub(crate) fn on_event(&mut self, event: &CoreEvent) -> Task<ui::Message> {
+        match &event.event {
+            EventData::Plugin(event) => {
+                if let Some(posted) = event.decode::<NotificationPosted>() {
+                    // Its icon may have changed under the same id.
+                    if let Some(shown) = self.devices.get_mut(&posted.device_id) {
+                        shown.retain(|shown| shown.notification.id != posted.notification.id);
+                    }
+                    self.refresh(&posted.device_id);
+                    if posted.alert {
+                        return announce(&posted);
+                    }
+                } else if let Some(removed) = event.decode::<NotificationRemoved>() {
+                    self.refresh(&removed.device_id);
+                }
+            }
+            EventData::DeviceConnected(device)
+            | EventData::DeviceDisconnected(device)
+            | EventData::DeviceUpdated(device)
+            | EventData::DeviceForgotten(device) => self.refresh(&device.device_id),
+            _ => {}
+        }
+        Task::none()
+    }
+
+    pub(crate) fn on_route(&mut self, route: &Route) {
+        if let Route::Notifications(device_id) = route {
+            self.refresh(device_id);
+        }
+    }
+
+    /// The shell took a fresh snapshot, after missing events.
+    pub(crate) fn on_snapshot(&mut self) {
+        let devices: Vec<String> = self.devices.keys().cloned().collect();
+        for device_id in devices {
+            self.refresh(&device_id);
+        }
+    }
+
+    /// Take `device_id`'s notifications from the plugin again, keeping the
+    /// icons already decoded.
+    fn refresh(&mut self, device_id: &str) {
+        let notifications = self.plugin.list(device_id);
+        if notifications.is_empty() {
+            self.devices.remove(device_id);
+            return;
+        }
+        let mut previous: HashMap<String, Option<image::Handle>> = self
+            .devices
+            .remove(device_id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|shown| (shown.notification.id, shown.icon))
+            .collect();
+        let shown = notifications
+            .into_iter()
+            .map(|notification| {
+                let icon = match previous.remove(&notification.id) {
+                    Some(Some(icon)) => Some(icon),
+                    _ if notification.has_icon => self
+                        .plugin
+                        .icon(device_id, &notification.id)
+                        .and_then(|png| decode(&png)),
+                    _ => None,
+                };
+                Shown { notification, icon }
+            })
+            .collect();
+        self.devices.insert(device_id.to_owned(), shown);
+    }
+
+    pub(crate) fn update(
+        &mut self,
+        ctx: &UiContext,
+        message: Message,
+        origin: Origin,
+    ) -> Task<ui::Message> {
+        let plugin_ctx = ctx.plugin_context();
+        match message {
+            Message::Open { device_id } => shell::navigate(origin, Route::Notifications(device_id)),
+            Message::Close { device_id } => shell::navigate(origin, Route::Device(device_id)),
+            Message::Reply {
+                device_id,
+                id,
+                title,
+            } => shell::prompt(Prompt {
+                title: format!("Reply to {title}"),
+                label: "Message".into(),
+                initial: String::new(),
+                selection: None,
+                confirm_label: "Send".into(),
+                validate: Arc::new(|message: &str| {
+                    message
+                        .trim()
+                        .is_empty()
+                        .then(|| "Write a message.".to_owned())
+                }),
+                then: Arc::new(move |message| {
+                    Feature::Notifications(Message::SendReply {
+                        device_id: device_id.clone(),
+                        id: id.clone(),
+                        message,
+                    })
+                }),
+                origin,
+            }),
+            Message::SendReply {
+                device_id,
+                id,
+                message,
+            } => match self.plugin.reply(&plugin_ctx, &device_id, &id, &message) {
+                Ok(()) => shell::done(origin, "Reply sent."),
+                Err(error) => shell::failed(origin, "Couldn’t send the reply", describe(&error)),
+            },
+            Message::Action {
+                device_id,
+                id,
+                action,
+            } => match self
+                .plugin
+                .run_action(&plugin_ctx, &device_id, &id, &action)
+            {
+                Ok(()) => Task::none(),
+                Err(error) => shell::failed(origin, format!("Couldn’t {action}"), describe(&error)),
+            },
+            Message::Dismiss { device_id, id } => {
+                match self.plugin.dismiss(&plugin_ctx, &device_id, &id) {
+                    Ok(()) => {
+                        self.refresh(&device_id);
+                        Task::none()
+                    }
+                    Err(error) => shell::failed(origin, "Couldn’t dismiss it", describe(&error)),
+                }
+            }
+        }
+    }
+
+    /// The page of `device`'s notifications.
+    pub(crate) fn view<'a>(&'a self, device: &'a DeviceSnapshot) -> Element<'a, Message> {
+        let header = widgets::page_header("Notifications", Some(back(device)), vec![]);
+        let shown = self
+            .devices
+            .get(&device.device_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let body: Element<'a, Message> = if device.reachability != DeviceReachability::Connected {
+            widgets::empty_state(
+                lucide::wifi_off,
+                format!("{} isn’t connected.", device.device_name),
+                Some("Its notifications show here while it is."),
+                None,
+            )
+        } else if shown.is_empty() {
+            widgets::empty_state(
+                lucide::inbox,
+                format!("No notifications from {}.", device.device_name),
+                Some(
+                    "On the phone, let KDE Connect read notifications, and choose \
+                     which apps share them.",
+                ),
+                None,
+            )
+        } else {
+            let cards = shown.iter().map(|shown| card(&device.device_id, shown));
+            scrollable(
+                column(cards)
+                    .spacing(10)
+                    .padding(iced::Padding::default().right(12)),
+            )
+            .spacing(4)
+            .height(Length::Fill)
+            .into()
+        };
+        widgets::page(header, body)
+    }
+}
+
+/// Back to the device's page. The page only makes feature messages, so it
+/// can't send the shell's Back.
+fn back(device: &DeviceSnapshot) -> Message {
+    Message::Close {
+        device_id: device.device_id.clone(),
+    }
+}
+
+/// One notification: its icon, app, time, title and text, and what can be
+/// done with it.
+fn card<'a>(device_id: &str, shown: &'a Shown) -> Element<'a, Message> {
+    let notification = &shown.notification;
+    let icon: Element<'a, Message> = match &shown.icon {
+        Some(handle) => image(handle.clone()).width(32).height(32).into(),
+        None => container(lucide::bell().size(18)).center(32).into(),
+    };
+    let mut meta = row![
+        text(&notification.app_name)
+            .size(12)
+            .style(text::secondary)
+            .width(Length::Fill),
+    ];
+    if let Some(time) = notification.time {
+        meta = meta.push(
+            text(widgets::format_timestamp(time))
+                .size(12)
+                .style(text::secondary),
+        );
+    }
+    let mut body = column![meta].spacing(2);
+    if let Some(title) = &notification.title {
+        body = body.push(text(title).font(widgets::bold()));
+    }
+    if let Some(text_) = &notification.text {
+        body = body.push(text(text_));
+    }
+
+    let message =
+        |make: fn(String, String) -> Message| make(device_id.to_owned(), notification.id.clone());
+    let mut buttons = Vec::<Element<'a, Message>>::new();
+    if notification.repliable {
+        let title = notification
+            .title
+            .clone()
+            .unwrap_or_else(|| notification.app_name.clone());
+        buttons.push(small_button(
+            "Reply",
+            Message::Reply {
+                device_id: device_id.to_owned(),
+                id: notification.id.clone(),
+                title,
+            },
+        ));
+    }
+    for action in &notification.actions {
+        buttons.push(small_button(
+            action,
+            Message::Action {
+                device_id: device_id.to_owned(),
+                id: notification.id.clone(),
+                action: action.clone(),
+            },
+        ));
+    }
+    let mut content = column![
+        row![icon, body.width(Length::Fill)]
+            .spacing(12)
+            .align_y(Alignment::Start)
+    ]
+    .spacing(10);
+    if !buttons.is_empty() {
+        content = content.push(
+            row![
+                space::horizontal().width(44),
+                row(buttons).spacing(8).wrap()
+            ]
+            .align_y(Alignment::Center),
+        );
+    }
+    let dismiss = notification
+        .dismissable
+        .then(|| message(|device_id, id| Message::Dismiss { device_id, id }));
+    widgets::card(
+        row![
+            content.width(Length::Fill),
+            widgets::icon_button(lucide::x, "Dismiss", dismiss),
+        ]
+        .spacing(8),
+    )
+    .into()
+}
+
+fn small_button<'a>(label: &str, on_press: Message) -> Element<'a, Message> {
+    button(text(label.to_owned()).size(13))
+        .padding([4, 12])
+        .style(|theme: &Theme, status| widgets::tonal(theme, status))
+        .on_press(on_press)
+        .into()
+}
+
+/// A desktop notification (or a toast, with the window focused) for one
+/// that is news: "Ana" over "Dinner?", or the app's name when it has no
+/// title.
+fn announce(posted: &NotificationPosted) -> Task<ui::Message> {
+    let notification = &posted.notification;
+    let title = match &notification.title {
+        Some(title) => title.clone(),
+        None => notification.app_name.clone(),
+    };
+    let body = notification.text.clone().unwrap_or_default();
+    shell::notify(format!("{title} · {}", posted.device_name), body)
+}
+
+/// `--demo`: a made-up phone shows two notifications from the start, and
+/// gets a message a few ticks in.
+pub fn demo_packets(device: &DeviceSnapshot, tick: u64) -> Vec<Packet> {
+    if device.device_type != DeviceType::Phone {
+        return Vec::new();
+    }
+    let bodies = match tick {
+        0 => vec![
+            json!({
+                "id": "demo|calendar", "appName": "Calendar", "title": "Dentist",
+                "text": "Tomorrow at 9:30", "isClearable": true, "silent": true,
+                "time": demo_time(3 * 60 * 60_000),
+                "actions": ["Snooze"],
+            }),
+            json!({
+                "id": "demo|messages|ana", "appName": "Messages", "title": "Ana",
+                "text": "Are we still on for Saturday?", "isClearable": true,
+                "silent": true, "requestReplyId": "demo-reply",
+                "time": demo_time(20 * 60_000),
+                "actions": ["Mark as read"],
+            }),
+        ],
+        4 => vec![json!({
+            "id": "demo|messages|sam", "appName": "Messages", "title": "Sam",
+            "text": "Running 10 minutes late", "isClearable": true,
+            "requestReplyId": "demo-reply-2", "time": demo_time(0),
+        })],
+        _ => return Vec::new(),
+    };
+    bodies
+        .iter()
+        .filter_map(|body| Packet::from_body(0, PACKET_TYPE, body).ok())
+        .collect()
+}
+
+/// Now, less `ago` milliseconds, as Android writes a notification's time.
+fn demo_time(ago: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |now| now.as_millis() as u64);
+    now.saturating_sub(ago).to_string()
+}
+
+/// Whether `device` says it sends its notifications.
+fn shares_notifications(device: &DeviceSnapshot) -> bool {
+    device
+        .outgoing_capabilities
+        .iter()
+        .any(|capability| capability == PACKET_TYPE)
+}
+
+/// A sentence about a failed action on a notification.
+fn describe(error: &NotificationError) -> String {
+    match error {
+        NotificationError::NotFound => "It’s no longer on the device.".into(),
+        NotificationError::NotRepliable => "It doesn’t take a reply.".into(),
+        NotificationError::NotDismissable => "It can’t be dismissed from here.".into(),
+        NotificationError::UnknownAction => "It no longer has that button.".into(),
+        NotificationError::EmptyReply => "Write a message.".into(),
+        NotificationError::Core(error) => describe_code(error.code()),
+    }
+}
+
+/// Decode an icon to draw. iced would decode it only when drawn, and the
+/// build decodes only the codecs it names.
+fn decode(png: &[u8]) -> Option<image::Handle> {
+    let rgba = ::image::load_from_memory(png).ok()?.into_rgba8();
+    Some(image::Handle::from_rgba(
+        rgba.width(),
+        rgba.height(),
+        rgba.into_raw(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use iced_test::simulator::Simulator;
+
+    use super::*;
+    use crate::{
+        core::{Core, testing::handle_with_plugin},
+        plugins::notifications::{REPLY_PACKET_TYPE, REQUEST_PACKET_TYPE},
+        ui::testing,
+    };
+
+    const PEER: &str = testing::PEER_ID;
+
+    /// A phone sharing its notifications, connected to a core running the
+    /// plugin the UI calls; what the core sends it.
+    fn phone() -> (
+        Core,
+        NotificationsUi,
+        DeviceSnapshot,
+        tokio::sync::mpsc::Receiver<Packet>,
+    ) {
+        let (core, plugin, _commands) = handle_with_plugin(NotificationsPlugin::default());
+        let (mut device, sent) =
+            testing::connect_peer(&core, PEER, &[REQUEST_PACKET_TYPE, REPLY_PACKET_TYPE]);
+        device.outgoing_capabilities = vec![PACKET_TYPE.into()];
+        (core, NotificationsUi::new(plugin), device, sent)
+    }
+
+    fn post(core: &Core, id: &str, text: &str) {
+        let body = json!({
+            "id": id,
+            "appName": "Messages",
+            "title": "Ana",
+            "text": text,
+            "isClearable": true,
+            "requestReplyId": "r",
+        });
+        core.handle_peer_packet(PEER, Packet::from_body(1_u64, PACKET_TYPE, &body).unwrap());
+    }
+
+    fn posted(id: &str, alert: bool) -> CoreEvent {
+        CoreEvent {
+            sequence: 1,
+            timestamp: 0,
+            event: EventData::Plugin(
+                crate::core::PluginEvent::new(&NotificationPosted {
+                    device_id: PEER.into(),
+                    device_name: "Peer".into(),
+                    notification: Notification {
+                        id: id.into(),
+                        app_name: "Messages".into(),
+                        title: Some("Ana".into()),
+                        text: Some("Dinner?".into()),
+                        time: None,
+                        dismissable: true,
+                        repliable: true,
+                        actions: vec![],
+                        has_icon: false,
+                    },
+                    alert,
+                })
+                .unwrap(),
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn news_is_announced_and_counted_on_the_action() {
+        let (core, mut ui, device, _sent) = phone();
+        let [action] = ui.device_actions(&device).try_into().unwrap();
+        assert_eq!(action.label, "Notifications");
+
+        post(&core, "a", "Dinner?");
+        let outcomes = testing::outputs(ui.on_event(&posted("a", true))).await;
+        let [ui::Message::Notify { title, body }] = &outcomes[..] else {
+            panic!("unexpected outcomes: {outcomes:?}");
+        };
+        assert_eq!((title.as_str(), body.as_str()), ("Ana · Peer", "Dinner?"));
+        let [action] = ui.device_actions(&device).try_into().unwrap();
+        assert_eq!(action.label, "Notifications (1)");
+
+        // An update that isn't news says nothing.
+        let outcomes = testing::outputs(ui.on_event(&posted("a", false))).await;
+        assert!(outcomes.is_empty());
+
+        // A device that doesn't share them has no action.
+        let mut other = device.clone();
+        other.outgoing_capabilities.clear();
+        assert!(ui.device_actions(&other).is_empty());
+    }
+
+    #[tokio::test]
+    async fn replying_asks_for_the_message_then_sends_it() {
+        let (core, mut ui, _device, mut sent) = phone();
+        let _request_all = sent.try_recv();
+        post(&core, "a", "Dinner?");
+        let ctx = UiContext::new(core, tokio::runtime::Handle::current());
+        let reply = Message::Reply {
+            device_id: PEER.into(),
+            id: "a".into(),
+            title: "Ana".into(),
+        };
+        let outcomes = testing::outputs(ui.update(&ctx, reply, Origin::Window)).await;
+        let [ui::Message::Prompt(prompt)] = &outcomes[..] else {
+            panic!("unexpected outcomes: {outcomes:?}");
+        };
+        assert_eq!(prompt.title, "Reply to Ana");
+        assert!((prompt.validate)(" ").is_some());
+        let Feature::Notifications(send) = (prompt.then)("Yes!".into()) else {
+            panic!("a notifications message");
+        };
+        let outcomes = testing::outputs(ui.update(&ctx, send, Origin::Window)).await;
+        assert!(matches!(
+            &outcomes[..],
+            [ui::Message::Report { failure: None, .. }]
+        ));
+        let packet = sent.try_recv().unwrap();
+        assert_eq!(packet.packet_type, REPLY_PACKET_TYPE);
+        assert_eq!(packet.body["message"], json!("Yes!"));
+    }
+
+    #[tokio::test]
+    async fn dismissing_one_that_is_gone_says_why() {
+        let (core, mut ui, _device, _sent) = phone();
+        let ctx = UiContext::new(core, tokio::runtime::Handle::current());
+        let dismiss = Message::Dismiss {
+            device_id: PEER.into(),
+            id: "gone".into(),
+        };
+        let outcomes = testing::outputs(ui.update(&ctx, dismiss, Origin::Window)).await;
+        let [
+            ui::Message::Report {
+                text,
+                failure: Some(_),
+                ..
+            },
+        ] = &outcomes[..]
+        else {
+            panic!("unexpected outcomes: {outcomes:?}");
+        };
+        assert_eq!(text, "It’s no longer on the device.");
+    }
+
+    #[test]
+    fn the_page_lists_them_or_says_why_it_is_empty() {
+        let (core, mut ui, device, _sent) = phone();
+        {
+            let mut empty = Simulator::new(ui.view(&device));
+            assert!(empty.find("No notifications from Peer.").is_ok());
+        }
+
+        post(&core, "a", "Dinner?");
+        ui.on_route(&Route::Notifications(PEER.into()));
+        let mut page = Simulator::new(ui.view(&device));
+        assert!(page.find("Dinner?").is_ok());
+        assert!(page.find("Reply").is_ok());
+        testing::snapshot("notifications", (720, 480), || ui.view(&device));
+
+        let mut offline = device.clone();
+        offline.reachability = DeviceReachability::Discovered;
+        let mut page = Simulator::new(ui.view(&offline));
+        assert!(page.find("Peer isn’t connected.").is_ok());
+    }
+}

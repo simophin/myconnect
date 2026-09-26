@@ -293,6 +293,7 @@ impl Core {
         self.events
             .publish(EventData::PairingUpdated(snapshot.clone()))?;
         self.publish_device_update(&device_id);
+        self.run_paired_hooks(&device_id);
         Ok(snapshot)
     }
 
@@ -485,6 +486,14 @@ impl Core {
         };
         let _ = self.events.publish(EventData::PairingUpdated(snapshot));
         self.publish_device_update(&device_id);
+        self.run_paired_hooks(&device_id);
+    }
+
+    /// Tell the plugins `device_id` is now paired, as it is connected.
+    fn run_paired_hooks(&self, device_id: &str) {
+        if let Some(device) = self.device(device_id) {
+            self.plugins.paired(&self.plugin_context(), &device);
+        }
     }
 
     fn begin_incoming_pairing(&self, device_id: &str, body: PairingBody, received_at: i64) {

@@ -10,6 +10,7 @@ pub mod battery;
 pub mod browse;
 pub mod clipboard;
 pub mod findmyphone;
+pub mod notifications;
 pub mod ping;
 pub mod share;
 
@@ -19,7 +20,9 @@ use iced::{Element, Subscription, Task};
 
 use crate::{
     core::{CoreEvent, DeviceSnapshot, SettingsSnapshot},
-    plugins::{browse::BrowsePlugin, clipboard::ClipboardPlugin},
+    plugins::{
+        browse::BrowsePlugin, clipboard::ClipboardPlugin, notifications::NotificationsPlugin,
+    },
     protocol::Packet,
     ui::{Message, Origin, context::UiContext, route::Route, widgets::Icon},
 };
@@ -33,6 +36,7 @@ pub enum Feature {
     Clipboard(clipboard::Message),
     Share(share::Message),
     Browse(browse::Message),
+    Notifications(notifications::Message),
 }
 
 /// A function the shell calls later with what it got (picked files, a
@@ -81,15 +85,21 @@ impl fmt::Debug for DropTarget {
 pub(crate) struct Features {
     pub clipboard: clipboard::ClipboardUi,
     pub browse: browse::BrowseUi,
+    pub notifications: notifications::NotificationsUi,
 }
 
 impl Features {
     /// The features over the plugin instances the core runs
     /// (`plugins::builtin_parts`).
-    pub(crate) fn new(clipboard: Arc<ClipboardPlugin>, browse: Arc<BrowsePlugin>) -> Self {
+    pub(crate) fn new(
+        clipboard: Arc<ClipboardPlugin>,
+        browse: Arc<BrowsePlugin>,
+        notifications: Arc<NotificationsPlugin>,
+    ) -> Self {
         Self {
             clipboard: clipboard::ClipboardUi::new(clipboard),
             browse: browse::BrowseUi::new(browse),
+            notifications: notifications::NotificationsUi::new(notifications),
         }
     }
 
@@ -107,6 +117,7 @@ impl Features {
             Feature::Clipboard(message) => self.clipboard.update(ctx, message, origin),
             Feature::Share(message) => share::update(ctx, message, origin),
             Feature::Browse(message) => self.browse.update(ctx, message, origin),
+            Feature::Notifications(message) => self.notifications.update(ctx, message, origin),
         }
     }
 
@@ -119,6 +130,7 @@ impl Features {
             clipboard::device_actions(device),
             share::device_actions(device),
             browse::device_actions(device),
+            self.notifications.device_actions(device),
         ]
         .concat()
     }
@@ -130,11 +142,16 @@ impl Features {
 
     /// Every core event, after the store has applied it.
     pub(crate) fn on_event(&mut self, ctx: &UiContext, event: &CoreEvent) -> Task<Message> {
-        Task::batch([ping::on_event(event), self.browse.on_event(ctx, event)])
+        Task::batch([
+            ping::on_event(event),
+            self.browse.on_event(ctx, event),
+            self.notifications.on_event(event),
+        ])
     }
 
     /// The window now shows `route`, whoever's page it is.
     pub(crate) fn on_route(&mut self, ctx: &UiContext, route: &Route) -> Task<Message> {
+        self.notifications.on_route(route);
         self.browse.on_route(ctx, route)
     }
 
@@ -168,6 +185,22 @@ impl Features {
         self.browse.view(device, folder).map(from_browse)
     }
 
+    /// The shell took a fresh snapshot of the core, after missing events
+    /// or on Reload.
+    pub(crate) fn on_snapshot(&mut self) {
+        self.notifications.on_snapshot();
+    }
+
+    /// The page of `device`'s notifications ([`Route::Notifications`]).
+    pub(crate) fn notifications_page<'a>(
+        &'a self,
+        device: &'a DeviceSnapshot,
+    ) -> Element<'a, Message> {
+        self.notifications
+            .view(device)
+            .map(|message| Message::Feature(Feature::Notifications(message), Origin::Window))
+    }
+
     pub(crate) fn subscription(&self) -> Subscription<Message> {
         self.browse.subscription().map(from_browse)
     }
@@ -176,7 +209,11 @@ impl Features {
     /// devices, sends at step `tick` (every few seconds, from 0), as a peer
     /// running these features would.
     pub fn demo_packets(&self, device: &DeviceSnapshot, tick: u64) -> Vec<Packet> {
-        battery::demo_packets(device, tick)
+        [
+            battery::demo_packets(device, tick),
+            notifications::demo_packets(device, tick),
+        ]
+        .concat()
     }
 }
 

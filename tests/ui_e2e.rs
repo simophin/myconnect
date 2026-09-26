@@ -331,6 +331,61 @@ fn browses_the_fake_phone() {
     test.stop(app);
 }
 
+/// The fake phone shares a notification: the app announces it, lists it
+/// on the device's Notifications page, and dismisses it on the phone.
+#[test]
+fn shows_and_dismisses_the_fake_phones_notifications() {
+    let test = Test::start();
+    let mut app = test.launch();
+    let phone = test.runtime.block_on(FakePhone::start(FakePhoneConfig {
+        name: PHONE_NAME.into(),
+        data_dir: test.directory.path().join("phone"),
+        storage: test.directory.path().join("phone-storage"),
+        reply: BrowseReply::Refuse("no".into()),
+        wrong_host_key: false,
+        desktop_id: Some(app.id()),
+        discovery_bind: SocketAddr::from((LOOPBACK_BROADCAST, DISCOVERY_PORT)),
+    }));
+    app.click("Add device");
+    app.click_in_row("Pair", PHONE_NAME);
+    app.wait_for(&format!("Paired with {PHONE_NAME}"));
+    app.click("Done");
+
+    test.runtime.block_on(phone.post_notification(
+        serde_json::json!({
+            "id": "0|com.example.chat|1|null|10123",
+            "appName": "Chat",
+            "title": "Ana",
+            "text": "Dinner at 7?",
+            "isClearable": true,
+            "requestReplyId": "reply-1",
+        }),
+        None,
+    ));
+    // A toast while the window has focus, a notification otherwise.
+    app.wait_until("the notification to be announced", |app| {
+        (app.shows(&format!("Ana · {PHONE_NAME}: Dinner at 7?")) || app.notified("Dinner at 7?"))
+            .then_some(())
+    });
+    app.click("Notifications (1)");
+    app.wait_for("Dinner at 7?");
+    assert!(app.shows("Reply"));
+
+    app.click_id("Dismiss");
+    app.wait_for(&format!("No notifications from {PHONE_NAME}."));
+    test.eventually("the phone to be asked to dismiss it", || {
+        phone
+            .log
+            .notification_packets
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|packet| packet.body.get("cancel").is_some())
+    });
+    test.runtime.block_on(phone.stop());
+    test.stop(app);
+}
+
 // ---------------------------------------------------------------------------
 // The harness.
 
@@ -407,16 +462,18 @@ impl Test {
                     let mut ui_plugins = None;
                     let service = RunningService::start_with(request, |clipboard| {
                         let parts = plugins::builtin_parts(clipboard);
-                        ui_plugins = Some((parts.clipboard, parts.browse));
+                        ui_plugins = Some((parts.clipboard, parts.browse, parts.notifications));
                         parts.core
                     })
                     .await?;
-                    let (clipboard, browse) = ui_plugins.expect("the daemon built its plugins");
+                    let (clipboard, browse, notifications) =
+                        ui_plugins.expect("the daemon built its plugins");
                     *core.lock().unwrap() = Some(service.core().clone());
                     Ok(Started {
                         service,
                         clipboard,
                         browse,
+                        notifications,
                     })
                 })
             }
