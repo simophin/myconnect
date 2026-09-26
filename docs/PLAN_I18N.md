@@ -188,3 +188,8 @@ Anything a later phase must know, one line each, newest last.
   failure and skipped real-clipboard tests; `transfer_e2e`'s
   zero-byte test failed again, also with `-p ferry` alone (no gui code).
   The overlays' and browse's snapshots read as before.
+- Merged main after 2c (f50e586). It brought: About's third-party licenses
+  (#46), with new English strings for 2d's sweep to catch; the bundled
+  Figtree font (#45), which has no CJK glyphs, so phase 5 must check
+  fallback to a system CJK font; and SQLite-backed typed configs (#47),
+  which is where phase 7's `language` setting goes.
