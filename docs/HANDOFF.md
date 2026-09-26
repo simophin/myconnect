@@ -105,19 +105,20 @@ the CLI, and for tagged builds an Arch Linux PKGBUILD. The scripts are in
 ## Open work
 
 **The tray and notifications on macOS and Windows** (the plan's step
-13b). The tray is written but not yet run on either: `tray-icon` + `muda`
+13b). The tray works on macOS (checked by the owner) and is untested on
+Windows: `tray-icon` + `muda`
 in `src/ui/desktop/tray.rs` (`native`), created from `Tray::start`, which
 `update` calls on the main thread once the event loop runs
 (`Message::StartTray`, sent from boot). Its menu and click events are
 forwarded into the `DesktopEvent` channel. macOS shows
 `assets/tray_icon_template.png` as a template image and opens the menu on
 any click; Windows opens the window on a left click and the menu on a
-right one. It type-checks for both (below). Still to do, on a Mac and a
-Windows machine:
+right one. It type-checks for both (below). Still to do:
 
-- Run it: the icon shows, the menu's items (and submenus) work, it
-  updates as devices come and go, and closing the window keeps the app in
-  the tray. If `build()` fails, the app falls back to having no tray.
+- Run it on Windows: the icon shows, the menu's items (and submenus)
+  work, it updates as devices come and go, and closing the window keeps
+  the app in the tray. If `build()` fails, the app falls back to having
+  no tray.
 - On macOS the app lives in the menu bar: it has a Dock icon only while
   its window is open (`desktop::dock`, the activation policy; the bundle
   sets `LSUIElement`). A Dock icon with the window closed would do
