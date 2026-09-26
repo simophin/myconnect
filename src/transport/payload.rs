@@ -16,6 +16,7 @@
 use std::{net::Ipv4Addr, ops::RangeInclusive, time::Duration};
 
 use bytes::Bytes;
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -24,6 +25,7 @@ use tokio::{
     time::timeout,
 };
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 
 use super::tls::{self, PeerPin, TlsError, TlsMaterial};
 
@@ -46,9 +48,17 @@ pub async fn bind_payload_listener(
     Ok((listener, port))
 }
 
-/// Accept exactly one connection on a payload listener and upgrade it to
-/// TLS, acting as the server (used by the sending side, which is dialed by
-/// the receiver).
+/// Accept the expected device's connection on a payload listener and
+/// upgrade it to TLS, acting as the server (used by the sending side, which
+/// is dialed by the receiver).
+///
+/// The port was free a moment ago, so a dial meant for its previous owner
+/// can still arrive: a device that is late for a transfer already cancelled
+/// or timed out, whose port this one now reuses. Taking only the first
+/// connection would fail this transfer on that stray and reset the real
+/// one queued behind it. So connections whose handshake fails are dropped,
+/// and the listener keeps accepting until `deadline`. Handshakes run side
+/// by side, so a stray that stalls can't hold up the device's.
 pub async fn accept_payload_connection(
     listener: TcpListener,
     deadline: Duration,
@@ -56,13 +66,33 @@ pub async fn accept_payload_connection(
     expected_device_id: &str,
     pin: PeerPin,
 ) -> Result<tokio_rustls::server::TlsStream<TcpStream>, PayloadError> {
-    let (stream, _) = timeout(deadline, listener.accept())
-        .await
-        .map_err(|_| PayloadError::ConnectTimeout)?
-        .map_err(PayloadError::Socket)?;
-    tls::accept(stream, material, expected_device_id, pin)
-        .await
-        .map_err(PayloadError::Tls)
+    let mut last_error = None;
+    let accepting = async {
+        let mut handshakes = FuturesUnordered::new();
+        loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let (stream, from) = accepted.map_err(PayloadError::Socket)?;
+                    let pin = pin.clone();
+                    handshakes.push(async move {
+                        (from, tls::accept(stream, material, expected_device_id, pin).await)
+                    });
+                }
+                Some((from, handshake)) = handshakes.next() => match handshake {
+                    Ok(stream) => return Ok(stream),
+                    Err(error) => {
+                        debug!(%from, %error, "dropping a payload connection that failed its handshake");
+                        last_error = Some(error);
+                    }
+                },
+            }
+        }
+    };
+    match timeout(deadline, accepting).await {
+        Ok(result) => result,
+        // Nobody authenticated in time; if someone tried, say why they failed.
+        Err(_) => Err(last_error.map_or(PayloadError::ConnectTimeout, PayloadError::Tls)),
+    }
 }
 
 /// Dial a payload listener advertised by a peer and upgrade to TLS, acting
@@ -249,6 +279,104 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, PayloadError::Cancelled));
+    }
+
+    fn identity() -> crate::config::LocalIdentity {
+        let store = crate::store::Store::open_in_memory().unwrap();
+        crate::config::LocalIdentity::load_or_create(&store).unwrap()
+    }
+
+    fn material(identity: &crate::config::LocalIdentity) -> TlsMaterial {
+        TlsMaterial::new(identity.certificate_der(), identity.private_key_der())
+    }
+
+    #[tokio::test]
+    async fn a_payload_listener_waits_past_stray_connections_for_its_device() {
+        let sender = identity();
+        let device = identity();
+        let stranger = identity();
+        let (listener, port) = bind_payload_listener(Ipv4Addr::LOCALHOST, 0..=0)
+            .await
+            .unwrap();
+        let address = std::net::SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        let accepting = tokio::spawn({
+            let material = material(&sender);
+            let device_id = device.device_id().to_owned();
+            let pin = PeerPin::Pinned(device.certificate_der().to_vec());
+            async move {
+                accept_payload_connection(
+                    listener,
+                    Duration::from_secs(5),
+                    &material,
+                    &device_id,
+                    pin,
+                )
+                .await
+            }
+        });
+
+        // A dial that never speaks TLS, then one from another device (late
+        // for a transfer whose port this was): neither may end the wait.
+        let _silent = TcpStream::connect(address).await.unwrap();
+        let _ = connect_payload(
+            address,
+            Duration::from_secs(1),
+            &material(&stranger),
+            sender.device_id(),
+            PeerPin::Unpinned,
+        )
+        .await;
+        let _dialed = connect_payload(
+            address,
+            Duration::from_secs(1),
+            &material(&device),
+            sender.device_id(),
+            PeerPin::Pinned(sender.certificate_der().to_vec()),
+        )
+        .await
+        .unwrap();
+
+        let accepted = accepting.await.unwrap().unwrap();
+        assert_eq!(
+            tls::server_peer_certificate(&accepted).unwrap(),
+            device.certificate_der()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_payload_listener_reports_why_the_only_dial_failed() {
+        let sender = identity();
+        let device = identity();
+        let stranger = identity();
+        let (listener, port) = bind_payload_listener(Ipv4Addr::LOCALHOST, 0..=0)
+            .await
+            .unwrap();
+        let accepting = tokio::spawn({
+            let material = material(&sender);
+            let device_id = device.device_id().to_owned();
+            let pin = PeerPin::Pinned(device.certificate_der().to_vec());
+            async move {
+                accept_payload_connection(
+                    listener,
+                    Duration::from_millis(500),
+                    &material,
+                    &device_id,
+                    pin,
+                )
+                .await
+            }
+        });
+        let _ = connect_payload(
+            (Ipv4Addr::LOCALHOST, port).into(),
+            Duration::from_secs(1),
+            &material(&stranger),
+            sender.device_id(),
+            PeerPin::Unpinned,
+        )
+        .await;
+
+        let error = accepting.await.unwrap().unwrap_err();
+        assert!(matches!(error, PayloadError::Tls(_)), "{error:?}");
     }
 
     /// A minimal `AsyncWrite` test double that fails after a fixed number of

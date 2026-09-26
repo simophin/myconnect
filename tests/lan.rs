@@ -11,10 +11,7 @@ use ferry::{
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
     store::Store,
     transport::{
-        lan::{
-            LOOPBACK_BROADCAST, LanConfig, LanService, LocalDeviceInfo, MAX_DISCOVERY_DATAGRAM,
-            TCP_PORT_RANGE,
-        },
+        lan::{LanConfig, LanService, LocalDeviceInfo, MAX_DISCOVERY_DATAGRAM, TCP_PORT_RANGE},
         tls::{self, PeerPin, TlsMaterial, subject_public_key_info},
     },
 };
@@ -303,6 +300,10 @@ async fn a_peer_added_by_address_connects_without_broadcast() {
 /// on a private port: nothing binds an address a LAN interface receives
 /// on, and two instances still find each other, by broadcast and by
 /// address.
+///
+/// Linux only: loopback discovery needs `127.255.255.255`, which macOS
+/// doesn't route.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn loopback_only_peers_bind_nothing_but_loopback_and_still_meet() {
     let a = peer("Peer A");
@@ -348,7 +349,7 @@ async fn loopback_only_peers_bind_nothing_but_loopback_and_still_meet() {
     for service in [&a_service, &b_service] {
         assert_eq!(
             service.discovery_addr(),
-            SocketAddr::from((LOOPBACK_BROADCAST, port))
+            SocketAddr::from((ferry::transport::lan::LOOPBACK_BROADCAST, port))
         );
         assert_eq!(service.tcp_addr().ip(), Ipv4Addr::LOCALHOST);
     }
