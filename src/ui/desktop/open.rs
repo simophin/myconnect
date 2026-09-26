@@ -1,5 +1,5 @@
-//! Opening files with their default app, and showing them in the file
-//! manager.
+//! Opening files with their default app, showing them in the file
+//! manager, and opening web pages in the browser.
 
 use std::path::Path;
 
@@ -11,6 +11,8 @@ pub trait Open: Send + Sync + 'static {
     /// Show `path` in the file manager: selected where the platform can,
     /// otherwise its folder opened.
     fn reveal(&self, path: &Path) -> Result<(), String>;
+    /// Open a web page in the default browser.
+    fn browse(&self, url: &str) -> Result<(), String>;
 }
 
 /// The desktop's own handlers, through `opener`.
@@ -27,6 +29,10 @@ impl Open for System {
     fn reveal(&self, path: &Path) -> Result<(), String> {
         exists(path)?;
         opener::reveal(path).map_err(|error| error.to_string())
+    }
+
+    fn browse(&self, url: &str) -> Result<(), String> {
+        opener::open_browser(url).map_err(|error| error.to_string())
     }
 }
 

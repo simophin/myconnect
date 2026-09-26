@@ -28,10 +28,12 @@ pub struct Actions<M> {
     pub choose_download_dir: M,
     pub set_close_to_tray: fn(bool) -> M,
     pub set_start_on_login: fn(bool) -> M,
+    /// Open the About page.
+    pub about: M,
 }
 
 /// The settings `store` holds, with the features' `sections` of them
-/// after the download folder. `version` is the app's, and
+/// after the download folder, and a link to About. `version` is the app's, and
 /// `start_on_login` whether the system starts it at login.
 pub fn view<'a, M: Clone + 'a>(
     store: &'a Store,
@@ -100,10 +102,15 @@ fn list<'a, M: Clone + 'a>(
         ))
         .push(widgets::setting(
             lucide::info,
-            "Version",
-            version,
-            None,
-            None,
+            "About Ferry",
+            format!("Version {version}"),
+            Some(
+                lucide::chevron_right()
+                    .size(16)
+                    .style(text::secondary)
+                    .into(),
+            ),
+            Some(actions.about),
         ));
     scrollable(items).spacing(6).height(Length::Fill).into()
 }
@@ -124,6 +131,7 @@ mod tests {
         CloseToTray(bool),
         StartOnLogin(bool),
         Section(bool),
+        About,
     }
 
     fn actions() -> Actions<Message> {
@@ -134,6 +142,7 @@ mod tests {
             choose_download_dir: Message::Choose,
             set_close_to_tray: Message::CloseToTray,
             set_start_on_login: Message::StartOnLogin,
+            about: Message::About,
         }
     }
 
@@ -174,8 +183,8 @@ mod tests {
             "Sync clipboard",
             "Keep running when the window is closed",
             "Start when you log in",
-            "Version",
-            "1.2.3 (dev)",
+            "About Ferry",
+            "Version 1.2.3 (dev)",
         ] {
             assert!(ui.find(shown).is_ok(), "{shown}");
         }
@@ -196,6 +205,7 @@ mod tests {
             [Message::StartOnLogin(true)]
         );
         assert_eq!(clicked(&store, "Sync clipboard"), [Message::Section(false)]);
+        assert_eq!(clicked(&store, "About Ferry"), [Message::About]);
         assert_eq!(
             clicked(&store, iced::widget::Id::from("Back")),
             [Message::Back]
@@ -222,13 +232,7 @@ mod tests {
     fn snapshot_settings() {
         let store = store();
         testing::snapshot("settings", (440.0, 620.0), || {
-            view(
-                &store,
-                sections,
-                "0.1.0 (v1.1.0-19-geeba428)",
-                false,
-                actions(),
-            )
+            view(&store, sections, "v1.2.0", false, actions())
         });
     }
 }

@@ -844,7 +844,7 @@ impl Pick for FakePicker {
     }
 }
 
-/// Opening files does nothing.
+/// Opening files and links does nothing.
 struct NoOpener;
 
 impl Open for NoOpener {
@@ -853,6 +853,10 @@ impl Open for NoOpener {
     }
 
     fn reveal(&self, _path: &Path) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn browse(&self, _url: &str) -> Result<(), String> {
         Ok(())
     }
 }

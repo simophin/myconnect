@@ -31,8 +31,8 @@ jobs:
     outputs:
       # In file names.
       name: ${{ steps.version.outputs.name }}
-      # What Settings shows (FERRY_VERSION; empty: the crate's version
-      # and git describe).
+      # What Settings and About show, with a "v" in front (FERRY_VERSION;
+      # empty: git describe).
       app: ${{ steps.version.outputs.app }}
       # Numeric, for macOS's Info.plist and Windows's file version.
       numeric: ${{ steps.version.outputs.numeric }}

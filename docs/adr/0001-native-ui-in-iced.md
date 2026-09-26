@@ -112,7 +112,7 @@ first needs one adds it to the `gui` feature.
 | Arguments | `clap` | Already the CLI's parser; `env` reads each flag's environment variable. |
 | File and folder dialogs | `rfd` (step 9) | The standard native dialog crate: the XDG portal on Linux (zenity if there is none), AppKit, Win32. Its async dialogs need no runtime of their own. |
 | Notifications | Linux: `zbus` 5 (step 13); macOS: `mac-usernotifications` 0.3; Windows: `notify-rust` (step 13b) | On Linux the app talks to `org.freedesktop.Notifications` itself, so it can withdraw a notification and hear its click without a thread per notification (see Desktop integration). On `async-io`, as iced's theme detection already has it: its `tokio` feature would need a tokio runtime on iced's threads. On macOS, `UNUserNotificationCenter` through `mac-usernotifications`, by `notify-rust`'s author and the base of its (preview) macOS backend: its async API gives the click and withdrawal without a thread per notification, on any runtime. `notify-rust` gives Windows toasts. |
-| Opening files and folders | `opener` (step 8) | Opens with the default app and reveals in the file manager on each platform. |
+| Opening files, folders and links | `opener` (step 8) | Opens with the default app, reveals in the file manager, and opens web pages (About's links) in the browser on each platform. |
 | Single instance | `interprocess` (step 13), and `libc` on Unix for the uid | Cross-platform local sockets, named from the data dir, so isolated instances never collide. |
 | Tray (Linux) | `ksni` 0.3 (step 13) | A StatusNotifierItem over D-Bus in pure Rust, with no libappindicator or GTK. Spawned with `assume_sni_available(true)`, so a tray host that starts, stops or restarts later is followed. Its `async-io` feature, not the default `tokio`, for the same reason as `zbus`. |
 | Monitor list | `display-info` (step 13) | iced exposes only the size of the window's current monitor; the `window.json` fits-on-screen check needs every monitor's bounds. |
@@ -239,8 +239,9 @@ These differ on purpose (owner's decisions). Don't "fix" them back.
 - **No external daemon mode.** Flutter could attach to a daemon through
   the API URL variable (now `FERRY_API_URL`); the app always embeds its daemon.
 - **Configuration is flags and environment variables**, not compile-time
-  defines (see Decision). The version in Settings is
-  `CARGO_PKG_VERSION`, plus `git describe` when available.
+  defines (see Decision). The version in Settings and About is
+  the git tag (`v1.2.0`): a release's from `FERRY_VERSION`, a dev build's
+  from `git describe` (`v1.2.0-2-g9e6caee`), or `dev` without git.
 - **No FFI.** `ffi/` existed only for Flutter and was deleted with it.
 - **Retry restarts only what failed.** The "could not start" screen's
   Retry calls `RunningService::start` again; the tray keeps working.
