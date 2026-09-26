@@ -2,9 +2,9 @@
 //! ([`TrayItem`]s carrying [`TrayCommand`]s); the tray shows it and reports
 //! what was chosen as a [`DesktopEvent`](super::DesktopEvent).
 //!
-//! Linux has a StatusNotifierItem over D-Bus (`ksni`). macOS and Windows
-//! have no tray yet (HANDOFF, "Open work"): the window always shows and closing it
-//! quits.
+//! Linux has a StatusNotifierItem over D-Bus (`ksni`); macOS and Windows
+//! have `tray-icon` with `muda` menus, shown once the event loop runs
+//! ([`Tray::start`]).
 
 use std::sync::Arc;
 
@@ -78,6 +78,11 @@ pub fn layout(items: &[TrayItem]) -> Vec<(usize, Option<&str>, bool)> {
 
 /// A tray icon whose menu the shell sets.
 pub trait Tray: Send + Sync + 'static {
+    /// Show the icon. Called once, from `update` (on the main thread, with
+    /// the event loop running), which is where macOS and Windows need their
+    /// tray created.
+    fn start(&self) {}
+
     /// Replace the menu.
     fn set_menu(&self, menu: Vec<TrayItem>);
 }
@@ -103,10 +108,215 @@ pub fn spawn(runtime: &tokio::runtime::Handle, events: Events) -> (Arc<dyn Tray>
             }
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(target_os = "macos", windows))]
+    {
+        // Assumed to work; if it doesn't, `start` reports it.
+        let _ = runtime;
+        (Arc::new(native::NativeTray::new(events)), true)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = (runtime, events);
         (Arc::new(NoTray), false)
+    }
+}
+
+/// A `tray-icon` status item with a `muda` menu. Neither is `Send` on macOS,
+/// so they live in a thread local of the main thread, where `update` runs;
+/// their events come from global handlers, forwarded to [`Events`].
+#[cfg(any(target_os = "macos", windows))]
+mod native {
+    use std::{
+        cell::RefCell,
+        collections::HashMap,
+        sync::{Arc, Mutex, PoisonError},
+    };
+
+    use tray_icon::{
+        Icon, TrayIcon, TrayIconBuilder,
+        menu::{IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu},
+    };
+
+    use super::{super::DesktopEvent, Events, Tray, TrayCommand, TrayItem};
+
+    /// macOS draws a template image in the menu bar's colours.
+    #[cfg(target_os = "macos")]
+    const ICON: &[u8] = include_bytes!("../../../assets/tray_icon_template.png");
+    #[cfg(windows)]
+    const ICON: &[u8] = include_bytes!("../../../assets/tray_icon.png");
+
+    thread_local! {
+        static ICON_ITEM: RefCell<Option<TrayIcon>> = const { RefCell::new(None) };
+    }
+
+    type Commands = Arc<Mutex<HashMap<MenuId, TrayCommand>>>;
+
+    pub struct NativeTray {
+        events: Events,
+        /// The latest menu, for `start` when it comes after `set_menu`.
+        menu: Mutex<Vec<TrayItem>>,
+        /// What each item of the menu shown does.
+        commands: Commands,
+    }
+
+    impl NativeTray {
+        pub fn new(events: Events) -> Self {
+            Self {
+                events,
+                menu: Mutex::new(Vec::new()),
+                commands: Commands::default(),
+            }
+        }
+
+        /// A `muda` menu of `items`, recording what each item does.
+        fn build(&self, items: &[TrayItem]) -> Menu {
+            let mut commands = self.commands.lock().unwrap_or_else(PoisonError::into_inner);
+            commands.clear();
+            let menu = Menu::new();
+            for item in items {
+                append(&menu, item, &mut commands);
+            }
+            menu
+        }
+    }
+
+    trait Append {
+        fn append_item(&self, item: &dyn IsMenuItem);
+    }
+
+    impl Append for Menu {
+        fn append_item(&self, item: &dyn IsMenuItem) {
+            if let Err(error) = self.append(item) {
+                tracing::warn!(%error, "a tray menu item wasn't added");
+            }
+        }
+    }
+
+    impl Append for Submenu {
+        fn append_item(&self, item: &dyn IsMenuItem) {
+            if let Err(error) = self.append(item) {
+                tracing::warn!(%error, "a tray menu item wasn't added");
+            }
+        }
+    }
+
+    fn append(menu: &impl Append, item: &TrayItem, commands: &mut HashMap<MenuId, TrayCommand>) {
+        match item {
+            TrayItem::Item { label, command } => {
+                let entry = MenuItem::new(escape(label), command.is_some(), None);
+                if let Some(command) = command {
+                    commands.insert(entry.id().clone(), command.clone());
+                }
+                menu.append_item(&entry);
+            }
+            TrayItem::Submenu { label, items } => {
+                let submenu = Submenu::new(escape(label), true);
+                for item in items {
+                    append(&submenu, item, commands);
+                }
+                menu.append_item(&submenu);
+            }
+            TrayItem::Separator => menu.append_item(&PredefinedMenuItem::separator()),
+        }
+    }
+
+    /// A single `&` marks a mnemonic in a `muda` label, so "Tom & Jerry"
+    /// would lose it.
+    pub(super) fn escape(label: &str) -> String {
+        label.replace('&', "&&")
+    }
+
+    pub(super) fn icon() -> Option<Icon> {
+        let image = match image::load_from_memory(ICON) {
+            Ok(image) => image.into_rgba8(),
+            Err(error) => {
+                tracing::warn!(%error, "the tray icon doesn't decode");
+                return None;
+            }
+        };
+        let (width, height) = image.dimensions();
+        Icon::from_rgba(image.into_raw(), width, height)
+            .inspect_err(|error| tracing::warn!(%error, "the tray icon was refused"))
+            .ok()
+    }
+
+    impl Tray for NativeTray {
+        fn start(&self) {
+            let commands = self.commands.clone();
+            let events = self.events.clone();
+            MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+                let command = commands
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get(&event.id)
+                    .cloned();
+                if let Some(command) = command {
+                    let _ = events.send(DesktopEvent::TrayChose(command));
+                }
+            }));
+            // A left click opens the window and a right click the menu, as
+            // on Linux. macOS opens the menu on either, as its own do.
+            #[cfg(windows)]
+            {
+                use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
+                let events = self.events.clone();
+                TrayIconEvent::set_event_handler(Some(move |event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let _ = events.send(DesktopEvent::TrayClicked);
+                    }
+                }));
+            }
+
+            let menu = self
+                .menu
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            let mut builder = TrayIconBuilder::new()
+                .with_tooltip("MyConnect")
+                .with_menu(Box::new(self.build(&menu)))
+                .with_menu_on_left_click(cfg!(target_os = "macos"))
+                .with_icon_as_template(cfg!(target_os = "macos"));
+            if let Some(icon) = icon() {
+                builder = builder.with_icon(icon);
+            }
+            match builder.build() {
+                Ok(tray) => ICON_ITEM.with_borrow_mut(|item| *item = Some(tray)),
+                Err(error) => {
+                    tracing::warn!(%error, "no tray icon");
+                    let _ = self.events.send(DesktopEvent::TrayAvailable(false));
+                }
+            }
+        }
+
+        fn set_menu(&self, menu: Vec<TrayItem>) {
+            *self.menu.lock().unwrap_or_else(PoisonError::into_inner) = menu.clone();
+            ICON_ITEM.with_borrow(|item| {
+                if let Some(tray) = item {
+                    tray.set_menu(Some(Box::new(self.build(&menu))));
+                }
+            });
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn labels_keep_their_ampersands() {
+            assert_eq!(escape("Tom & Jerry"), "Tom && Jerry");
+        }
+
+        #[test]
+        fn the_icon_decodes() {
+            assert!(icon().is_some());
+        }
     }
 }
 

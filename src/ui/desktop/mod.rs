@@ -2,6 +2,7 @@
 //! piece sits behind a small trait, so tests swap in a fake.
 
 pub mod dialogs;
+pub mod dock;
 pub mod instance;
 pub mod notify;
 pub mod open;

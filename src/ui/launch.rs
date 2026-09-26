@@ -208,7 +208,9 @@ impl App {
         };
         let start = app.start();
         app.update_tray();
-        (app, Task::batch([open, start]))
+        // A message, so the tray starts once the event loop runs.
+        let tray = Task::done(Message::StartTray);
+        (app, Task::batch([open, start, tray]))
     }
 
     /// Start the daemon, off the UI thread so the window paints meanwhile.

@@ -239,6 +239,8 @@ pub(crate) enum Message {
     CancelDrop,
     Key(KeyCommand),
     DemoTick(u64),
+    /// The event loop runs: show the tray icon.
+    StartTray,
     WindowOpened,
     Window(window::Id, window::Event),
 }
@@ -604,6 +606,13 @@ impl App {
                 };
                 demo::tick(running.ctx.core(), &running.features, tick);
                 self.after(demo::TICK, Message::DemoTick(tick + 1))
+            }
+            Message::StartTray => {
+                self.desktop.tray.start();
+                // Again now it takes: macOS sets its own when it finishes
+                // launching.
+                desktop::dock::show(self.window.is_some());
+                Task::none()
             }
             Message::WindowOpened => Task::none(),
             Message::Window(id, event) if Some(id) == self.window => match event {
