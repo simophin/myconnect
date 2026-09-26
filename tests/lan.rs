@@ -52,7 +52,8 @@ fn peer(name: &str) -> Peer {
         32,
         128,
         identity.clone(),
-        ferry::core::TransferConfig::new(directory.path().join("downloads")),
+        ferry::core::TransferConfig::new(directory.path().join("downloads"))
+            .with_payload_bind_ip(Ipv4Addr::LOCALHOST),
     )
     .unwrap();
     Peer {
@@ -627,6 +628,55 @@ async fn service_can_restart_without_leaking_sockets_or_tasks() {
         .unwrap();
         service.shutdown().await.unwrap();
     }
+}
+
+/// A running Ferry or KDE Connect listens on the wildcard address, say at
+/// 1716. macOS lets a listener on 127.0.0.1 share that port, and dials to
+/// 127.0.0.1 then reach whichever listener it prefers, so neither the
+/// control nor a payload listener may take it. (Linux refuses the bind
+/// itself.) A socket bound without listening stands in for that app, so
+/// nothing here can be reached from the network.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn ports_held_on_the_wildcard_address_are_skipped() {
+    use ferry::transport::{
+        lan::LanError,
+        payload::{PayloadError, bind_payload_listener},
+    };
+    use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+
+    let (_held, port) = TCP_PORT_RANGE
+        .clone()
+        .find_map(|port| {
+            let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).unwrap();
+            socket.set_reuse_address(true).unwrap();
+            let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, port));
+            socket
+                .bind(&SockAddr::from(address))
+                .ok()
+                .map(|()| (socket, port))
+        })
+        .expect("a free port in the KDE Connect range");
+
+    assert!(matches!(
+        bind_payload_listener(Ipv4Addr::LOCALHOST, port..=port).await,
+        Err(PayloadError::NoPort)
+    ));
+    let local_peer = peer("Local");
+    let id = local_peer.identity.device_id().to_owned();
+    let started = LanService::start(
+        test_config(free_udp_addr(), free_udp_addr())
+            .with_announcement_targets(Vec::new())
+            .with_tcp_bind(Ipv4Addr::LOCALHOST, port..=port),
+        local(&id, "Local"),
+        local_peer.application,
+        local_peer.commands,
+        local_peer.identity,
+        local_peer.trust_store,
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(matches!(started, Err(LanError::NoTcpPort)));
 }
 
 fn identity_packet(device_id: &str, protocol_version: u8) -> Vec<u8> {

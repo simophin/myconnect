@@ -161,7 +161,7 @@ async fn harness(reply: BrowseReply, wrong_host_key: bool) -> Harness {
         32,
         256,
         identity.clone(),
-        TransferConfig::new(download_dir.clone()),
+        TransferConfig::new(download_dir.clone()).with_payload_bind_ip(Ipv4Addr::LOCALHOST),
     )
     .unwrap();
 

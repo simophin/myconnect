@@ -939,14 +939,65 @@ fn bind_udp(address: SocketAddr) -> Result<UdpSocket, LanError> {
 }
 
 async fn bind_tcp(ip: Ipv4Addr, ports: RangeInclusive<u16>) -> Result<TcpListener, LanError> {
+    bind_listener(ip, ports)
+        .await
+        .map_err(LanError::Socket)?
+        .ok_or(LanError::NoTcpPort)
+}
+
+/// Listen on `ip` at the first port in `ports` that no other socket holds,
+/// on `ip` or on an address overlapping it (the wildcard address for a
+/// specific one, 127.0.0.1 for the wildcard). `None` if every port is taken.
+///
+/// With `SO_REUSEADDR`, which tokio sets, macOS lets a listener on
+/// 127.0.0.1 share a port with another process's on the wildcard address
+/// (a running Ferry or KDE Connect on 1716), and the other way round; dials
+/// to 127.0.0.1 then reach the more specific listener, not necessarily the
+/// one that announced the port. Linux refuses both binds already.
+pub(crate) async fn bind_listener(
+    ip: Ipv4Addr,
+    ports: RangeInclusive<u16>,
+) -> std::io::Result<Option<TcpListener>> {
     for port in ports {
-        match TcpListener::bind(SocketAddrV4::new(ip, port)).await {
-            Ok(listener) => return Ok(listener),
+        let listener = match TcpListener::bind(SocketAddrV4::new(ip, port)).await {
+            Ok(listener) => listener,
             Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
-            Err(error) => return Err(LanError::Socket(error)),
+            Err(error) => return Err(error),
+        };
+        if overlapping_address_bound(ip, port)? {
+            debug!(%ip, port, "port shared with an overlapping address; skipping");
+            continue;
         }
+        return Ok(Some(listener));
     }
-    Err(LanError::NoTcpPort)
+    Ok(None)
+}
+
+/// Whether another socket is bound to `port` on the address overlapping
+/// `ip`. The probe is bound after this process's listener, so of two
+/// processes binding overlapping addresses at once, at least one sees the
+/// other. `SO_REUSEADDR` keeps connections in TIME_WAIT from counting.
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+fn overlapping_address_bound(ip: Ipv4Addr, port: u16) -> std::io::Result<bool> {
+    let overlapping = if ip.is_unspecified() {
+        Ipv4Addr::LOCALHOST
+    } else {
+        Ipv4Addr::UNSPECIFIED
+    };
+    let probe = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
+    probe.set_reuse_address(true)?;
+    match probe.bind(&SockAddr::from(SocketAddrV4::new(overlapping, port))) {
+        Ok(()) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => Ok(true),
+        Err(error) => Err(error),
+    }
+}
+
+/// Linux doesn't let listeners share a port across overlapping addresses.
+/// Windows is unchecked.
+#[cfg(not(all(unix, not(any(target_os = "linux", target_os = "android")))))]
+fn overlapping_address_bound(_ip: Ipv4Addr, _port: u16) -> std::io::Result<bool> {
+    Ok(false)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -52,7 +52,8 @@ fn peer(name: &str) -> Peer {
         32,
         128,
         identity.clone(),
-        ferry::core::TransferConfig::new(directory.path().join("downloads")),
+        ferry::core::TransferConfig::new(directory.path().join("downloads"))
+            .with_payload_bind_ip(Ipv4Addr::LOCALHOST),
     )
     .unwrap();
     Peer {
@@ -274,7 +275,8 @@ fn peer_reusing(
         32,
         128,
         identity.clone(),
-        ferry::core::TransferConfig::new(directory.path().join("downloads")),
+        ferry::core::TransferConfig::new(directory.path().join("downloads"))
+            .with_payload_bind_ip(Ipv4Addr::LOCALHOST),
     )
     .unwrap();
     Peer {
