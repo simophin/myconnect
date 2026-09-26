@@ -20,8 +20,11 @@ gui = [
     "dep:ksni",
     "dep:libc",
     "dep:mac-usernotifications",
+    "dep:objc2",
+    "dep:objc2-app-kit",
     "dep:opener",
     "dep:rfd",
+    "dep:tray-icon",
     "dep:zbus",
 ]
 
@@ -85,11 +88,19 @@ libc = { version = "0.2", optional = true }
 ksni = { version = "0.3", default-features = false, features = ["async-io"], optional = true }
 zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }
 
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+# The tray (`gui`), with `muda` menus (re-exported as `tray_icon::menu`).
+tray-icon = { version = "0.25", default-features = false, optional = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Notifications (`gui`), through `UNUserNotificationCenter`: the crate
 # `notify-rust` builds its macOS backend on, used directly for its async
 # API, so a click and a withdrawal need no thread per notification.
 mac-usernotifications = { version = "0.3.1", optional = true }
+# The Dock icon (`gui`), shown only while the window is open. Already in
+# the tree through `tray-icon`.
+objc2 = { version = "0.6", optional = true }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSRunningApplication"], optional = true }
 
 [[test]]
 name = "ui_e2e"

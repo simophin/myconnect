@@ -15,7 +15,7 @@ use crate::{
     ui::{
         App, Message, Origin, Phase,
         desktop::{
-            DesktopEvent,
+            DesktopEvent, dock,
             notify::Notifier,
             placement::Seen,
             tray::{self as trays, TrayCommand, TrayItem},
@@ -277,6 +277,7 @@ impl App {
         let settings = windowing::settings(&self.placement, &self.desktop.windows.screens());
         let (id, opened) = self.desktop.windows.open(settings);
         self.window = Some(id);
+        dock::show(true);
         // It opens in front; `Unfocused` says if not.
         self.set_focused(true);
         if !self.placement.visible {
@@ -327,6 +328,7 @@ impl App {
 
     pub(super) fn window_closed(&mut self) {
         self.window = None;
+        dock::show(false);
         self.set_focused(false);
         self.drag.leave();
     }

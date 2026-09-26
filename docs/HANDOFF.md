@@ -105,15 +105,28 @@ the CLI, and for tagged builds an Arch Linux PKGBUILD. The scripts are in
 ## Open work
 
 **The tray on macOS and Windows, and notifications on Windows** (the
-plan's step 13b). The tray works on Linux only; macOS and Windows get
-none, so the app quits when its window closes there. Notifications work
-on Linux and macOS (ADR 0001, "Desktop integration"); Windows gets none.
-It needs a Mac and a Windows machine:
+plan's step 13b). Notifications work on Linux and macOS (ADR 0001,
+"Desktop integration"). The tray works on macOS (checked by the owner) and is untested on
+Windows: `tray-icon` + `muda`
+in `src/ui/desktop/tray.rs` (`native`), created from `Tray::start`, which
+`update` calls on the main thread once the event loop runs
+(`Message::StartTray`, sent from boot). Its menu and click events are
+forwarded into the `DesktopEvent` channel. macOS shows
+`assets/tray_icon_template.png` as a template image and opens the menu on
+any click; Windows opens the window on a left click and the menu on a
+right one. It type-checks for both (below). Still to do:
 
-- `tray-icon` + `muda` (ADR 0001), created in the first `update` on the
-  main thread, with its menu and icon events forwarded into the
-  `DesktopEvent` channel; a `Tray` over it, fed the same `TrayItem`s.
-  macOS uses `assets/tray_icon_template.png` as a template image.
+- Run it on Windows: the icon shows, the menu's items (and submenus)
+  work, it updates as devices come and go, and closing the window keeps
+  the app in the tray. If `build()` fails, the app falls back to having
+  no tray.
+- On macOS the app lives in the menu bar: it has a Dock icon only while
+  its window is open (`desktop::dock`, the activation policy; the bundle
+  sets `LSUIElement`). A Dock icon with the window closed would do
+  nothing when clicked, as winit doesn't handle
+  `applicationShouldHandleReopen:`. Check that the window comes to the
+  front when opened from the tray, and that no Dock icon flashes at a
+  start in the tray.
 - `notify-rust` for Windows' `Notifier`: clicks work; nothing is
   withdrawn (ADR 0001, "Desktop integration").
 - macOS notifications were checked from an ad-hoc signed bundle with the
@@ -121,13 +134,32 @@ It needs a Mac and a Windows machine:
   click reaching `NotificationClicked`, and withdrawal), not yet in the
   full app with a peer: loopback discovery doesn't work on macOS (see
   "Traps"). They need the bundle, so `cargo run` shows none; run a bundle
-  from outside `/tmp` (macOS refuses those), e.g. under `target/`.
-- macOS's menu-bar Quit and logout take the quit path.
+  from outside `/tmp` (macOS refuses those), e.g. under `target/`. Check
+  that a click brings the window (and its Dock icon) back while the app
+  is in the menu bar only.
+- macOS's menu-bar Quit and logout take the quit path. They go through
+  `terminate:`, which exits after winit's `exiting`, so the daemon's
+  shutdown after `program.run()` likely doesn't run.
 - Confirm single instance (the `/tmp` socket file on macOS, a named pipe
   on Windows) and placement with several monitors.
 - Also check what packaging couldn't: the DMG's app launches from Finder
   with its tray icon, and the installed Windows app's notifications carry
   its name and icon.
+
+To type-check macOS or Windows code on Linux, stub out the C that `ring`
+builds (it needs the platform's SDK) with a compiler and archiver that
+emit empty files; nothing is linked, so clippy runs fine:
+
+```sh
+rustup target add aarch64-apple-darwin x86_64-pc-windows-msvc
+# fakecc: find `-o <out>` and `--target=...`, then
+#   exec clang $target -c -x c /dev/null -o "$out"
+# fakear: find the archive (`$2`, or `-out:<path>`), write "!<arch>\n" to it
+CC_aarch64_apple_darwin=fakecc AR_aarch64_apple_darwin=fakear \
+  cargo clippy --target aarch64-apple-darwin -p myconnect-gui -p myconnect \
+  --all-targets -- -D warnings
+# Windows: the same with CC_/AR_x86_64_pc_windows_msvc and that target.
+```
 
 **The rest of the UI's open work:**
 
