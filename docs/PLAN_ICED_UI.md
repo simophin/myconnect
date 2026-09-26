@@ -32,10 +32,12 @@ seven Flutter scenarios) and the fake phone (browsing). Step 15 is done:
 `packaging/` builds the `.deb`s (the app as `myConnect` and the CLI),
 the Arch PKGBUILD, a universal macOS DMG and a Windows installer, the
 Build workflow checks the `.deb` on a clean Debian 12, and CI dropped
-Flutter and checks macOS and Windows compile. Next is 13b, given a Mac
-and a Windows machine (it also owes step 15's Finder check), then step
-16 once the owner has used the app. Each finished step says so under its
-heading, with what differs from the plan.
+Flutter and checks macOS and Windows compile. Step 16 is done: `ui/`
+(the Flutter app) and `ffi/` are deleted, the Flutter records are in
+`docs/archive/flutter-adr/`, and ARCHITECTURE, HANDOFF, README and
+CLAUDE.md describe the iced app only. What's left is 13b, given a Mac and
+a Windows machine (it also owes step 15's Finder check). Each finished
+step says so under its heading, with what differs from the plan.
 
 ## Read first
 
@@ -44,8 +46,9 @@ heading, with what differs from the plan.
 2. [`ARCHITECTURE.md`](ARCHITECTURE.md) §2: the core, the `Plugin` trait,
    and the rule that the core never names a feature. The UI copies that
    shape.
-3. The Flutter app is the **spec**. [`../ui/lib/src/`](../ui/lib/src/) is
-   what parity means, and [Appendix A](#appendix-a-parity-checklist) lists
+3. The Flutter app was the **spec**. `ui/lib/src/` (deleted in step 16;
+   read it in the git history before that step's commit) is what parity
+   means, and [Appendix A](#appendix-a-parity-checklist) lists
    every behaviour to carry over, with file references. When this plan and
    the Flutter code disagree about a detail, the Flutter code wins, unless
    the difference is listed in [Deliberate differences](#deliberate-differences).
@@ -1613,6 +1616,37 @@ launches from Finder with its tray icon.
 
 **Only after** Appendix A is fully ticked and the owner has used the new
 app.
+
+**Done (2026-09-26).** The owner asked for it before step 13b, so
+Appendix A's macOS and Windows items stay open for that step. Where it
+differs from the text below:
+- **Deleted** `ui/` (the Flutter app, its tests, the vendored
+  `cnativeapi`, its packaging) and `ffi/` (`myconnect-ffi`), and dropped
+  `ffi` from the workspace. Nothing else used either: the `Cargo.lock`
+  loses only `myconnect-ffi`.
+- **Moved** `ui/docs/adr/` to `docs/archive/flutter-adr/` with its
+  history; its README and the links to it (ADR README, ADR 0001,
+  ARCHITECTURE §12) point there now.
+- **ARCHITECTURE**: §1 draws the app beside the API instead of the
+  Flutter UI over it; §2 lost `myconnect-ffi`, gained the
+  `plugins/*/ui.rs` dependency line and the `ui` row's current contents
+  (all six plugins have a UI half, `background`, the tray and the other
+  desktop glue), and the "a new feature is…" paragraph is `mod.rs` +
+  `http.rs` + `ui.rs`, one line in each of `builtin()` and
+  `builtin_with_ui()`, and the CLI; §7 and §8 name the app's flags and
+  its random token instead of the FFI config; §9 is now "the UI runs the
+  daemon in-process"; §10 describes `ui_e2e.rs`, the UI's unit and
+  snapshot tests, and the "done" commands without Flutter.
+- **HANDOFF**: read first is ARCHITECTURE, ADR 0001 and this plan; the
+  ground rules lost the FFI rule and gained "no iced in `-p myconnect`";
+  the traps are the UI's (a short list pointing at this plan's); the
+  real-app recipe runs `myconnect-gui` under Xvfb and drives it through
+  the CLI; open work lists step 13b and this plan's "Open work".
+- **README** and **CLAUDE.md** describe the iced app only. CLAUDE.md's
+  display rule now explains the single-instance socket (per data dir)
+  rather than Flutter's `GApplication`.
+- Code comments that named the FFI or files under `ui/` were reworded;
+  the ones that say a behaviour follows the Flutter app stay, as history.
 
 **Build:**
 - Delete `ui/` and `ffi/` and remove them from the workspace.

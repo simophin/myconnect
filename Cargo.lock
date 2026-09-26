@@ -3223,19 +3223,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "myconnect-ffi"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "myconnect",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "myconnect-gui"
 version = "0.1.0"
 dependencies = [

@@ -3,50 +3,63 @@
 For agents continuing MyConnect. It has the ground rules, the checks that
 define "done", what is still open, and how to verify in the real app.
 
-The plan for the first Flutter UI milestone (items 1–11: unpairing,
-interop with KDE Connect, tray, transfers, settings, clipboard, end-to-end
-tests, ping, add by IP, packaging, browsing a device's files) is finished.
-It is kept in
+The plan for the first UI milestone (items 1–11: unpairing, interop with
+KDE Connect, tray, transfers, settings, clipboard, end-to-end tests, ping,
+add by IP, packaging, browsing a device's files) was built in Flutter and is
+finished. It is kept in
 [`archive/HANDOFF_UI_MILESTONE.md`](archive/HANDOFF_UI_MILESTONE.md) for
-the detail behind each feature and the traps found along the way.
+the detail behind each feature. The Flutter app was then replaced by a
+native one in Rust and iced ([`PLAN_ICED_UI.md`](PLAN_ICED_UI.md)) and
+deleted; its records are in
+[`archive/flutter-adr/`](archive/flutter-adr/README.md).
 
 ## Read first
 
 1. [`ARCHITECTURE.md`](ARCHITECTURE.md): the core and its plugins, and
-   the module map (§2), state machines, the full HTTP API, the FFI
-   embedding (§9), known gaps (§11), browsing a device's files (§12).
-2. [`../ui/README.md`](../ui/README.md): how to run the app, including two
-   instances on one machine.
-3. [`../ui/docs/adr/`](../ui/docs/adr/README.md): why the Flutter UI is
-   shaped the way it is. ADR 0001 and 0003 are the ones you will lean on.
-4. For the native UI that replaces it: [`PLAN_ICED_UI.md`](PLAN_ICED_UI.md)
-   (the steps, its own ground rules, and how to see the UI) and
-   [`adr/`](adr/README.md), whose 0001 is the decision and says which
-   Flutter records still apply. The app is `gui/` (`myconnect-gui`), the UI
-   core is `src/ui/`, both behind the `gui` cargo feature.
+   the module map (§2), state machines, the full HTTP API, how the app
+   embeds the daemon (§9), testing (§10), known gaps (§11), browsing a
+   device's files (§12).
+2. [`adr/0001`](adr/0001-native-ui-in-iced.md): why the UI is Rust and
+   iced in the daemon's process, its libraries, and its desktop
+   integration per platform. It says which of the Flutter app's records
+   (in [`archive/flutter-adr/`](archive/flutter-adr/README.md)) still
+   apply: 0003 (snapshot plus events), 0007 (tray), 0008 (browsing) and
+   0009 (window placement).
+3. [`PLAN_ICED_UI.md`](PLAN_ICED_UI.md): how the UI was built step by
+   step, the UI plugin seam, and what each step changed from the plan.
+   Its "Traps" are the UI's traps; the most common are below.
+
+The app is `gui/` (`myconnect-gui`), the UI core is `src/ui/`, and each
+feature's UI half is `src/plugins/<name>/ui.rs`, all behind the `gui`
+cargo feature.
 
 ## Ground rules (set by the project owner)
 
 - **The UI is dumb.** It persists nothing but the main window's placement
-  (ADR 0009). The Flutter UI reads and writes only through the
-  HTTP API; the native UI calls the core and the plugins' typed Rust
-  functions in-process instead (`adr/0001`), and anything it does, the
-  CLI can do too. If a feature needs data the API doesn't have, add the endpoint
-  (and, if the data changes over time, an event) in Rust first.
-- **Every resource needs a snapshot endpoint and events.** The UI loads a
-  snapshot, patches it from `/events`, and refetches after any reconnect
-  (ADR 0003). A resource with events but no list endpoint (or the reverse)
-  leaves the UI unable to recover after a gap.
+  (`window.json`); preferences are daemon settings, and its store is a
+  cache of core snapshots. It calls the core and the plugins' typed Rust
+  functions in-process (`adr/0001`), the same ones `http.rs` calls, so
+  anything it does, the CLI can do too. A UI feature that needs new
+  behaviour adds it to the plugin's or the core's Rust API first, then to
+  `http.rs` and `client.rs`/the CLI, then to `ui.rs`.
+- **Every resource needs a snapshot and events.** The UI takes a
+  snapshot, patches it from the event bus, and takes a fresh one after it
+  lags (Flutter ADR 0003, carried over); the CLI does the same over
+  `/events`. A resource with events but no snapshot (or the reverse)
+  leaves a client unable to recover after a gap.
 - **A feature is a plugin.** It lives in `src/plugins/<name>/`,
   implements `core::Plugin`, and is one line in `plugins::builtin()`
-  (ARCHITECTURE §2). The core doesn't name features, and plugins don't
-  import each other: what two features share belongs in the core.
-- **Native code only starts and stops the daemon** (`ffi/`, ADR 0002). Don't
-  add FFI functions for application features.
+  (ARCHITECTURE §2); its UI half is `ui.rs`, one line in
+  `plugins::builtin_with_ui()`. The core and `src/ui/` don't name
+  features, and plugins don't import each other, in the UI too: what two
+  features share belongs in the core (or, for UI helpers, `src/ui/`).
 - **Token auth is optional.** It is enforced only when the daemon was
-  started with one. The FFI always sets one; the CLI defaults to none.
-- Use reputable dependencies, and record new ones in ADR 0005's table (or
-  write a new ADR if the choice changes an existing decision).
+  started with one. The app always sets one (random unless given
+  `--api-token`); the CLI defaults to none.
+- **`cargo build -p myconnect` has no iced in it.** UI code and its
+  dependencies stay behind the `gui` feature.
+- Use reputable dependencies, and record new ones in `adr/0001`'s library
+  table (or write a new ADR if the choice changes an existing decision).
 - Update `ARCHITECTURE.md` when the API or module map changes.
 
 Done means all of these pass:
@@ -54,24 +67,28 @@ Done means all of these pass:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --all-targets     # also builds and tests the native UI
+cargo test --workspace --all-targets     # also builds and tests the UI
 cargo build -p myconnect                 # the CLI alone, without iced
 cargo tree -p myconnect -e normal --prefix none | grep -c '^iced'   # prints 0
 git diff --check
 ```
 
 Run `cargo test` under a private display and bus with
-`ICED_BACKEND=tiny-skia` (CLAUDE.md). With `SNAPSHOT_DIR` set, the native
-UI's snapshot tests write PNGs of each page there; look at them after a UI
-change.
+`ICED_BACKEND=tiny-skia` (CLAUDE.md). With `SNAPSHOT_DIR` set, the UI's
+snapshot tests write PNGs of each page there, in light and dark; look at
+them after a UI change (the snapshot font isn't the app's, so judge
+layout, not typography).
 
-Also run the real app for any UI change (see "Verifying in the real app"
-below). Unit tests with a fake daemon host missed two real bugs in the
-first milestone.
+Also run the real app for anything involving windows, the tray, drops,
+dialogs or notifications (see "Verifying in the real app" below):
+snapshots render one frame and miss what only shows over time. Unit tests
+with a fake daemon host missed two real bugs in the first milestone.
 
 ## Where things stand
 
-Everything in the milestone works in the Linux app and was checked live.
+Everything in the milestone works in the Linux app. It was checked live in
+the Flutter app, and each step of the iced rewrite in the real app against
+a CLI peer or the fake phone.
 Against KDE Connect for Android (a Pixel 8a, from the CLI daemon), these
 work: pairing, unpairing, clipboard, file transfer both ways, and browsing
 the phone's files. Nothing has been checked against KDE Connect on a
@@ -80,29 +97,28 @@ restores them from their trust records). The tray menu lists each connected
 paired device (send files, ping, ring, send clipboard, browse files,
 show details), with its
 battery; the device list and details
-page show the battery too (`kdeconnect.battery`, read-only); on Linux it needs a patched `cnativeapi`, vendored in
-`ui/third_party/`. Releases (`.github/workflows/build.yml`) build the
-native (iced) app, not the Flutter one: a universal macOS app in a DMG, a
+page show the battery too (`kdeconnect.battery`, read-only). Releases
+(`.github/workflows/build.yml`) build a universal macOS app in a DMG, a
 Windows installer, Debian packages for amd64 and arm64 holding the app and
 the CLI, and for tagged builds an Arch Linux PKGBUILD. The scripts are in
 `packaging/`.
 
 ## Open work
 
-**Replacing the Flutter UI with a native Rust UI (iced).** Decided by the
-owner on 2026-09-25. Follow [`PLAN_ICED_UI.md`](PLAN_ICED_UI.md) step by
-step. The Flutter app is no longer maintained (owner, 2026-09-25): its
-checks aren't part of "done", and it stays only as the spec until the
-plan's last step deletes it.
+**The tray and notifications on macOS and Windows** (`PLAN_ICED_UI.md`
+step 13b). They work on Linux only; macOS and Windows get no tray, so the
+app quits when its window closes there, and no notifications. That step
+needs a Mac and a Windows machine, and also owes the check that the macOS
+app launches from Finder.
 
-Other items still open:
+**The rest of the UI's open work** is at the end of
+[`PLAN_ICED_UI.md`](PLAN_ICED_UI.md#open-work-not-parity-after-step-16):
+dragging files out of the browser, start on login, remembered add-by-IP
+addresses, a low-battery notification, and accessibility.
 
-**Packaging.** The macOS and Windows builds bundle the daemon, but their
-first launch was never recorded here. On macOS, check that a download
-folder chosen in Settings still works after a restart: the sandbox forgets
-it without a security-scoped bookmark. Nothing is signed or notarized; the
-macOS app has only an ad-hoc signature. A Flutter build hook
-(`hook/build.dart`) could replace the per-platform build steps (ADR 0006).
+**Packaging.** Nothing is signed or notarized; the macOS app has only an
+ad-hoc signature. The macOS and Windows apps were built and the Windows
+installer installed in CI, but neither was used on a real desktop yet.
 
 **Browsing a device's files** (ARCHITECTURE §12, ADR 0008):
 
@@ -113,9 +129,8 @@ macOS app has only an ad-hoc signature. A Flutter build hook
 - A recursive delete runs inside the 15-second request deadline, so a very
   large folder can stop partway. Running it as a background job with
   progress would fix that.
-- `ui/integration_test/` doesn't cover browsing, because its peer is the
-  CLI, which serves no files. The iced UI's `tests/ui_e2e.rs` does,
-  against the fake phone (`tests/support/fake_phone.rs`).
+- `tests/ui_e2e.rs` covers browsing against the fake phone
+  (`tests/support/fake_phone.rs`), not a real one.
 - Not offered: dragging files out of the browser (ADR 0008), downloading
   whole folders, video thumbnails, and serving this machine's files (KDE
   Connect desktops don't either).
@@ -156,17 +171,23 @@ macOS app has only an ad-hoc signature. A Flutter build hook
 
 ## Traps
 
-- Widgets that `await` a mutation must capture the router or messenger
-  beforehand, because an event can unmount them mid-await (see
-  `device_detail_page.dart`). Apply the same care to new screens.
-- `--dart-define` reads live only in `daemon_host.dart`
-  (`DaemonHost.fromEnvironment` and `dataDirOverride`), with an ignore for
-  `avoid_redundant_argument_values`. Never run `dart fix` on
-  that file without checking the diff.
-- In debug builds the DEBUG banner covers the rightmost app bar action,
-  which on the home screen is the Transfers button (at about x 1244–1268,
-  y 14–38 in a 1280-wide window). It is there and clickable, just hidden.
-  Don't mistake it for a missing widget, and use `find.byTooltip` in tests.
+The UI's traps are listed in full in
+[`PLAN_ICED_UI.md`](PLAN_ICED_UI.md#traps). The ones that bite most often:
+
+- **Two runtimes.** iced polls futures on its own executor. Anything that
+  touches the daemon's tokio I/O (russh, payload sockets, file transfers)
+  must run on the daemon's runtime (`UiContext::spawn`). Symptom: a panic
+  "there is no reactor running", or a hang.
+- **Don't block `update`.** Anything that does I/O goes through a `Task`.
+- **Actions outlive their page.** An event can remove the device while an
+  action is in flight: messages carry ids, and handlers look the device up
+  again rather than holding on to it.
+- **No shadows under tiny-skia.** The software renderer paints a shadow
+  again on every partial redraw, turning the widget black. Dialogs use a
+  border instead; check anything new under `ICED_BACKEND=tiny-skia` in the
+  real app.
+- **iced is pinned** (`iced = "0.14"`, `iced_fonts = "0.3"`). Upgrading it
+  is its own change.
 
 ## Verifying in the real app
 
@@ -175,18 +196,23 @@ temporary data and download dirs, a free port, loopback discovery, and a
 private display and D-Bus session.
 
 ```sh
-dir=$(mktemp -d)
+dir=$(mktemp -d -p "$scratchpad")
 # peer
 cargo run -- --api-port "$port" run --discovery-loopback \
   --data-dir "$dir/peer" --download-dir "$dir/peer-downloads" \
   --device-name "CLI Peer"
-# app (separate identity, loopback only)
-cd ui && flutter run -d linux \
-  --dart-define=MYCONNECT_DISCOVERY_LOOPBACK=true \
-  --dart-define=MYCONNECT_DATA_DIR="$dir/ui" \
-  --dart-define=MYCONNECT_DOWNLOAD_DIR="$dir/ui-downloads" \
-  --dart-define=MYCONNECT_DEVICE_NAME="UI Desktop"
+# app (separate identity, loopback only), on a private display and bus
+env -u WAYLAND_DISPLAY ICED_BACKEND=tiny-skia \
+  dbus-run-session -- xvfb-run --auto-servernum \
+  cargo run -p myconnect-gui -- --discovery-loopback \
+    --data-dir "$dir/app" --download-dir "$dir/app-downloads" \
+    --device-name "UI Desktop" --api-port "$app_port"
 ```
+
+The app's own daemon serves the API on `--api-port` (with `--api-token`,
+or the random token it logs otherwise), so the CLI can drive it: `pair`
+with the peer, `send` to it, list its transfers. `--demo` fills the app
+with made-up paired devices, for looking at the UI without a peer.
 
 To try file browsing without a phone, run
 `cargo run --example fake_phone -- <DATA_DIR> <STORAGE_DIR> <DESKTOP_ID>`
@@ -204,12 +230,15 @@ the user's own session, and don't pair with or send to real devices on
 their network without asking.
 
 - Launch the app under `env -u WAYLAND_DISPLAY DISPLAY=:NN
-  GDK_BACKEND=x11 dbus-run-session -- ...`, with the environment *outside*
-  `dbus-run-session`. Services the private bus starts (the file chooser
+  GDK_BACKEND=x11 ICED_BACKEND=tiny-skia dbus-run-session -- ...`, with
+  the environment *outside* `dbus-run-session`. Services the private bus starts (the file chooser
   portal, notifications) inherit the bus daemon's environment. With `env`
   inside, they get the owner's `DISPLAY`/`WAYLAND_DISPLAY` and open on the
   owner's desktop.
-- The "Send file" picker opens as a GTK dialog on the virtual display.
+- There is no window manager, so a click doesn't give the app's window
+  keyboard focus: call `XSetInputFocus` on it before sending keys.
+- The "Send files" picker opens as a GTK dialog on the virtual display
+  (through `xdg-desktop-portal`, which D-Bus starts on your private bus).
   Without a window manager it can be bigger than the screen and doesn't get
   keyboard focus: move it on screen with `XMoveResizeWindow` and focus it
   with `XSetInputFocus`. Then press Ctrl+L, type the absolute path, and
@@ -224,12 +253,16 @@ their network without asking.
   Thunar) on the virtual display, and it may start helpers (`xfconfd`,
   `tumblerd`) that outlive it. Kill them afterwards, checking
   `/proc/<pid>/environ` first to make sure they belong to the private bus.
-- Quitting the app (the tray's Quit, the one path that stops the
-  daemon) works without a tray host: read `DBUS_SESSION_BUS_ADDRESS`
+- The portal starts `xdg-document-portal`, which mounts its FUSE file
+  system at the owner's `$XDG_RUNTIME_DIR/doc` if nothing is mounted
+  there. Stop every process on your bus when done, and check the mount is
+  as you found it.
+- Quit the app with Ctrl+Q in its focused window, or through the tray's
+  Quit, which works without a tray host: read `DBUS_SESSION_BUS_ADDRESS`
   from `/proc/<app pid>/environ`, get the menu with `gdbus call --session
-  --dest org.kde.StatusNotifierItem-<pid>-1 --object-path
-  /StatusNotifierItem/Menu --method com.canonical.dbusmenu.GetLayout --
-  0 -1 '["label"]'`, and send `com.canonical.dbusmenu.Event -- <Quit's
-  id> clicked '<"">' 0`.
+  --dest org.kde.StatusNotifierItem-<pid>-<n> --object-path /MenuBar
+  --method com.canonical.dbusmenu.GetLayout -- 0 -1 '["label"]'` (find the
+  name with `ListNames`), and send `com.canonical.dbusmenu.Event --
+  <Quit's id> clicked '<"">' 0`. Closing the window only hides it.
 - Don't clean up with `pkill -f <pattern>`: the pattern also matches the
   shell running the command, and kills it. Kill by PID.

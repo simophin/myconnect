@@ -83,8 +83,9 @@ impl Default for RunRequest {
 
 /// A started daemon: LAN transport, core, and control API.
 ///
-/// The CLI runs one until Ctrl-C; an embedding frontend (see the `ffi` crate)
-/// starts one, reads [`RunningService::api_addr`], and shuts it down on exit.
+/// The CLI runs one until Ctrl-C; the desktop app (`myconnect-gui`) starts
+/// one with [`RunningService::start_with`], hands its [`RunningService::core`]
+/// to the UI, and shuts it down when the user quits.
 pub struct RunningService {
     core: Core,
     lan: LanService,

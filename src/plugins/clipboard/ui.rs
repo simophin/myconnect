@@ -266,7 +266,7 @@ mod tests {
         assert_eq!(text, &describe_code("invalid_settings"));
     }
 
-    /// The clipboard codes `ui/lib/src/core/api/api_exception.dart` words.
+    /// The clipboard codes, worded as the Flutter app worded them.
     #[test]
     fn codes_read_like_the_flutter_app() {
         assert_eq!(

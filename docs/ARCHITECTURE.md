@@ -15,21 +15,21 @@ behavior.
 
 MyConnect is a Cargo workspace: the `myconnect` package (one library,
 `src/lib.rs`, plus a CLI binary that is a thin client of it), and the
-`myconnect-ffi` package (`ffi/`), a C ABI that lets a GUI embed a daemon.
-The Flutter desktop app lives in `ui/`.
+`myconnect-gui` package (`gui/`), the desktop app.
 
 ```text
-CLI (myconnect)       ─┐
-Flutter UI (ui/)       ├── local HTTP API (/api/v1) ── core + plugins ── KDE Connect transport
-Other automation      ─┘
+CLI (myconnect)       ─┬── local HTTP API (/api/v1) ──┐
+Other automation      ─┘                              ├── core + plugins ── KDE Connect transport
+Desktop app (gui/)    ─── in-process: snapshots, events, typed calls ─┘
 ```
 
-The CLI and the Flutter UI talk to the daemon exclusively through the local
-HTTP API. Neither owns sockets, pairing state, trust state, or transfer
-state — that all lives inside the daemon process, behind
-`core::Core`. The UI additionally uses the FFI library, but only to
-start and stop an embedded daemon (§9); the UI's own design decisions are
-recorded in [`ui/docs/adr/`](../ui/docs/adr/README.md).
+The CLI talks to the daemon exclusively through the local HTTP API. The
+desktop app runs the daemon in its own process and calls the core and the
+plugins' typed Rust functions directly (§9); its daemon still serves the
+API, so the CLI can drive and inspect the instance the app shows. No
+frontend owns sockets, pairing state, trust state, or transfer state —
+that all lives in the daemon, behind `core::Core`. The UI's design
+decisions are recorded in [`adr/0001`](adr/0001-native-ui-in-iced.md).
 
 ## 2. Module map and dependency direction
 
@@ -43,9 +43,9 @@ ABI. Boundaries are kept by module visibility and review, in one crate.
 
 ```text
 binary (src/bin/myconnect) → daemon, client
-ffi (myconnect-ffi) → daemon
 gui (myconnect-gui) → daemon, ui, plugins::builtin_with_ui   [feature "gui"]
 ui → core (snapshots, events), protocol (types only)         [feature "gui"]
+plugins/*/ui.rs → ui (UiPlugin, widgets), their own plugin, core   [feature "gui"]
 daemon → core, plugins::builtin, api, transport (the composition root)
 api → core (core routes, plugin routes merged in)
 plugins/* → core (Plugin, PluginContext), api (ApiProblem, upload helpers), protocol
@@ -58,7 +58,8 @@ client → core (snapshot and event types), plugins/* (their types)
 types. The core never names a plugin: it calls them only through
 `dyn Plugin`, and `daemon` is the one place that picks them. Plugins never
 import each other; what two features need (transfers, payload connections)
-is a core service.
+is a core service. The same holds in the UI: `ui` never names a feature and
+never imports `plugins`, and `core` never imports `ui`.
 
 | Module | File(s) | Responsibility |
 | --- | --- | --- |
@@ -72,14 +73,13 @@ is a core service.
 | | `src/core/transfers.rs`, `src/core/payload.rs` | The transfers service (`Transfers`, `TransferHandle`: the state machine, progress throttling, cancellation and cleanup, for every feature that moves a file, §5), and payload connections for plugins (`PayloadPeer`: listen or dial with this device's certificate, or sign in to an SSH server on the device with its key, without handing out the key). |
 | | `src/core/{plugin,events,settings,error}.rs` | The plugin API (`Plugin`, `PluginContext`, `PluginRegistry`, `Capabilities`, plugin events and settings sections), the bounded event bus (plugin events travel as `EventData::Plugin` with the same `{type, data}` shape), user settings with a section per plugin that has settings (§7), and `CoreError`. |
 | | `src/core/testing.rs` | A real core for unit tests: in-memory trust store, no plugins or just the one under test, no LAN. |
-| `plugins` | `src/plugins/mod.rs`, `src/plugins/{ping,findmyphone}/{mod,packet,http}.rs`, `src/plugins/battery/{mod,packet}.rs`, `src/plugins/clipboard/{mod,packet,http,backend}.rs`, `src/plugins/clipboard/backend/system.rs`, `src/plugins/share/{mod,packet,http}.rs`, `src/plugins/browse/{mod,packet,http,session,ssh,files}.rs` | The features, each a `core::Plugin`; `builtin()` lists them. Ping owns its packet handling, `ping.received` event and `POST /devices/{id}/ping`. Find my phone only sends, and owns `POST /devices/{id}/ring`. Battery adds `plugins.battery` to device snapshots and clears it through the `disconnected`/`unpaired` hooks. Clipboard owns the synced text and `/clipboard`, the `plugins.clipboard` settings section, and its backends (the `ClipboardService` trait, the desktop clipboard `SystemClipboard` over `arboard`, an in-memory one); it follows the desktop clipboard from its `started` hook and releases it in `shutdown` (§6). Share sends files through its streaming route `POST /devices/{id}/share` and saves files peers send, both as core transfers (§5). Browse owns the per-device SFTP sessions with peers' file servers and the `/devices/{id}/files` routes (the upload as a streaming route), and closes its sessions through the `disconnected`/`unpaired`/`shutdown` hooks (§12). Capabilities advertised in the identity packet are the union over the plugins: ping, clipboard and share in both directions; `kdeconnect.sftp.request` outgoing and `kdeconnect.sftp` incoming only, since this build browses peers but serves no files; `kdeconnect.battery` incoming only, since it reads peers' batteries but reports none; `kdeconnect.findmyphone.request` outgoing only, since this build asks peers to ring but doesn't ring itself. |
-| `daemon` | `src/daemon.rs` | The composition root: `RunningService` builds the core with `plugins::builtin()`, applies the stored settings, starts the plugins, the LAN transport (advertising the core's capabilities) and the API, and stops them in order. Used by the CLI's `run` and by the FFI. `start_with` takes the plugin list from the caller (the desktop app, which keeps each plugin's UI half), and `core()` hands the running core to a frontend in the same process. |
+| `plugins` | `src/plugins/mod.rs`, `src/plugins/{ping,findmyphone}/{mod,packet,http}.rs`, `src/plugins/battery/{mod,packet}.rs`, `src/plugins/clipboard/{mod,packet,http,backend}.rs`, `src/plugins/clipboard/backend/system.rs`, `src/plugins/share/{mod,packet,http}.rs`, `src/plugins/browse/{mod,packet,http,session,ssh,files}.rs`, and each one's `ui.rs` (`gui`) | The features, each a `core::Plugin`; `builtin()` lists them, and `builtin_with_ui()` (`gui`) the same plugins with their UI halves. Ping owns its packet handling, `ping.received` event and `POST /devices/{id}/ping`. Find my phone only sends, and owns `POST /devices/{id}/ring`. Battery adds `plugins.battery` to device snapshots and clears it through the `disconnected`/`unpaired` hooks. Clipboard owns the synced text and `/clipboard`, the `plugins.clipboard` settings section, and its backends (the `ClipboardService` trait, the desktop clipboard `SystemClipboard` over `arboard`, an in-memory one); it follows the desktop clipboard from its `started` hook and releases it in `shutdown` (§6). Share sends files through its streaming route `POST /devices/{id}/share` and saves files peers send, both as core transfers (§5). Browse owns the per-device SFTP sessions with peers' file servers and the `/devices/{id}/files` routes (the upload as a streaming route), and closes its sessions through the `disconnected`/`unpaired`/`shutdown` hooks (§12). Capabilities advertised in the identity packet are the union over the plugins: ping, clipboard and share in both directions; `kdeconnect.sftp.request` outgoing and `kdeconnect.sftp` incoming only, since this build browses peers but serves no files; `kdeconnect.battery` incoming only, since it reads peers' batteries but reports none; `kdeconnect.findmyphone.request` outgoing only, since this build asks peers to ring but doesn't ring itself. |
+| `daemon` | `src/daemon.rs` | The composition root: `RunningService` builds the core with `plugins::builtin()`, applies the stored settings, starts the plugins, the LAN transport (advertising the core's capabilities) and the API, and stops them in order. Used by the CLI's `run` and by the desktop app. `start_with` takes the plugin list from the caller (the desktop app, which keeps each plugin's UI half), and `core()` hands the running core to a frontend in the same process. |
 | `api` | `src/api.rs`, `src/api/upload.rs` | The Axum server: the core's routes (`/status`, `/discovery`, `/devices`, `/pairings`, `/transfers`, `/settings`, `/events`), every plugin's routes merged in, `ApiProblem` (the `application/problem+json` error every handler returns, with `From<CoreError>`), optional bearer-token auth, body-size limits, request deadline and SSE. Streaming routes (every plugin's `streaming_routes`) get the transfer-sized body limit and no request deadline; `upload` has the helpers they share (idle timeout, forwarding a multipart file part into a transfer until the part or the transfer ends, and the lingering close that drains an upload a handler answered before reading to its end). |
 | `client` | `src/client.rs` | Typed HTTP client used by the CLI (and any future frontend) to talk to `api`. |
 | `src/bin/myconnect` | `cli.rs`, `main.rs` | Argument parsing and daemon bootstrap only. |
-| `ui` | `src/ui/{mod,plugin,route,store,sync,activity,demo,error,widgets}.rs`, `src/ui/pages/*.rs`, `src/ui/overlay/*.rs`, `src/ui/desktop/*.rs` | The native desktop UI in iced, behind the `gui` feature ([`adr/0001`](adr/0001-native-ui-in-iced.md), [`PLAN_ICED_UI.md`](PLAN_ICED_UI.md)). It runs in the daemon's process and reads the core directly: `sync` subscribes to the event bus, then takes a snapshot, and takes a fresh one after a lag. It never names a feature: each feature's UI half lives in `src/plugins/<name>/ui.rs` (ping, find my phone, battery and clipboard so far), implements `ui::plugin::UiPlugin` with its own message type, and is listed by `plugins::builtin_with_ui()`. The shell stores them erased, routes their messages back by plugin id, fills its slots from them (the device card's status chips, the device page's action buttons, the settings page's sections), and does what they ask through `ShellRequest` (toast, notify, navigate, confirm). Pairing is shell code: Add device, the pairing page and the incoming pairing prompt, drawn over every page while a request waits. So are Transfers and Settings. `desktop` holds the platform glue behind small traits (opening files with `opener`, the folder picker with `rfd`), so tests swap in fakes. `demo` fills the core with made-up devices for `--demo`; what they report comes from each plugin's `demo_packets`. |
+| `ui` | `src/ui/{mod,plugin,route,store,sync,background,activity,demo,error,widgets,testing}.rs`, `src/ui/pages/*.rs`, `src/ui/overlay/*.rs`, `src/ui/desktop/*.rs` | The desktop UI in iced, behind the `gui` feature ([`adr/0001`](adr/0001-native-ui-in-iced.md)). It runs in the daemon's process and reads the core directly (§9): `sync` subscribes to the event bus, then takes a snapshot into `store`, and takes a fresh one after a lag. It never names a feature: each feature's UI half lives in `src/plugins/<name>/ui.rs`, implements `ui::plugin::UiPlugin` with its own message type, and is listed by `plugins::builtin_with_ui()`. The shell stores them erased, routes their messages back by plugin id, fills its slots from them (the device card's status chips, the device page's and the tray's actions, drop targets, plugin pages such as the file browser, the settings page's sections), and does what they ask through `ShellRequest` (toast, notify, navigate, pick files, confirm, prompt). The pages the core owns are shell code: devices, device, Add device, pairing (and the incoming pairing prompt, drawn over every page while a request waits), transfers, settings, and the startup and error screens. `background` is the tray, close-to-tray, quit and notifications; `desktop` holds the platform glue behind small traits (the tray, notifications, dialogs with `rfd`, opening files with `opener`, the saved window placement, the single-instance socket), so tests swap in fakes. `demo` fills the core with made-up devices for `--demo`. |
 | `myconnect-gui` | `gui/src/main.rs` | The desktop app's composition root: flags (each also an environment variable), starting the daemon through `RunningService::start_with` and `plugins::builtin_with_ui()`, running `ui::run`, and shutting the daemon down after. |
-| `myconnect-ffi` | `ffi/src/lib.rs` | `cdylib` exporting `myconnect_start` / `myconnect_stop` / `myconnect_free_string` (JSON in, JSON out) so a GUI process can embed a daemon. See §9. |
 
 ### The `Plugin` trait
 
@@ -141,10 +141,14 @@ type), `can_send` and `broadcast(packet, except)`; `publish`;
 `settings::<T>()`; `transfers()`; and `payload_peer(device)` for payload
 connections and SSH sign-in without the private key.
 
-A new feature is a module under `plugins/` implementing `core::Plugin`,
-with its unit tests against `core::testing::handle_with_plugin`, plus one
-line in `plugins::builtin()`. `client.rs`, the CLI, the UI and this
-document follow it by hand. [`research/feature-modules.md`](research/feature-modules.md)
+A new feature is a module under `plugins/`: `mod.rs` implementing
+`core::Plugin` with the feature's typed Rust API and its unit tests against
+`core::testing::handle_with_plugin`, `http.rs` for its routes, and `ui.rs`
+(behind `gui`) implementing `ui::plugin::UiPlugin` over the same API; plus
+one line in `plugins::builtin()` and one in `plugins::builtin_with_ui()`,
+and the CLI's commands in `client.rs` and `cli.rs`. The UI calls the typed
+API, never the routes, so anything the UI does the CLI can do too. This
+document follows it by hand. [`research/feature-modules.md`](research/feature-modules.md)
 records how the daemon was moved to this shape, feature by feature, and
 what each step taught.
 
@@ -271,8 +275,8 @@ States: `queued → connecting → transferring → completed | cancelled | fail
 - Backends implement `ClipboardService`. `SystemClipboard` is the desktop
   clipboard (`arboard`; on Linux the Wayland data-control protocol where the
   compositor has it, else X11/XWayland), selected by `RunRequest::
-  system_clipboard` (`myconnect run --system-clipboard`, FFI
-  `systemClipboard`; the app turns it on). `InMemoryClipboard` is the
+  system_clipboard` (`myconnect run --system-clipboard`; the app turns it
+  on unless given `--no-system-clipboard`). `InMemoryClipboard` is the
   default, for tests and headless runs, and the fallback when the desktop
   clipboard can't be opened (logged as a warning).
 - `SystemClipboard` owns the clipboard on its own thread: it applies writes
@@ -312,11 +316,12 @@ the platform download directory, `true`.
   The old top-level `clipboardSyncEnabled` is not migrated: a file that
   still has it is read as if it didn't, and it is dropped on the next save.
 - **Precedence.** A start option (`myconnect run --device-name` /
-  `--download-dir`, or the FFI config's `deviceName` / `downloadDir`)
+  `--download-dir`, or the app's flags of the same names)
   overrides the stored value for that run only and is not saved. Changing
   that setting through `PATCH /settings` saves it and drops the override
   for the rest of the run. The app passes these start options only when
-  given a `--dart-define`, so normal launches use the stored settings.
+  given the flag (or its environment variable), so normal launches use the
+  stored settings.
 - **Changes** are validated (names follow the identity schema: 1–32
   characters, no reserved punctuation; download directories must be
   absolute and are created up front), saved atomically, then applied, and
@@ -333,8 +338,8 @@ the platform download directory, `true`.
 ## 8. HTTP API (`/api/v1`)
 
 Authentication is optional. When the daemon is started with a token
-(`myconnect run --api-token`, `MYCONNECT_API_TOKEN`, or always when embedded
-through the FFI), every request must carry `Authorization: Bearer <token>`
+(`myconnect run --api-token`, `MYCONNECT_API_TOKEN`, or always in the desktop
+app, which picks a random one unless given `--api-token`), every request must carry `Authorization: Bearer <token>`
 and gets a `401` otherwise. Without a token — the CLI default — any local
 client may call the API. Tokens are never persisted; clients pass the same
 `--api-token`/`MYCONNECT_API_TOKEN`. The server binds `127.0.0.1` by default;
@@ -356,7 +361,7 @@ streaming routes) and the event stream.
 | `GET` | `/pairings/{pairingId}` | Pairing state, verification code, expiry. |
 | `POST` | `/pairings/{pairingId}/accept` | Confirm verification codes match (incoming only). |
 | `DELETE` | `/pairings/{pairingId}` | Reject/cancel/unpair. |
-| `POST` | `/devices/{deviceId}/share` | Send a file: streaming `multipart/form-data` with one `file` part, which must carry a `Content-Length` header; `202` with the transfer once the whole file has been forwarded, or as soon as the transfer ends if that comes first (cancelled or failed; the snapshot's `status` says which). Has its own, larger body-size limit than the rest of the API, and no overall deadline: it fails with `408 request_timeout` only if the upload stalls for longer than the request timeout. A streaming route that answers before reading the whole upload (a transfer that ended, an error) reads and discards the rest in the background, until the body ends, the client goes quiet for the request timeout, or the daemon shuts down, so a client still sending gets the answer rather than a reset connection. Clients that read the response while still sending (e.g. `reqwest`, `curl`) get it at once; ones that read it only after sending the whole body (Dart's `HttpClient`) get it once they have, so the app instead picks the transfer's id with `?transferId=<uuid>` and aborts its request once `/events` shows that transfer ended. Without `transferId` the daemon picks the id; a value that isn't a UUID is `400 invalid_transfer_id`, one already used `409 transfer_exists`. |
+| `POST` | `/devices/{deviceId}/share` | Send a file: streaming `multipart/form-data` with one `file` part, which must carry a `Content-Length` header; `202` with the transfer once the whole file has been forwarded, or as soon as the transfer ends if that comes first (cancelled or failed; the snapshot's `status` says which). Has its own, larger body-size limit than the rest of the API, and no overall deadline: it fails with `408 request_timeout` only if the upload stalls for longer than the request timeout. A streaming route that answers before reading the whole upload (a transfer that ended, an error) reads and discards the rest in the background, until the body ends, the client goes quiet for the request timeout, or the daemon shuts down, so a client still sending gets the answer rather than a reset connection. Clients that read the response while still sending (e.g. `reqwest`, `curl`) get it at once; ones that read it only after sending the whole body (Dart's `HttpClient`) get it once they have, so such a client can pick the transfer's id with `?transferId=<uuid>` and abort its request once `/events` shows that transfer ended. Without `transferId` the daemon picks the id; a value that isn't a UUID is `400 invalid_transfer_id`, one already used `409 transfer_exists`. |
 | `GET` | `/transfers` | Active and recent transfers. |
 | `GET` | `/transfers/{transferId}` | State, byte counts, safe metadata. |
 | `DELETE` | `/transfers/{transferId}` | Cancel an active transfer. |
@@ -386,26 +391,31 @@ share its files (with the device's own reason in `detail` when it gave one),
 besides the device errors (`device_not_paired`, `device_not_connected`,
 `unsupported_by_peer`).
 
-## 9. Embedding (FFI)
+## 9. Embedding: the UI runs the daemon in-process
 
-`myconnect-ffi` exposes three C functions exchanging JSON strings:
+The desktop app (`gui/src/main.rs`) builds a tokio runtime, starts a
+`RunningService` with `start_with(request, plugins::builtin_with_ui)`,
+which builds each plugin once and its UI half from the same instance, and
+hands the running core and the UI halves to `ui::run`. There is no FFI and
+no HTTP between them:
 
-- `myconnect_start(config)` — config mirrors `myconnect run`
-  (`dataDir`, `downloadDir`, `deviceName`, `discoveryLoopback`,
-  `systemClipboard`, `apiHost`, `apiPort`, `apiToken`). Defaults: loopback, port `0` (OS-chosen), and a
-  freshly generated token. `deviceName` and `downloadDir` override the
-  stored settings for that run (§7). Returns
-  `{handle, apiHost, apiPort, apiToken}` once the LAN transport and API are
-  listening.
-- `myconnect_stop(handle)` — graceful shutdown via `RunningService::shutdown`,
-  then the instance's Tokio runtime.
-- `myconnect_free_string(ptr)` — frees any returned string.
-
-Errors come back as `{"error": "..."}`; panics are caught at the boundary.
-The embedder then uses only the HTTP API. The Linux Flutter build compiles
-and bundles this library (see `ui/docs/adr/0006`). The app keeps running in
-the tray with its window closed, so the embedded daemon stops only when the
-user quits (see `ui/docs/adr/0007`).
+- **Reads.** `ui::sync` subscribes to the event bus, then takes snapshots
+  from `Core` (devices, pairings, transfers, settings) into `ui::store`,
+  patches them from events, and takes a fresh snapshot after the receiver
+  lags.
+- **Actions.** The UI calls the core and each plugin's typed Rust API (the
+  functions its `http.rs` also calls). Anything that does I/O runs as a
+  task on the daemon's tokio runtime (`UiOptions::runtime`); iced's own
+  executor never touches the daemon's sockets.
+- **The API stays.** The embedded daemon serves the HTTP API on
+  `127.0.0.1`, on a free port (`--api-port` picks one) with a random token
+  (`--api-token` sets one), and logs the address, so the CLI can drive the
+  same instance.
+- **Lifetime.** The UI starts the daemon (again on Retry after a failed
+  start). The app keeps running in the tray with its window closed, so
+  the daemon stops only when the user quits
+  ([`archive/flutter-adr/0007`](archive/flutter-adr/0007-keep-running-in-the-tray.md),
+  carried over by [`adr/0001`](adr/0001-native-ui-in-iced.md)).
 
 ## 10. Testing
 
@@ -415,8 +425,12 @@ phase: `protocol.rs`, `tls.rs`, `lan.rs`, `pairing.rs` / `pairing_e2e.rs`,
 `client.rs`, `api.rs`. `browse_e2e.rs` runs against a fake KDE Connect for
 Android (`tests/support/fake_phone.rs`), which `examples/fake_phone.rs`
 also runs standalone for trying the app without a phone.
-The FFI crate has its own start/stop smoke test, and the Flutter app has
-unit and widget tests under `ui/test/`.
+`ui_e2e.rs` (needs `gui`) runs the whole desktop app headless in
+`iced_test`'s emulator against a second daemon and the fake phone: pairing
+both ways, unpairing, ping, clipboard, files both ways, and browsing. The
+UI's unit tests sit next to each page and plugin UI half, over a real
+core from `core::testing` with fake desktop services, and snapshot tests
+render each page to PNG in light and dark when `SNAPSHOT_DIR` is set.
 Most end-to-end tests spin up two in-process peers (real UDP/TCP/TLS on
 loopback, no mocked network layer) and exercise discovery through encrypted
 plugin dispatch.
@@ -427,9 +441,12 @@ Standard verification before any change is considered done:
 cargo fmt --all --check
 cargo test --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
+cargo build -p myconnect   # the CLI alone, without iced
 git diff --check
-(cd ui && flutter analyze && flutter test)
 ```
+
+Run `cargo test` under a private display and D-Bus session with
+`ICED_BACKEND=tiny-skia` (see `CLAUDE.md`).
 
 ## 11. Known gaps
 
@@ -444,7 +461,7 @@ Prioritized next work, with implementation notes for each item, is in
   transfer (3 MB, byte-identical). Ping to the phone works; ping from the
   phone was dropped at the time and is handled now (`ping.received`), but
   that direction has not been rechecked against the phone. Not yet checked against KDE Connect on
-  desktop, and not from the Flutter app (the app embeds the same daemon).
+  desktop, and not from the desktop app (it embeds the same daemon).
   Two bugs found by the check are fixed: the CLI's upload omitted the file
   part's `Content-Length` header, and incoming pair requests were dropped
   when the clocks differed by more than 30 seconds.
@@ -463,7 +480,8 @@ Prioritized next work, with implementation notes for each item, is in
 
 KDE Connect for Android shares its storage over SFTP; no other KDE Connect
 client serves files. MyConnect is a client only: the UI's reasoning is in
-[`ui/docs/adr/0008`](../ui/docs/adr/0008-browse-device-files-in-the-app.md).
+[`archive/flutter-adr/0008`](archive/flutter-adr/0008-browse-device-files-in-the-app.md),
+which [`adr/0001`](adr/0001-native-ui-in-iced.md) carries over.
 
 - **Offer.** The first file request for a device sends
   `kdeconnect.sftp.request {"startBrowsing": true}` and waits up to 5

@@ -14,40 +14,35 @@ collide with another run. Do this every time, without being asked:
   your scratchpad, never the default config dir (`~/.config/MyConnect`, the
   owner's real identity and trust) and never a fixed path like `/tmp/ui`
   that another session may be using:
-  - CLI and the iced app (`myconnect-gui`): `--data-dir "$dir/data"
-    --download-dir "$dir/downloads"`.
-  - Flutter app: `--dart-define=MYCONNECT_DATA_DIR=$dir/data` and
-    `--dart-define=MYCONNECT_DOWNLOAD_DIR=$dir/downloads`.
-  - Without the download dir, received files land in the owner's
-    `~/Downloads`.
-  - `integration_test/` and `tests/ui_e2e.rs` already make their own
-    temporary directories.
+  - CLI and the app (`myconnect-gui`): `--data-dir "$dir/data"
+    --download-dir "$dir/downloads"`. Without the download dir, received
+    files land in the owner's `~/Downloads`.
+  - `tests/ui_e2e.rs` and the other integration tests already make their
+    own temporary directories.
 
   Delete the directory when you are done.
 - **Ports.** Don't use the default API port 24816 or a port from the docs
   (25011). Pick a free one, e.g.
   `python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'`.
-  Both apps' embedded daemons already pick a free port.
-- **Network.** Pass `--discovery-loopback` (CLI and iced app) or
-  `--dart-define=MYCONNECT_DISCOVERY_LOOPBACK=true` (Flutter app) so nothing
+  The app's embedded daemon already picks a free port.
+- **Network.** Pass `--discovery-loopback` (CLI and app) so nothing
   announces on or listens to the LAN: discovery binds `127.255.255.255:1716`
   and the control and payload ports bind `127.0.0.1`, so real devices can
   neither find nor dial the instance (`ss -lunpt` shows only loopback
   addresses for its PID). Loopback instances from other sessions can still
   see yours in a scan, so pair only with the device id you started, never by
   name alone. Don't pair with or send to real devices without asking.
-- **Display and D-Bus.** Run either app under
-  `dbus-run-session -- xvfb-run --auto-servernum ...` (as
-  `ui/tool/integration_test.sh` does), or on an `Xvfb` display number you
-  checked is free, with `WAYLAND_DISPLAY` unset. The Flutter app is a
-  unique `GApplication` per D-Bus session: launched on the owner's session
-  bus, it would just raise their running app and exit. A private bus also
-  keeps notifications, the tray and file dialogs off the owner's desktop.
-  Run `cargo test` the same way: the `plugins::clipboard::backend::system`
-  tests read and write the real clipboard, so on the owner's display they
-  clobber it and fail when it changes under them. Under Xvfb there is no
-  GPU, so set `ICED_BACKEND=tiny-skia` for the iced app and its tests. The
-  whole recipe for the iced app:
+- **Display and D-Bus.** Run the app under
+  `dbus-run-session -- xvfb-run --auto-servernum ...`, or on an `Xvfb`
+  display number you checked is free, with `WAYLAND_DISPLAY` unset. A
+  private bus keeps the tray, notifications and file dialogs off the
+  owner's desktop, and a private data dir keeps the app's single-instance
+  socket apart from the owner's: with the owner's, it would just show
+  their running app and exit. Run `cargo test` the same way: the
+  `plugins::clipboard::backend::system` tests read and write the real
+  clipboard, so on the owner's display they clobber it and fail when it
+  changes under them. Under Xvfb there is no GPU, so set
+  `ICED_BACKEND=tiny-skia` for the app and its tests. The whole recipe:
 
   ```sh
   dir=$(mktemp -d -p "$scratchpad")
@@ -64,6 +59,5 @@ collide with another run. Do this every time, without being asked:
 
 ## Worktrees
 
-When asked to work in a worktree, each worktree builds its own `target/`
-and `ui/build/`, so the first build is slow. Run `flutter pub get` in the
-worktree's `ui/` before anything else that touches the Flutter app.
+When asked to work in a worktree, each worktree builds its own `target/`,
+so the first build is slow.

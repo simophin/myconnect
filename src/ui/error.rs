@@ -70,8 +70,8 @@ pub fn file_name(path: &Path) -> String {
 mod tests {
     use super::*;
 
-    /// Every code `ui/lib/src/core/api/api_exception.dart` words that
-    /// isn't a plugin's.
+    /// Every code the Flutter app worded that isn't a plugin's, worded
+    /// the same.
     #[test]
     fn codes_read_like_the_flutter_app() {
         for (code, message) in [

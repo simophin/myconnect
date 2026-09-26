@@ -2304,7 +2304,7 @@ pub(crate) mod tests {
         assert!(browser.shows("notes.txt"));
     }
 
-    /// The browse codes `ui/lib/src/core/api/api_exception.dart` words.
+    /// The browse codes, worded as the Flutter app worded them.
     #[test]
     fn codes_read_like_the_flutter_app() {
         for (code, message) in [

@@ -5,8 +5,9 @@ decided, and what follows from it. Records are immutable once accepted; a
 later decision that changes course supersedes an earlier one rather than
 editing it.
 
-The Flutter app's records are in [`../../ui/docs/adr/`](../../ui/docs/adr/README.md)
-until that app is removed; 0001 below says which of them still apply.
+The deleted Flutter app's records are in
+[`../archive/flutter-adr/`](../archive/flutter-adr/README.md); 0001 below
+says which of them still apply.
 
 | # | Decision | Status |
 | --- | --- | --- |

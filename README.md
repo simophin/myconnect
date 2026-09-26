@@ -11,9 +11,12 @@ Provides a desktop application for MacOS/Linux/Windows.
 The MVP is implemented: LAN discovery, protocol-v8 TLS connections with
 certificate pinning, user-confirmed pairing, persistent identity and trust,
 text clipboard synchronization, file transfer with progress and
-cancellation, and a versioned local HTTP API that the CLI and the Flutter
-desktop UI ([`ui/`](ui/README.md)) use exclusively — no frontend touches KDE
-Connect sockets or state directly.
+cancellation, browsing a phone's files, and a versioned local HTTP API that
+the CLI uses. The desktop app (`gui/`, in Rust with
+[iced](https://iced.rs)) runs the daemon in its own process and reads its
+core directly; its daemon still serves the API, so the CLI can drive it
+too. It has a tray, notifications and drag and drop, and is packaged for
+Linux (`.deb`, Arch), macOS (DMG) and Windows (installer).
 
 Pairing, clipboard sync and file transfer have been checked manually against
 KDE Connect for Android, but not yet against KDE Connect on desktop; see
@@ -62,10 +65,8 @@ development, `MYCONNECT_API_URL` overrides the API URL (superseded by
 
 ### Project structure
 
-MyConnect is a Cargo workspace — the main package with a shared library and a
-thin binary entry point, plus the native desktop app and an FFI crate — and
-the Flutter desktop app that the native one is replacing
-([`docs/PLAN_ICED_UI.md`](docs/PLAN_ICED_UI.md)):
+MyConnect is a Cargo workspace: the main package with a shared library and a
+thin CLI entry point, plus the desktop app:
 
 ```text
 src/
@@ -78,19 +79,19 @@ src/
 ├── daemon.rs         # composition root: core + built-in plugins + LAN + API
 ├── api.rs               # local HTTP control plane (optional token auth)
 ├── client.rs             # HTTP client used by the CLI
-├── ui/                   # native desktop UI in iced ("gui" feature)
+├── ui/                   # desktop UI in iced ("gui" feature)
 └── bin/
     └── myconnect/        # CLI binary
         ├── cli.rs
         └── main.rs
-gui/                      # myconnect-gui: the native desktop app (daemon + ui)
-ffi/                      # myconnect-ffi: C ABI to embed a daemon (start/stop)
-ui/                       # Flutter desktop app (see ui/README.md, ui/docs/adr/)
+gui/                      # myconnect-gui: the desktop app (daemon + ui)
+packaging/                # .deb, Arch PKGBUILD, macOS app, Windows installer
+assets/                   # icon sources and the generated icons
 ```
 
-Keeping behavior in the library lets other frontends use the same daemon
-API. The Flutter UI embeds a daemon through `ffi/` and then talks to it only
-over HTTP, so no GUI dependencies leak into the Rust crates. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for module
+Each feature's UI half lives in its plugin (`src/plugins/<name>/ui.rs`),
+behind the `gui` cargo feature, so the CLI and daemon build without any GUI
+dependency (`cargo build -p myconnect`). See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for module
 boundaries, data flow, the full HTTP API, and the pairing/transfer state
 machines.
 
@@ -101,6 +102,10 @@ cargo run -- run
 cargo run -- devices
 cargo run -- send <device-id> <file> --watch
 ```
+
+Run the desktop app with `cargo run -p myconnect-gui` (`--help` lists its
+flags, which mirror `myconnect run`; `--demo` fills it with made-up
+devices).
 
 Use `RUST_LOG` to control log output, for example
 `RUST_LOG=myconnect=debug cargo run -- run`.

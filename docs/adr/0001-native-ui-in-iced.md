@@ -56,9 +56,10 @@ plan; this record is the decision and the shape it fixes.
 
 ### What happens to the Flutter UI's records
 
-The Flutter app stays in the tree, and its records stay in force for it,
-until it is deleted (plan step 16, which moves them to
-`docs/archive/flutter-adr/`). For the new UI:
+The Flutter app stayed in the tree, with its records in force for it,
+until plan step 16 deleted it and moved them to
+[`../archive/flutter-adr/`](../archive/flutter-adr/README.md). For the new
+UI:
 
 | Flutter record | For the new UI |
 | --- | --- |
