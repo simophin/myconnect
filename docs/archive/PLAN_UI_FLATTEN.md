@@ -1,5 +1,12 @@
 # Plan: move the UI's feature code into `src/ui/` and drop the plugin seam
 
+> **Archived.** This plan is finished and kept for the history behind each
+> PR. What is still in force lives elsewhere: the decision and why in
+> [`adr/0001`](../adr/0001-native-ui-in-iced.md); the shape of the code in
+> [`ARCHITECTURE.md`](../ARCHITECTURE.md) §2; the ground rules in
+> [`HANDOFF.md`](../HANDOFF.md). Links below are as they were before the
+> move.
+
 For agents doing this work. Each agent starts clean, so this file carries
 the context: why, what the code looks like now, the target, and what
 "done" means for each PR. Read [`HANDOFF.md`](HANDOFF.md) first for the
@@ -7,14 +14,14 @@ ground rules, the done-means checks and how to run things in isolation
 (CLAUDE.md). **Where this plan and the docs disagree about where UI code
 lives, this plan wins**: PR 3 brings the docs in line.
 
-Status (2026-09-26): PR 1 done (#28); PR 2 done (branch `ui-split`); PR 3
-not started.
+Status (2026-09-26): done. PR 1 (#28), PR 2 (#29), PR 3 (branch
+`ui-flatten-docs`).
 
 | PR | What | Needs |
 | --- | --- | --- |
 | 1 | Move each feature's `ui.rs` into `src/ui/features/` **and** replace the erased `UiPlugin` seam with concrete messages and routes. **Done** | — |
 | 2 | Split the two big files: `ui/features/browse.rs` and `ui/mod.rs`. **Done** | PR 1 merged |
-| 3 | Docs: ADR 0001, `ARCHITECTURE.md`, `HANDOFF.md`, `README.md` | PR 1 merged; can run beside PR 2 |
+| 3 | Docs: ADR 0001, `ARCHITECTURE.md`, `HANDOFF.md`, `README.md`. **Done** | PR 1 merged; can run beside PR 2 |
 
 Each PR is its own branch off `main` and must pass every done-means check
 on its own. None of them changes what the app does or how it looks.
@@ -420,3 +427,20 @@ for `ui` in `ARCHITECTURE.md` §2 to match the final file list.
 Done means: `grep -rn "ui\.rs\|UiPlugin\|builtin_with_ui\|never names a feature" docs README.md CLAUDE.md`
 finds only `docs/archive/` and the research doc's history, and
 `git diff --check` is clean.
+
+**Done (2026-09-26)**, after PR 2, so it also fixed §2's `ui` row to the
+split file list. Where it differs from this plan:
+
+- **ARCHITECTURE §2** keeps a dependency line for `ui::features` (it
+  imports `plugins/*`' typed APIs) instead of the one for
+  `plugins/*/ui.rs`, and the paragraph on the UI now says `ui::features`
+  is the one place that names features; the shell imports `plugins` only
+  to carry the clipboard and browse instances. The `ui` row describes the
+  shell files by concern (`launch`, `shell`, `background`, `drops`,
+  `actions`, `tests`) and the feature modules.
+- **ADR 0001** replaces the decision in place, with a paragraph on the
+  first shape (PR #25) and why it went (PRs #28, #29), rather than a new
+  ADR: the rest of the record (iced, in-process core, libraries, desktop
+  integration) is unchanged.
+- Other mentions of `builtin_with_ui` (ARCHITECTURE's `myconnect-gui` row
+  and `plugins` row) became `builtin_parts`.

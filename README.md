@@ -130,9 +130,9 @@ packaging/                # .deb, Arch PKGBUILD, macOS app, Windows installer
 assets/                   # icon sources and the generated icons
 ```
 
-Each feature's UI half lives in its plugin (`src/plugins/<name>/ui.rs`),
-behind the `gui` cargo feature, so the CLI and daemon build without any GUI
-dependency (`cargo build -p myconnect`). See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for module
+All UI code lives in `src/ui/`, each feature's UI in
+`src/ui/features/<name>.rs`, behind the `gui` cargo feature, so the CLI and
+daemon build without any GUI dependency (`cargo build -p myconnect`). See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for module
 boundaries, data flow, the full HTTP API, and the pairing/transfer state
 machines.
 

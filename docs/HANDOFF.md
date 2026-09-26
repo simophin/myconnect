@@ -27,8 +27,8 @@ records are in [`archive/flutter-adr/`](archive/flutter-adr/README.md).
    0009 (window placement), and what differs from the Flutter app on
    purpose.
 
-The app is `gui/` (`myconnect-gui`), the UI core is `src/ui/`, and each
-feature's UI half is `src/plugins/<name>/ui.rs`, all behind the `gui`
+The app is `gui/` (`myconnect-gui`) and all UI code is `src/ui/`: the
+shell, and each feature's UI in `src/ui/features/`, all behind the `gui`
 cargo feature.
 
 ## Ground rules (set by the project owner)
@@ -39,7 +39,7 @@ cargo feature.
   functions in-process (`adr/0001`), the same ones `http.rs` calls, so
   anything it does, the CLI can do too. A UI feature that needs new
   behaviour adds it to the plugin's or the core's Rust API first, then to
-  `http.rs` and `client.rs`/the CLI, then to `ui.rs`.
+  `http.rs` and `client.rs`/the CLI, then to `src/ui/features/<name>.rs`.
 - **Every resource needs a snapshot and events.** The UI takes a
   snapshot, patches it from the event bus, and takes a fresh one after it
   lags (Flutter ADR 0003, carried over); the CLI does the same over
@@ -47,10 +47,11 @@ cargo feature.
   leaves a client unable to recover after a gap.
 - **A feature is a plugin.** It lives in `src/plugins/<name>/`,
   implements `core::Plugin`, and is one line in `plugins::builtin()`
-  (ARCHITECTURE §2); its UI half is `ui.rs`, one line in
-  `plugins::builtin_with_ui()`. The core and `src/ui/` don't name
-  features, and plugins don't import each other, in the UI too: what two
-  features share belongs in the core (or, for UI helpers, `src/ui/`).
+  (ARCHITECTURE §2). Its UI is `src/ui/features/<name>.rs` plus its
+  lines in `src/ui/features/mod.rs`, the one place in the UI that lists
+  features. The core doesn't name features, and plugins don't import each
+  other: what two features share belongs in the core (or, for UI
+  helpers, `src/ui/`).
 - **Token auth is optional.** It is enforced only when the daemon was
   started with one. The app always sets one (random unless given
   `--api-token`); the CLI defaults to none.
@@ -102,11 +103,6 @@ the CLI, and for tagged builds an Arch Linux PKGBUILD. The scripts are in
 `packaging/`.
 
 ## Open work
-
-**Moving the UI's feature code into `src/ui/`**, in three PRs:
-[`PLAN_UI_FLATTEN.md`](PLAN_UI_FLATTEN.md). Until it's done, that plan
-overrides what this file and `ARCHITECTURE.md` say about where a feature's
-UI lives.
 
 **The tray and notifications on macOS and Windows** (the plan's step
 13b). They work on Linux only; macOS and Windows get no tray, so the app

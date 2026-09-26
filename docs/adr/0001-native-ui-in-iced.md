@@ -36,19 +36,41 @@ fixes.
   anything that touches the daemon's sockets runs on the daemon's tokio
   runtime (`UiOptions::runtime`), and iced's `tokio` feature stays off so
   there is only one runtime.
-- **UI halves live in the feature modules.** A feature's UI is
-  `src/plugins/<name>/ui.rs`, next to its `mod.rs` and `http.rs`, and plugs
-  in through the seam in `src/ui/plugin.rs`. `src/ui/` is the UI core:
-  shell, the pages the core owns (devices, pairing, transfers, settings),
-  sync and desktop glue. It never names a feature, and plugins never import
-  each other, in the UI too. `plugins::builtin_with_ui()` builds each
-  plugin once and its UI half from the same instance;
-  `RunningService::start_with` lets the app start the daemon with that
-  list.
-- **A `gui` cargo feature.** `src/ui/` and every `ui.rs` are behind
-  `feature = "gui"`, which turns on the UI's optional dependencies. `gui/`
-  depends on `myconnect` with the feature; `cargo build -p myconnect` (the
-  CLI and daemon) has no iced in its tree, which CI checks.
+- **All UI code lives in `src/ui/`.** Each feature's UI is a plain module
+  under `src/ui/features/` (`ping.rs`, `browse/`, …), and
+  `src/ui/features/mod.rs` is the one place that lists them: one `Feature`
+  message enum, and a `Features` struct whose functions (actions, status
+  chips, drops, settings sections, route changes, events, demo packets)
+  call each feature by name, in `builtin()` order. The rest of `src/ui/`
+  is the shell: one app `Message`, typed routes (`Route::Browse`), plain
+  `Task<Message>`, the pages the core owns (devices, pairing, transfers,
+  settings), sync and desktop glue. `src/ui/` is a module, not a crate: a
+  crate would make everything the UI touches in `core` and `plugins`
+  public API. The core still never names a feature, and plugins never
+  import each other. `plugins::builtin_parts()` builds each plugin once
+  and also hands back the two instances the UI keeps (clipboard and
+  browse); `RunningService::start_with` lets the app start the daemon
+  with that list.
+
+  The first shape (2026-09-25, PR #25) put each feature's UI half next to
+  its plugin, `src/plugins/<name>/ui.rs`, behind a `UiPlugin` trait, so
+  the UI core never named a feature. It was replaced on 2026-09-26 (PRs
+  #28, #29): with six features all compiled in, and runtime or
+  third-party plugins a non-goal, the seam bought nothing and cost a lot
+  to read. It needed a 10-hook trait plus an erased copy of it, messages
+  as `Arc<dyn Any>` routed by string id and downcast at runtime (a
+  misrouted message panicked instead of failing to compile), a second copy
+  of iced's `Task` (`Command`, `Outcome`, `ShellRequest`, each with a
+  `map`), browse's folder encoded in a string route and parsed back, and
+  a second plugin list (`builtin_with_ui()`) kept in step with
+  `builtin()` by a test. The cost of the new shape: adding a feature
+  touches a few lines in `features/mod.rs`, and the compiler flags a
+  missed `match` arm.
+- **A `gui` cargo feature.** `src/ui/` is behind `feature = "gui"`, which
+  turns on the UI's optional dependencies; nothing in `src/plugins/` is.
+  `gui/` depends on `myconnect` with the feature; `cargo build -p
+  myconnect` (the CLI and daemon) has no iced in its tree, which CI
+  checks.
 - **Configuration is flags and environment variables**, mirroring
   `myconnect run`: `--data-dir`, `--download-dir`, `--device-name`,
   `--discovery-loopback`, `--no-system-clipboard`, `--api-port`,
@@ -227,9 +249,12 @@ These differ on purpose (owner's decisions). Don't "fix" them back.
 
 ## Consequences
 
-- A feature is one folder, UI included, in one language. Adding one means
-  `mod.rs`, `http.rs` and `ui.rs`, a line in `builtin()` and one in
-  `builtin_with_ui()`, and the CLI in `client.rs`/`cli.rs`.
+- A feature is written once, in one language. Adding one means
+  `src/plugins/<name>/` (`mod.rs`, `http.rs`) and a line in `builtin()`,
+  its UI in `src/ui/features/<name>.rs` plus its lines in
+  `features/mod.rs` (a `Feature` variant if it has messages, a line in
+  each `Features` function that applies, and maybe a `Route` variant), and
+  the CLI in `client.rs`/`cli.rs`.
 - Anything the UI does must be a Rust function that `http.rs` calls too,
   so the UI and the CLI can't drift apart.
 - A plain workspace build compiles the UI (feature unification); the CLI
