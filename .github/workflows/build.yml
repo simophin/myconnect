@@ -114,6 +114,8 @@ jobs:
           "$app/Contents/MacOS/Ferry" --version
           "$app/Contents/MacOS/ferry-cli" --version
           test -s "$app/Contents/Resources/THIRD_PARTY_LICENSES.html"
+          plutil -extract CFBundleLocalizations json -o - "$app/Contents/Info.plist"
+          test -s "$app/Contents/Resources/en.lproj/InfoPlist.strings"
           rm -rf "$app"
       - uses: actions/upload-artifact@v7
         with:
@@ -155,6 +157,8 @@ jobs:
       - name: Package
         run: |
           mkdir dist
+          # The app's languages, for the installer.
+          packaging/i18n.sh nsis >target/languages.nsh
           # makensis wants Windows paths.
           root=$(cygpath -w "$PWD")
           makensis -V3 \
@@ -163,6 +167,7 @@ jobs:
             "-DAPP=$root\\target\\release\\ferry-gui.exe" \
             "-DCLI=$root\\target\\release\\ferry-cli.exe" \
             "-DLICENSES=$root\\target\\THIRD_PARTY_LICENSES.html" \
+            "-DLANGUAGES=$root\\target\\languages.nsh" \
             "-DOUT=$root\\dist\\ferry-${{ needs.version.outputs.name }}-windows-x64-setup.exe" \
             packaging/windows/installer.nsi
       - name: Check the installer

@@ -2,15 +2,15 @@
 
 use iced::Element;
 
-use crate::ui::widgets;
+use crate::ui::{i18n::fl, widgets};
 
 pub fn starting<'a, M: 'a>() -> Element<'a, M> {
-    widgets::loading("Starting Ferry…")
+    widgets::loading(fl!("startup-starting"))
 }
 
 /// The daemon didn't start: why, and Retry.
 pub fn failed<M: Clone + 'static>(error: &str, retry: M) -> Element<'_, M> {
-    widgets::error_view(format!("Ferry could not start.\n{error}"), Some(retry))
+    widgets::error_view(fl!("startup-failed", error = error), Some(retry))
 }
 
 #[cfg(test)]

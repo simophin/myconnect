@@ -29,6 +29,7 @@ pub mod desktop;
 mod drops;
 pub mod error;
 pub mod features;
+pub mod i18n;
 mod launch;
 pub mod overlay;
 pub mod pages;
@@ -68,6 +69,7 @@ use desktop::{
     tray::TrayItem,
 };
 use features::{Feature, Features};
+use i18n::fl;
 use overlay::{
     dialog::{self as dialogs, Dialog, DialogEvent, Dialogs, Submit},
     drop::{self as dropping, Drag, Dropped},
@@ -237,6 +239,8 @@ pub(crate) enum Message {
     /// The folder picked, or `None` if the picker was cancelled.
     DownloadDirPicked(Option<PathBuf>),
     SetCloseToTray(bool),
+    /// Show the app in a language (a tag), or `None` in the system's.
+    SetLanguage(Option<String>),
     SetStartOnLogin(bool),
     /// A start-on-login change finished: whether it's on now, and why the
     /// change failed, if it did.
@@ -372,7 +376,11 @@ impl App {
             }
             _ => None,
         };
-        let task = self.react(message);
+        let mut task = self.react(message);
+        if self.follow_language() && self.start_on_login {
+            // Linux's login item has a comment in the app's language.
+            task = Task::batch([task, self.set_start_on_login(true)]);
+        }
         if let Some(before) = before
             && let Phase::Running(running) = &self.phase
         {
@@ -382,6 +390,20 @@ impl App {
         self.update_tray();
         self.notify_pairings();
         task
+    }
+
+    /// Show the app in the language its settings ask for, if it isn't
+    /// already (`i18n::follow_setting`): `view`, the window's title and
+    /// the tray menu, which `update` sends after this, use it from now
+    /// on. Returns whether it changed.
+    fn follow_language(&self) -> bool {
+        let Phase::Running(running) = &self.phase else {
+            return false;
+        };
+        match running.ctx.store().settings().loaded() {
+            Some(settings) => i18n::follow_setting(settings.language.as_deref()),
+            None => false,
+        }
     }
 
     fn react(&mut self, message: Message) -> Task<Message> {
@@ -491,12 +513,9 @@ impl App {
             },
             Message::Unpair { device_id, name } => self.dialogs.open(
                 Dialog::confirm(
-                    "Unpair device?",
-                    format!(
-                        "{name} will need to be paired again before it can exchange \
-                         anything with this computer."
-                    ),
-                    "Unpair",
+                    fl!("shell-unpair-title"),
+                    fl!("shell-unpair-body", name = name),
+                    fl!("shell-unpair-confirm"),
                     Submit::Close(Arc::new(move |_| Message::Forget {
                         device_id: device_id.clone(),
                     })),
@@ -610,7 +629,10 @@ impl App {
             Message::RevealFile(path) => self.open(path, true),
             Message::OpenFailed(path, error) => {
                 tracing::warn!(path = %path.display(), %error, "couldn't open a file");
-                self.toast(format!("Couldn’t open {}", path.display()), None)
+                self.toast(
+                    fl!("shell-open-failed", path = path.display().to_string()),
+                    None,
+                )
             }
             Message::OpenLink(url) => self.open_link(url),
             Message::Rename => self.rename(),
@@ -624,13 +646,17 @@ impl App {
                 close_to_tray: Some(Some(enabled)),
                 ..SettingsPatch::default()
             }),
+            Message::SetLanguage(language) => self.update_settings(SettingsPatch {
+                language: Some(language),
+                ..SettingsPatch::default()
+            }),
             Message::SetStartOnLogin(enabled) => self.set_start_on_login(enabled),
             Message::StartOnLoginSet(enabled, error) => {
                 self.start_on_login = enabled;
                 match error {
                     Some(error) => {
                         tracing::warn!(%error, "couldn't change starting on login");
-                        self.toast("Couldn’t change starting on login.".into(), None)
+                        self.toast(fl!("shell-start-on-login-failed"), None)
                     }
                     None => Task::none(),
                 }
@@ -863,6 +889,7 @@ impl App {
                     choose_download_dir: Message::ChooseDownloadDir,
                     set_close_to_tray: Message::SetCloseToTray,
                     set_start_on_login: Message::SetStartOnLogin,
+                    set_language: Message::SetLanguage,
                     set_api_enabled: Message::SetApiEnabled,
                     copy_cli_setup: Message::CopyCli(CliCopy::Setup),
                     copy_api_token: Message::CopyCli(CliCopy::Token),
@@ -925,7 +952,7 @@ fn unknown_device_page<'a>() -> Element<'a, Message> {
         widgets::page_header("", Some(Message::Back), vec![]),
         widgets::empty_state(
             lucide::circle_alert,
-            "This device is no longer known.",
+            fl!("shell-unknown-device"),
             None,
             None,
         ),

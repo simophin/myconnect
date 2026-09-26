@@ -13,7 +13,8 @@
 # opens it. VERSION is MAJOR.MINOR.PATCH
 # (macOS accepts nothing else) and BUILD a number. Writes the DMG, and leaves
 # Ferry.app next to it. Needs macOS: lipo, iconutil, codesign and
-# hdiutil.
+# hdiutil. Each of the app's languages gets a <lang>.lproj in Resources,
+# from its i18n/<lang>/ferry.ftl (packaging/i18n.sh).
 #
 # The bundle is ad-hoc signed and not sandboxed (docs/adr/0001,
 # "Deliberate differences"): Gatekeeper blocks it until the user allows it in
@@ -56,8 +57,16 @@ done
 lipo -create -output "$app/Contents/MacOS/Ferry" $apps
 # shellcheck disable=SC2086
 lipo -create -output "$app/Contents/MacOS/ferry-cli" $clis
+# Assigned first, so that set -e stops at a missing translation.
+names=$("$packaging/../i18n.sh" macos "$app/Contents/Resources")
+localizations=
+for name in $names; do
+  localizations="$localizations<string>$name</string>"
+done
+plutil -lint "$app"/Contents/Resources/*.lproj/InfoPlist.strings
 sed -e "s|@VERSION@|$version|" -e "s|@BUILD@|$build|" \
   -e "s|@MINIMUM_SYSTEM_VERSION@|$minimum|" \
+  -e "s|@LOCALIZATIONS@|$localizations|" \
   "$packaging/Info.plist.in" >"$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist"
 printf 'APPL????' >"$app/Contents/PkgInfo"

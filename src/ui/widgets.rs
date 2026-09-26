@@ -11,6 +11,8 @@ use iced::{
 };
 use iced_fonts::lucide;
 
+use crate::ui::i18n::{fl, format};
+
 /// A Lucide icon, as a function so it can be stored as data (the tray
 /// can't draw an [`Element`]).
 pub type Icon = fn() -> Text<'static>;
@@ -42,7 +44,11 @@ pub fn page_header<'a, M: Clone + 'a>(
 ) -> Element<'a, M> {
     let mut header = row![].spacing(4).align_y(Alignment::Center);
     if let Some(back) = back {
-        header = header.push(icon_button(lucide::arrow_left, "Back", Some(back)));
+        header = header.push(icon_button(
+            lucide::arrow_left,
+            fl!("widget-back"),
+            Some(back),
+        ));
     }
     // The title takes what the buttons leave, and is cut off if longer.
     header = header.push(
@@ -211,8 +217,8 @@ pub fn switch_setting<'a, M: Clone + 'a>(
 pub fn empty_state<'a, M: Clone + 'a>(
     icon: Icon,
     title: impl text::IntoFragment<'a>,
-    detail: Option<&'a str>,
-    action: Option<(&'a str, M)>,
+    detail: Option<String>,
+    action: Option<(String, M)>,
 ) -> Element<'a, M> {
     let mut content = column![
         icon().size(40).style(text::secondary),
@@ -326,7 +332,7 @@ pub fn error_view<'a, M: Clone + 'a>(
     .align_x(Alignment::Center);
     if let Some(on_retry) = on_retry {
         content = content.push(
-            button(text("Retry"))
+            button(text(fl!("widget-retry")))
                 .padding([8, 20])
                 .style(button::secondary)
                 .on_press(on_retry),
@@ -443,39 +449,33 @@ pub fn bold() -> Font {
 }
 
 /// A byte count in the largest unit that keeps it at or above 1, as the
-/// Flutter app wrote it (`transfer_tile.dart`).
+/// Flutter app wrote it (`transfer_tile.dart`): one decimal under 10,
+/// none above, in the locale's digits and with the `.ftl`'s unit names.
 pub fn format_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["bytes", "KB", "MB", "GB", "TB"];
     #[allow(clippy::cast_precision_loss)]
     let mut value = bytes as f64;
     let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
+    while value >= 1024.0 && unit < 4 {
         value /= 1024.0;
         unit += 1;
     }
-    if unit == 0 {
-        return format!("{bytes} bytes");
-    }
-    // Dart's `toStringAsFixed` rounds halves away from zero; Rust's
-    // formatting rounds them to even.
-    if value < 10.0 {
-        format!("{:.1} {}", (value * 10.0).round() / 10.0, UNITS[unit])
-    } else {
-        format!("{:.0} {}", value.round(), UNITS[unit])
+    let size = format::decimal(value, usize::from(value < 10.0));
+    match unit {
+        0 => fl!("widget-size-bytes", count = bytes),
+        1 => fl!("widget-size-kb", size = size),
+        2 => fl!("widget-size-mb", size = size),
+        3 => fl!("widget-size-gb", size = size),
+        _ => fl!("widget-size-tb", size = size),
     }
 }
 
-/// Unix milliseconds as local `YYYY-MM-DD HH:MM`, as the Flutter app
-/// wrote file dates. Empty for a time that can't be shown.
+/// Unix milliseconds as a local date and time, to the minute, in the
+/// locale's format. Empty for a time that can't be shown.
 pub fn format_timestamp(millis: u64) -> String {
     i64::try_from(millis)
         .ok()
         .and_then(chrono::DateTime::from_timestamp_millis)
-        .map(|time| {
-            time.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d %H:%M")
-                .to_string()
-        })
+        .map(|time| format::date_time(&time.with_timezone(&chrono::Local)))
         .unwrap_or_default()
 }
 
@@ -491,30 +491,33 @@ mod tests {
     fn bytes_read_like_the_flutter_app() {
         for (bytes, expected) in [
             (0, "0 bytes"),
-            (1, "1 bytes"),
-            (1023, "1023 bytes"),
+            (1, "1 byte"),
+            (1023, "1,023 bytes"),
             (1024, "1.0 KB"),
             (1280, "1.3 KB"),
             (1536, "1.5 KB"),
             (10 * 1024 - 1, "10.0 KB"),
             (10 * 1024, "10 KB"),
-            (1_048_575, "1024 KB"),
+            (1_048_575, "1,024 KB"),
             (1_048_576, "1.0 MB"),
             (3 * 1024 * 1024 * 1024 / 2, "1.5 GB"),
             (5 * 1024 * 1024 * 1024 * 1024, "5.0 TB"),
-            (2048 * 1024 * 1024 * 1024 * 1024, "2048 TB"),
+            (2048 * 1024 * 1024 * 1024 * 1024, "2,048 TB"),
         ] {
             assert_eq!(format_bytes(bytes), expected, "{bytes}");
         }
     }
 
     #[test]
-    fn timestamps_are_local_minutes() {
+    fn timestamps_are_local_minutes_in_the_locale() {
         let at = chrono::Local
             .with_ymd_and_hms(2026, 9, 24, 14, 3, 59)
             .unwrap()
             .timestamp_millis();
-        assert_eq!(format_timestamp(at.try_into().unwrap()), "2026-09-24 14:03");
+        assert_eq!(
+            format_timestamp(at.try_into().unwrap()),
+            "Sep 24, 2026, 2:03\u{A0}PM"
+        );
         assert_eq!(format_timestamp(u64::MAX), "");
     }
 
@@ -570,8 +573,8 @@ mod tests {
             empty_state(
                 lucide::monitor_smartphone,
                 "No paired devices yet",
-                Some("Devices you pair with appear here."),
-                Some(("Find a device to pair", Message::Refresh)),
+                Some("Devices you pair with appear here.".into()),
+                Some(("Find a device to pair".into(), Message::Refresh)),
             )
         });
     }

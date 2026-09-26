@@ -78,7 +78,7 @@ the three instances it hands to them. `core` and `plugins` never import
 | `api` | `src/api.rs`, `src/api/upload.rs` | The Axum server: the core's routes (`/status`, `/discovery`, `/devices`, `/pairings`, `/transfers`, `/settings`, `/events`), every plugin's routes merged in, `ApiProblem` (the `application/problem+json` error every handler returns, with `From<CoreError>`), optional bearer-token auth, body-size limits, request deadline and SSE. Streaming routes (every plugin's `streaming_routes`) get the transfer-sized body limit and no request deadline; `upload` holds their shared helpers (idle timeout, forwarding a multipart file part into a transfer until the part or the transfer ends, and the lingering close that drains an upload a handler answered before reading to its end). |
 | `client` | `src/client.rs` | Typed HTTP client the CLI (and any future frontend) uses to talk to `api`. |
 | `src/bin/ferry-cli` | `cli.rs`, `main.rs` | The `ferry-cli` binary: argument parsing and daemon bootstrap only. Given no token or address, client commands read the app's from its store (`core.api`). |
-| `ui` | `src/ui/{mod,launch,shell,background,drops,actions,context,route,store,sync,activity,demo,error,widgets,testing,tests}.rs`, `src/ui/pages/*.rs`, `src/ui/overlay/*.rs`, `src/ui/desktop/*.rs`, `src/ui/features/{mod,ping,findmyphone,battery,clipboard,share,notifications}.rs`, `src/ui/features/browse/{mod,view,preview,files,describe}.rs` | The desktop UI in iced, behind the `gui` feature ([`adr/0001`](adr/0001-native-ui-in-iced.md)). It runs in the daemon's process and reads the core directly (§9): `sync` subscribes to the event bus, takes a snapshot into `store`, and takes a fresh one after a lag. `mod` holds `App`, the one app `Message`, `update`'s dispatch, `view` and `subscription`; `launch` the entry points (`run`, `UiOptions`, `Started`), booting and Retry; `route` the typed routes. Each feature's UI is a module under `features/`, and `features/mod.rs` is the one place that lists them: the `Feature` message enum, and `Features`, whose functions the shell calls to fill its slots (the device card's status chips, the device page's and the tray's actions, drop targets, the file browser's page, the settings page's sections) and to pass on route changes and core events, calling each feature by name in `builtin()` order. Features ask the shell for things (toast, report, notify, navigate, pick files, confirm, prompt) through plain `Message`s built by `shell`'s helpers, carrying the `Origin` (window or tray) of the action that caused them; `shell` also holds the `App` side of those requests. The pages the core owns are shell code: devices, device, Add device, pairing (and the incoming pairing prompt, drawn over every page while a request waits), transfers, settings, About (version, author, links, third-party licenses), and the startup and error screens; `actions` is what they ask of the core. `drops` routes dropped files and the recipient chooser. `background` is the window's life (show, close to the tray, quit, placement), the tray and notifications. `desktop` holds the platform glue behind small traits so tests swap in fakes: the tray, notifications, dialogs (`rfd`), opening files and web links (`opener`), the saved window placement, the single-instance socket, the login item, and where the package put the third-party licenses. `demo` fills the core with made-up devices for `--demo`; `tests` is the shell's shared test harness. |
+| `ui` | `src/ui/{mod,launch,shell,background,drops,actions,context,route,store,sync,activity,demo,error,i18n,widgets,testing,tests}.rs`, `src/ui/i18n/{format,pseudo}.rs`, `i18n/<lang>/ferry.ftl`, `src/ui/pages/*.rs`, `src/ui/overlay/*.rs`, `src/ui/desktop/*.rs`, `src/ui/features/{mod,ping,findmyphone,battery,clipboard,share,notifications}.rs`, `src/ui/features/browse/{mod,view,preview,files,describe}.rs` | The desktop UI in iced, behind the `gui` feature ([`adr/0001`](adr/0001-native-ui-in-iced.md)). It runs in the daemon's process and reads the core directly (§9): `sync` subscribes to the event bus, takes a snapshot into `store`, and takes a fresh one after a lag. `mod` holds `App`, the one app `Message`, `update`'s dispatch, `view` and `subscription`; `launch` the entry points (`run`, `UiOptions`, `Started`), booting and Retry; `route` the typed routes. Each feature's UI is a module under `features/`, and `features/mod.rs` is the one place that lists them: the `Feature` message enum, and `Features`, whose functions the shell calls to fill its slots (the device card's status chips, the device page's and the tray's actions, drop targets, the file browser's page, the settings page's sections) and to pass on route changes and core events, calling each feature by name in `builtin()` order. Features ask the shell for things (toast, report, notify, navigate, pick files, confirm, prompt) through plain `Message`s built by `shell`'s helpers, carrying the `Origin` (window or tray) of the action that caused them; `shell` also holds the `App` side of those requests. The pages the core owns are shell code: devices, device, Add device, pairing (and the incoming pairing prompt, drawn over every page while a request waits), transfers, settings, About (version, author, links, third-party licenses), and the startup and error screens; `actions` is what they ask of the core. `drops` routes dropped files and the recipient chooser. `background` is the window's life (show, close to the tray, quit, placement), the tray and notifications. `desktop` holds the platform glue behind small traits so tests swap in fakes: the tray, notifications, dialogs (`rfd`), opening files and web links (`opener`), the saved window placement, the single-instance socket, the login item, and where the package put the third-party licenses. `i18n` loads the app's translations (Fluent files under `i18n/`, embedded) and chooses the language at start (`FERRY_LANG`, else the `language` setting, else the system's, falling back to en-US); `fl!` looks a message up (§13), `i18n::format` writes numbers and dates in the user's locale with ICU4X, and `i18n::pseudo` makes the en-XA pseudo-locale from en-US. `demo` fills the core with made-up devices for `--demo`; `tests` is the shell's shared test harness. |
 | `ferry-gui` | `gui/src/main.rs` | The desktop app's composition root: flags (each also an environment variable), starting the daemon through `RunningService::start_with` and `plugins::builtin_parts()`, running `ui::run`, and shutting the daemon down after. |
 
 ### The `Plugin` trait
@@ -324,11 +324,13 @@ States: `queued → connecting → transferring → completed | cancelled | fail
 
 User preferences live in the daemon's store (`ferry.db` in the data
 directory), never in a client. Core fields: `deviceName`, `downloadDir`,
-and `closeToTray` (the UI's; the daemon stores it without interpreting
-it), under the config keys `core.deviceName`, `core.downloadDir` and
-`ui.closeToTray` (`core::settings`). Unset fields use their defaults: the
-host name (first label, trimmed to a valid KDE Connect name, else
-"Ferry"), the platform download directory, and `true`.
+and the UI's `closeToTray` and `language` (the daemon stores them
+without interpreting them, apart from checking that `language` looks like
+a BCP 47 tag), under the config keys `core.deviceName`, `core.downloadDir`,
+`ui.closeToTray` and `ui.language` (`core::settings`). Unset fields use
+their defaults: the host name (first label, trimmed to a valid KDE
+Connect name, else "Ferry"), the platform download directory, `true`,
+and `null` (the system's language, §13).
 
 - **Starting on login** is the app's alone, not a daemon setting: the
   switch on the Settings page reads and writes the system's login item
@@ -422,8 +424,8 @@ the event stream.
 | `GET` | `/clipboard` | Current synchronized text and metadata. |
 | `PUT` | `/clipboard` | Set text and send to eligible paired devices. |
 | `POST` | `/devices/{deviceId}/clipboard` | Send this machine's clipboard text to one paired, connected device now; `202`. `409 clipboard_empty` when there is no text, `409 unsupported_by_peer` without `kdeconnect.clipboard`. §6. |
-| `GET` | `/settings` | The settings in effect (§7): `deviceName`, `downloadDir`, `closeToTray`, and `plugins`, an object keyed by plugin id holding each plugin's section (so far `{"clipboard": {"syncEnabled": bool}}`). |
-| `PATCH` | `/settings` | Change the fields present in the JSON body; `null` resets one to its default, unknown fields are rejected. A plugin's fields go under `plugins.<id>`, e.g. `{"plugins": {"clipboard": {"syncEnabled": false}}}`. `400 invalid_device_name` / `invalid_download_dir` / `invalid_settings` (a plugin section) for bad values. Returns the new settings. |
+| `GET` | `/settings` | The settings in effect (§7): `deviceName`, `downloadDir`, `closeToTray`, `language` (the app's, a BCP 47 tag such as `"de"`, or `null` for the system's), and `plugins`, an object keyed by plugin id holding each plugin's section (so far `{"clipboard": {"syncEnabled": bool}}`). |
+| `PATCH` | `/settings` | Change the fields present in the JSON body; `null` resets one to its default, unknown fields are rejected. A plugin's fields go under `plugins.<id>`, e.g. `{"plugins": {"clipboard": {"syncEnabled": false}}}`. `400 invalid_device_name` / `invalid_download_dir` / `invalid_settings` (a plugin section, or a `language` that isn't a tag) for bad values. Returns the new settings. |
 | `GET` | `/events` | Server-Sent Events: `device.discovered/connected/updated/disconnected/forgotten`, `pairing.requested/updated`, `transfer.started/progress/completed/failed`, `clipboard.changed`, `settings.changed`, `notification.posted` (`{deviceId, deviceName, notification, alert}`: a notification posted or changed, including its icon arriving; `alert` is set for news, i.e. new or with new text, and not marked as already shown by the device) and `notification.removed` (`{deviceId, id}`), `ping.received` (`{deviceId, deviceName, message?}` from a paired device; a one-off with no snapshot endpoint, so one missed during a gap is lost). Not durable: clients refetch a snapshot after a gap or reconnect. |
 
 Mutations that need a network round-trip return `202` and are tracked
@@ -496,7 +498,8 @@ notifications. Each scenario discovers on its own free UDP port, not
 (§2, `transport`). The UI's unit tests sit next to each page and plugin UI
 half, over a real core from `core::testing` (on `Store::open_in_memory()`)
 with fake desktop services; snapshot tests render each page to PNG in
-light and dark when `SNAPSHOT_DIR` is set.
+light and dark when `SNAPSHOT_DIR` is set, and in the en-XA
+pseudo-locale and any translations named in `SNAPSHOT_LANGUAGES` (§13).
 
 Before a change counts as done:
 
@@ -586,3 +589,59 @@ which [`adr/0001`](adr/0001-native-ui-in-iced.md) carries over.
 - **Checked on Android.** A Pixel 8a (KDE Connect for Android, 2026-09)
   accepted our ECDSA key, its host key matched its certificate, and it
   offered one root, `/storage/emulated/0` ("Internal shared storage").
+
+## 13. The app's languages
+
+The desktop app is translated; the CLI, the HTTP API (it reports error
+codes, which the app words), logs and the website stay in English. The
+plan and its decisions are in [`PLAN_I18N.md`](PLAN_I18N.md).
+
+- **Messages.** Every word the app shows is a Fluent message in
+  `i18n/<lang>/ferry.ftl`, embedded in the binary (`rust-embed`). en-US is
+  the source and the fallback: a message a translation lacks shows in
+  English. Code gets one with `fl!("key", name = value)`
+  (`ui::i18n::fl`, over `i18n-embed-fl`), which checks at compile time
+  that the key exists in en-US and is given exactly the arguments its
+  message uses. Keys are prefixed by feature or page (`browse-…`,
+  `settings-…`), `error-<code>` for the API's error codes (`ui::error`).
+  Messages are whole sentences; device and file names, paths and numbers
+  are arguments, never glued to translated text; every count goes through
+  a plural selector (`{ $count -> [one] … *[other] … }`).
+- **Choosing the language.** `launch::run` calls
+  `i18n::select_system_language` once at start: `FERRY_LANG` if set,
+  else the system's preferred languages (`DesktopLanguageRequester`),
+  negotiated against the shipped ones (so macOS's `zh-Hans-CN` and
+  `de-AT` reach `zh-CN` and `de`), else en-US. Fluent's isolation marks
+  wrap each argument, so a right-to-left name can't reorder a sentence.
+  Unit tests and `tests/ui_e2e.rs` stay in en-US without the marks.
+- **The language setting.** The daemon's `language` setting (§7; Settings'
+  list, or `ferry-cli settings --language <tag|system>`) overrides the
+  system's. After each message, `App::update` hands it to
+  `i18n::follow_setting`, which reloads the loader when it changed (the
+  chosen tag, or the system's languages again for `null`; `FERRY_LANG`
+  still wins) and puts back isolation and number formatting, which a
+  reload drops. The window redraws and the tray menu is sent again with
+  the new labels, without a restart; the Linux login item is rewritten
+  for its comment. Until the daemon's settings are read at start, the app
+  shows the system's language. Settings lists each `i18n/` language by
+  its `settings-language-own-name`; en-XA only by tag, from the CLI.
+  `tests/i18n_switch.rs` switches the real loader in a process of its own.
+- **Numbers and dates** in a message are written by ICU4X in the user's
+  locale (`i18n::format`, installed as Fluent's formatter); units and a
+  percent sign are the message's, so each language spaces them.
+- **Testing.** `ui::i18n::tests` checks that every `i18n/*/ferry.ftl`
+  parses and has exactly en-US's keys. en-XA (`i18n::pseudo`, made from
+  en-US at run time, never checked in) shows untranslated or clipped text:
+  `FERRY_LANG=en-XA` in the app, and in every snapshot. `SNAPSHOT_LANGUAGES=de,zh-CN`
+  also renders the snapshots in those translations (`i18n::in_locale`, per
+  thread, so parallel tests stay en-US).
+- **Outside the app.** `package-*` messages (plain text, one line) are
+  what the system shows about the app: `packaging/i18n.sh` copies them into
+  the `.desktop` entry, macOS's `<lang>.lproj` and `CFBundleLocalizations`,
+  and the Windows installer's languages. A language is shipped by having
+  its directory under `i18n/`.
+- **Fonts.** The bundled Figtree covers Latin; other scripts fall back to
+  the system's fonts through cosmic-text, which picks CJK fonts by the
+  system's locale, not the app's. On macOS bold CJK text mixes fonts:
+  PingFang has no bold (700) face, and cosmic-text's fallback only takes an
+  exact weight, so it lands on whichever bold font has the glyph.

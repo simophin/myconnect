@@ -22,6 +22,7 @@ use crate::{
             window as windowing,
         },
         features::Features,
+        i18n::fl,
         route::Route,
         store::Store,
     },
@@ -32,7 +33,7 @@ use crate::{
 /// start), then Settings, About and Quit. The window lists the rest.
 pub(crate) fn tray_menu(running: Option<(&Store, &Features)>) -> Vec<TrayItem> {
     let mut menu = vec![
-        TrayItem::item("Open Ferry", Some(TrayCommand::Open)),
+        TrayItem::item(fl!("tray-open"), Some(TrayCommand::Open)),
         TrayItem::Separator,
     ];
     if let Some((store, features)) = running
@@ -43,9 +44,9 @@ pub(crate) fn tray_menu(running: Option<(&Store, &Features)>) -> Vec<TrayItem> {
             .filter(|device| device.reachability == DeviceReachability::Connected)
             .collect();
         if paired.is_empty() {
-            menu.push(TrayItem::item("No paired devices", None));
+            menu.push(TrayItem::item(fl!("tray-no-paired-devices"), None));
         } else if connected.is_empty() {
-            menu.push(TrayItem::item("No devices connected", None));
+            menu.push(TrayItem::item(fl!("tray-no-devices-connected"), None));
         }
         menu.extend(
             connected
@@ -55,10 +56,10 @@ pub(crate) fn tray_menu(running: Option<(&Store, &Features)>) -> Vec<TrayItem> {
         menu.push(TrayItem::Separator);
     }
     menu.extend([
-        TrayItem::item("Settings", Some(TrayCommand::Settings)),
-        TrayItem::item("About Ferry", Some(TrayCommand::About)),
+        TrayItem::item(fl!("tray-settings"), Some(TrayCommand::Settings)),
+        TrayItem::item(fl!("tray-about"), Some(TrayCommand::About)),
         TrayItem::Separator,
-        TrayItem::item("Quit", Some(TrayCommand::Quit)),
+        TrayItem::item(fl!("tray-quit"), Some(TrayCommand::Quit)),
     ]);
     menu
 }
@@ -68,7 +69,11 @@ pub(crate) fn tray_menu(running: Option<(&Store, &Features)>) -> Vec<TrayItem> {
 fn device_menu(device: &DeviceSnapshot, features: &Features) -> TrayItem {
     let status = features.device_statuses(device).into_iter().next();
     let label = match status {
-        Some(status) => format!("{} · {}", device.device_name, status.label),
+        Some(status) => fl!(
+            "tray-device-status",
+            name = device.device_name.as_str(),
+            status = status.label
+        ),
         None => device.device_name.clone(),
     };
     let mut items: Vec<_> = features
@@ -83,7 +88,7 @@ fn device_menu(device: &DeviceSnapshot, features: &Features) -> TrayItem {
     items.extend([
         TrayItem::Separator,
         TrayItem::item(
-            "Show details",
+            fl!("tray-show-details"),
             Some(TrayCommand::ShowDevice(device.device_id.clone())),
         ),
     ]);
@@ -132,8 +137,8 @@ impl Notifications {
                 self.next_id += 1;
                 notifier.show(
                     self.next_id,
-                    "Pairing request",
-                    &format!("{} wants to pair with this computer.", pairing.device_name),
+                    &fl!("notify-pairing-title"),
+                    &fl!("notify-pairing-body", name = pairing.device_name.as_str()),
                 );
                 self.next_id
             });
@@ -192,8 +197,8 @@ impl App {
         for (file, device) in received {
             self.notifications.show(
                 &*self.desktop.notifier,
-                "File received",
-                &format!("{file} from {device}"),
+                &fl!("notify-file-received-title"),
+                &fl!("notify-file-received-body", file = file, name = device),
             );
         }
     }

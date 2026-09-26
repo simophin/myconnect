@@ -13,7 +13,8 @@ use crate::{
     ui::{
         self, Origin,
         context::UiContext,
-        error::{describe_code, describe_error, describe_file_failures},
+        error::{FileBatch, describe_code, describe_error, describe_file_failures},
+        i18n::fl,
         shell,
     },
 };
@@ -41,7 +42,7 @@ pub enum Message {
 pub fn device_actions(device: &DeviceSnapshot) -> Vec<DeviceAction> {
     vec![DeviceAction {
         id: "send-files",
-        label: "Send files".into(),
+        label: fl!("share-action"),
         icon: lucide::file_up,
         enabled: accepts_files(device),
         visible_in_tray: true,
@@ -60,7 +61,7 @@ pub fn drop_target(device: &DeviceSnapshot) -> Option<DropTarget> {
     let device_id = device.device_id.clone();
     let name = device.device_name.clone();
     Some(DropTarget {
-        label: format!("Drop to send to {name}"),
+        label: fl!("share-drop-hint", name = name.as_str()),
         on_drop: Arc::new(move |paths| {
             Feature::Share(Message::Send {
                 device_id: device_id.clone(),
@@ -75,7 +76,7 @@ pub(crate) fn update(ctx: &UiContext, message: Message, origin: Origin) -> Task<
     match message {
         Message::Pick { device_id, name } => shell::pick_files(
             origin,
-            format!("Send files to {name}"),
+            fl!("share-pick-title", name = name.as_str()),
             Arc::new(move |paths| {
                 Feature::Share(Message::Send {
                     device_id: device_id.clone(),
@@ -97,7 +98,7 @@ pub(crate) fn update(ctx: &UiContext, message: Message, origin: Origin) -> Task<
             if !connected {
                 return shell::failed(
                     origin,
-                    format!("Couldn’t send to {name}"),
+                    fl!("share-failed", name = name.as_str()),
                     describe_code("device_not_connected"),
                 );
             }
@@ -109,7 +110,7 @@ pub(crate) fn update(ctx: &UiContext, message: Message, origin: Origin) -> Task<
                             failures.push((path, describe(&error)));
                         }
                     }
-                    describe_file_failures("send", &failures)
+                    describe_file_failures(FileBatch::Send, &failures)
                 },
                 move |failures| {
                     ui::Message::Feature(Feature::Share(Message::Sent { name, failures }), origin)
@@ -119,7 +120,7 @@ pub(crate) fn update(ctx: &UiContext, message: Message, origin: Origin) -> Task<
         Message::Sent {
             name,
             failures: Some(text),
-        } => shell::failed(origin, format!("Couldn’t send to {name}"), text),
+        } => shell::failed(origin, fl!("share-failed", name = name.as_str()), text),
         Message::Sent { failures: None, .. } => Task::none(),
     }
 }
@@ -137,7 +138,7 @@ fn accepts_files(device: &DeviceSnapshot) -> bool {
 fn describe(error: &SendPathError) -> String {
     match error {
         SendPathError::Core(error) => describe_error(error),
-        SendPathError::File(_) => "The file couldn’t be read.".into(),
+        SendPathError::File(_) => fl!("share-error-file-unreadable"),
     }
 }
 

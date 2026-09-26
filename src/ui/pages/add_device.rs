@@ -12,6 +12,7 @@ use crate::{
     core::DeviceSnapshot,
     ui::{
         activity::activity_bar,
+        i18n::fl,
         store::{Load, Store},
         widgets::{self, HeaderAction},
     },
@@ -44,11 +45,11 @@ pub fn view<'a, M: Clone + 'a>(
     actions: Actions<M>,
 ) -> Element<'a, M> {
     let header = widgets::page_header(
-        "Add device",
+        fl!("add-device-title"),
         Some(actions.back),
         vec![HeaderAction {
             icon: lucide::refresh_cw,
-            tooltip: "Scan again".into(),
+            tooltip: fl!("add-device-scan"),
             on_press: (!searching).then_some(actions.scan),
         }],
     );
@@ -61,23 +62,16 @@ pub fn view<'a, M: Clone + 'a>(
     let header = column![header, bar].spacing(4);
 
     let body: Element<'a, M> = match store.pairing_candidates() {
-        Load::Loading => widgets::loading("Loading devices…"),
+        Load::Loading => widgets::loading(fl!("devices-loading")),
         Load::Failed(error) => widgets::error_view(error, Some(actions.retry)),
         Load::Loaded(candidates) => {
-            let mut list = column![
-                text(
-                    "Open Ferry or KDE Connect on the other device and make sure \
-                     both are on the same network."
-                )
-                .size(14)
-            ]
-            .spacing(8);
+            let mut list = column![text(fl!("add-device-instructions")).size(14)].spacing(8);
             if candidates.is_empty() && !searching {
                 list = list.push(
                     container(
                         row![
                             lucide::search_x().size(20).style(text::secondary),
-                            text("No devices found").style(text::secondary),
+                            text(fl!("add-device-none-found")).style(text::secondary),
                         ]
                         .spacing(12)
                         .align_y(Alignment::Center),
@@ -106,11 +100,11 @@ pub fn view<'a, M: Clone + 'a>(
 }
 
 /// Why `device` can't be paired now, if it can't.
-pub fn blocker(device: &DeviceSnapshot) -> Option<&'static str> {
+pub fn blocker(device: &DeviceSnapshot) -> Option<String> {
     if device.pairing {
-        Some("Pairing in progress")
+        Some(fl!("add-device-pairing"))
     } else if !is_connected(device) {
-        Some("Not connected")
+        Some(fl!("add-device-not-connected"))
     } else {
         None
     }
@@ -125,14 +119,15 @@ fn candidate<'a, M: Clone + 'a>(
     pair: Option<M>,
 ) -> Element<'a, M> {
     let blocker = blocker(device);
+    let blocked = blocker.is_some();
     let state = blocker.unwrap_or_else(|| reachability_label(device.reachability));
     let trailing: Element<'a, M> = if starting {
         container(activity_bar(48, 4.0)).padding([0, 8]).into()
     } else {
-        button(text("Pair"))
+        button(text(fl!("add-device-pair")))
             .padding([6, 16])
             .style(widgets::tonal)
-            .on_press_maybe(pair.filter(|_| blocker.is_none()))
+            .on_press_maybe(pair.filter(|_| !blocked))
             .into()
     };
     widgets::card(
@@ -157,8 +152,8 @@ fn add_by_address<'a, M: Clone + 'a>(open: M) -> Element<'a, M> {
     let content = row![
         lucide::network().size(22),
         column![
-            text("Add by IP address").size(15),
-            text("For networks where the device doesn’t show up on its own")
+            text(fl!("add-device-by-address")).size(15),
+            text(fl!("add-device-by-address-detail"))
                 .size(13)
                 .style(text::secondary),
         ]

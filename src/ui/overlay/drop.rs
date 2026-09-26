@@ -17,7 +17,7 @@ use iced_fonts::lucide;
 use super::dialog::surface;
 use crate::{
     core::DeviceSnapshot,
-    ui::{error::file_name, pages::devices::device_icon, widgets},
+    ui::{error::file_name, i18n::fl, pages::devices::device_icon, widgets},
 };
 
 /// How long to wait for the rest of a drop's files once the first has
@@ -133,7 +133,9 @@ pub fn hint<'a, M: 'a>(base: Element<'a, M>, label: String) -> Element<'a, M> {
 }
 
 /// What the hint says when the page has no device to drop on.
-pub const CHOOSE_LABEL: &str = "Drop anywhere to choose a device";
+pub fn choose_label() -> String {
+    fl!("drop-choose-hint")
+}
 
 /// Asks which device to send `paths` to, from `devices`, the paired devices
 /// that would take them now. `choose` makes the message for a device's id.
@@ -146,13 +148,11 @@ pub fn chooser<'a, M: Clone + 'a>(
     // The title stays short; a file's name, which can be any length, goes
     // under it and wraps.
     let (title, name) = match paths {
-        [path] => ("Send file".to_owned(), Some(file_name(path))),
-        _ => (format!("Send {} files", paths.len()), None),
+        [path] => (fl!("drop-chooser-title-one"), Some(file_name(path))),
+        _ => (fl!("drop-chooser-title", count = paths.len()), None),
     };
     let body: Element<'a, M> = if devices.is_empty() {
-        text("No paired device is connected and able to receive files.")
-            .size(14)
-            .into()
+        text(fl!("drop-chooser-no-devices")).size(14).into()
     } else {
         let rows = devices.into_iter().map(|device| {
             button(
@@ -172,7 +172,7 @@ pub fn chooser<'a, M: Clone + 'a>(
             .into()
         });
         column![
-            text("Choose the device to send to:").size(14),
+            text(fl!("drop-chooser-prompt")).size(14),
             scrollable(column(rows).spacing(6)).height(Length::Shrink),
         ]
         .spacing(12)
@@ -191,7 +191,7 @@ pub fn chooser<'a, M: Clone + 'a>(
             body,
             row![
                 space::horizontal(),
-                button(text("Cancel"))
+                button(text(fl!("dialog-cancel")))
                     .padding([8, 14])
                     .style(button::text)
                     .on_press(cancel),
@@ -312,7 +312,7 @@ mod tests {
         testing::snapshot("drop-hint", (440.0, 620.0), || {
             hint::<()>(
                 container(text("page")).center(Length::Fill).into(),
-                CHOOSE_LABEL.into(),
+                choose_label(),
             )
         });
     }

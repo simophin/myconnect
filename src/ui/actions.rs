@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use super::{
     App, CliCopy, Message, Origin, Phase, context, error,
+    i18n::fl,
     overlay::{
         dialog::{Dialog, Field, Submit},
         incoming,
@@ -52,18 +53,14 @@ impl App {
         };
         let core = running.ctx.core().clone();
         self.dialogs.open(Dialog::prompt(
-            "Add by IP address",
+            fl!("shell-add-by-address-title"),
             Field {
-                label: Some("IP address".into()),
+                label: Some(fl!("shell-add-by-address-label")),
                 hint: Some("192.168.1.20".into()),
-                helper: Some(
-                    "Ferry or KDE Connect must be running on that device. It appears \
-                         in the list once it answers."
-                        .into(),
-                ),
+                helper: Some(fl!("shell-add-by-address-helper")),
                 ..Field::default()
             },
-            "Add",
+            fl!("shell-add-by-address-confirm"),
             Submit::Run(Arc::new(move |address| {
                 Task::done(announce_to(&core, &address).map(|()| Message::ShowSearching))
             })),
@@ -170,7 +167,7 @@ impl App {
             result.err().map(|error| {
                 tracing::warn!(url, %error, "couldn't open a link");
                 Message::Toast {
-                    text: format!("Couldn’t open {url}"),
+                    text: fl!("shell-open-link-failed", url = url),
                     action: None,
                     origin: Origin::Window,
                 }
@@ -192,14 +189,14 @@ impl App {
         let core = running.ctx.core().clone();
         let runtime = self.options.runtime.clone();
         self.dialogs.open(Dialog::prompt(
-            "Device name",
+            fl!("shell-rename-title"),
             Field {
                 value: current,
-                helper: Some("How this computer appears on your other devices".into()),
+                helper: Some(fl!("shell-rename-helper")),
                 max_len: Some(32),
                 ..Field::default()
             },
-            "Save",
+            fl!("shell-rename-confirm"),
             Submit::Run(Arc::new(move |name| {
                 let core = core.clone();
                 context::on_runtime(&runtime, async move {
@@ -227,7 +224,7 @@ impl App {
         let picked = self
             .desktop
             .picker
-            .pick_folder("Save received files in", &settings.download_dir);
+            .pick_folder(&fl!("shell-download-dir-title"), &settings.download_dir);
         Task::future(picked).map(Message::DownloadDirPicked)
     }
 
@@ -299,10 +296,7 @@ impl App {
             Err(error) => {
                 tracing::warn!(%error, "couldn't change command line access");
                 let read = self.read_api_status();
-                let toast = self.toast(
-                    format!("Couldn’t change command line access: {error}"),
-                    None,
-                );
+                let toast = self.toast(fl!("settings-cli-change-failed", error = error), None);
                 Task::batch([read, toast])
             }
         }
@@ -319,19 +313,19 @@ impl App {
             return Task::none();
         };
         let (copied, label) = match what {
-            CliCopy::Setup => (settings::cli_setup(&status, true), "Setup copied"),
+            CliCopy::Setup => (
+                settings::cli_setup(&status, true),
+                fl!("settings-cli-setup-copied"),
+            ),
             CliCopy::Token => (
                 status.token.map(|token| token.expose_secret().to_owned()),
-                "Token copied",
+                fl!("settings-cli-token-copied"),
             ),
         };
         let Some(copied) = copied else {
             return Task::none();
         };
-        Task::batch([
-            iced::clipboard::write(copied),
-            self.toast(label.into(), None),
-        ])
+        Task::batch([iced::clipboard::write(copied), self.toast(label, None)])
     }
 
     /// Have the system start the app at login, or stop, off the UI thread.
@@ -987,6 +981,15 @@ mod tests {
             !settings(&app).close_to_tray,
             "without waiting for the event"
         );
+
+        // The language, kept by the daemon. Unit tests stay in en-US
+        // (`i18n::follow_setting` does nothing in them).
+        assert_eq!(settings(&app).language, None, "the system's by default");
+        settle(&mut app, Message::SetLanguage(Some("de".into()))).await;
+        assert_eq!(core.settings().unwrap().language.as_deref(), Some("de"));
+        assert_eq!(settings(&app).language.as_deref(), Some("de"));
+        settle(&mut app, Message::SetLanguage(None)).await;
+        assert_eq!(core.settings().unwrap().language, None);
         assert!(app.toasts.is_empty());
     }
 

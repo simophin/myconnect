@@ -172,6 +172,10 @@ enum Command {
         /// window is closed.
         #[arg(long, value_name = "BOOL")]
         close_to_tray: Option<bool>,
+        /// The desktop app's language, a BCP 47 tag such as `de` or
+        /// `zh-CN`, or `system` to follow the system's.
+        #[arg(long, value_name = "TAG")]
+        language: Option<String>,
     },
 }
 
@@ -534,11 +538,13 @@ impl Cli {
                 download_dir,
                 clipboard_sync,
                 close_to_tray,
+                language,
             } => {
                 let patch = SettingsPatch {
                     device_name: device_name.map(Some),
                     download_dir: download_dir.map(Some),
                     close_to_tray: close_to_tray.map(Some),
+                    language: language.map(|tag| Some(tag).filter(|tag| tag != SYSTEM_LANGUAGE)),
                     ..clipboard_sync
                         .map(ClipboardSettings::sync_enabled_patch)
                         .unwrap_or_default()
@@ -725,6 +731,9 @@ fn print_clipboard(clipboard: &ClipboardSnapshot, json_output: bool) {
     }
 }
 
+/// What `settings --language` takes, and prints, for the system's language.
+const SYSTEM_LANGUAGE: &str = "system";
+
 fn print_settings(settings: &SettingsSnapshot, json_output: bool) {
     if json_output {
         println!(
@@ -739,6 +748,10 @@ fn print_settings(settings: &SettingsSnapshot, json_output: bool) {
             ClipboardSettings::of(settings).sync_enabled
         );
         println!("Close to tray: {}", settings.close_to_tray);
+        println!(
+            "Language: {}",
+            settings.language.as_deref().unwrap_or(SYSTEM_LANGUAGE)
+        );
     }
 }
 

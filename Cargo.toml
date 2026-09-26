@@ -14,8 +14,16 @@ publish = false
 gui = [
     "dep:chrono",
     "dep:display-info",
+    "dep:fluent-bundle",
+    "dep:fluent-syntax",
+    "dep:i18n-embed",
+    "dep:i18n-embed-fl",
     "dep:iced",
     "dep:iced_fonts",
+    "dep:icu_calendar",
+    "dep:icu_datetime",
+    "dep:icu_decimal",
+    "dep:icu_locale_core",
     "dep:image",
     "dep:interprocess",
     "dep:ksni",
@@ -26,6 +34,7 @@ gui = [
     "dep:objc2-foundation",
     "dep:opener",
     "dep:rfd",
+    "dep:rust-embed",
     "dep:tray-icon",
     "dep:windows-registry",
     "dep:xcb",
@@ -89,6 +98,24 @@ chrono = { version = "0.4", default-features = false, features = ["clock"], opti
 display-info = { version = "0.5", optional = true }
 # The single-instance socket, named from the data dir.
 interprocess = { version = "2.4", optional = true }
+# Translations (`src/ui/i18n.rs`): Fluent files from `i18n/`, embedded
+# with `rust-embed`, the system's languages through `desktop-requester`,
+# and `fl!`, which checks keys and arguments against en-US at compile time.
+i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"], optional = true }
+i18n-embed-fl = { version = "0.10", optional = true }
+rust-embed = { version = "8", optional = true }
+# Numbers and dates in the user's locale (`ui::i18n::format`), from CLDR
+# data compiled in; `icu_locale_core` is already in the tree through
+# `url`. `fluent-bundle` (already in the tree through
+# `i18n-embed`) is named to hand Fluent that number formatter.
+icu_calendar = { version = "2.3", optional = true }
+icu_datetime = { version = "2.3", optional = true }
+icu_decimal = { version = "2.3", features = ["alloc", "ryu"], optional = true }
+icu_locale_core = { version = "2.3", optional = true }
+fluent-bundle = { version = "0.16", optional = true }
+# Reads and writes `.ftl` files: the en-XA pseudo-locale is made from
+# en-US's (`ui::i18n::pseudo`); already in the tree through `i18n-embed`.
+fluent-syntax = { version = "0.12", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 # The uid in the single-instance socket's name (`gui`).
@@ -132,6 +159,10 @@ path = "src/bin/ferry-cli/main.rs"
 
 [[test]]
 name = "ui_e2e"
+required-features = ["gui"]
+
+[[test]]
+name = "i18n_switch"
 required-features = ["gui"]
 
 [dev-dependencies]

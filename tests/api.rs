@@ -460,6 +460,7 @@ async fn settings_can_be_read_changed_and_are_announced() {
         serde_json::json!({"clipboard": {"syncEnabled": true}})
     );
     assert_eq!(initial["closeToTray"], true);
+    assert_eq!(initial["language"], serde_json::Value::Null);
 
     let patched = request_with_body(
         &server,
@@ -499,6 +500,7 @@ async fn settings_can_be_read_changed_and_are_announced() {
             "invalid_settings",
         ),
         (r#"{"plugins":{"nope":{}}}"#, "invalid_settings"),
+        (r#"{"language":"not a tag"}"#, "invalid_settings"),
     ] {
         let response = request_with_body(&server, "PATCH", "/api/v1/settings", patch).await;
         assert!(
@@ -512,6 +514,17 @@ async fn settings_can_be_read_changed_and_are_announced() {
         assert!(!response.starts_with("HTTP/1.1 200"), "{response}");
     }
     assert!(!ClipboardSettings::of(&server.application.settings().unwrap()).sync_enabled);
+
+    // The app's language: a tag, or `null` for the system's.
+    for (patch, language) in [
+        (r#"{"language":"de"}"#, serde_json::json!("de")),
+        (r#"{"language":null}"#, serde_json::Value::Null),
+    ] {
+        let response = request_with_body(&server, "PATCH", "/api/v1/settings", patch).await;
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+        let settings: serde_json::Value = serde_json::from_str(body(&response)).unwrap();
+        assert_eq!(settings["language"], language);
+    }
 
     server.server.shutdown().await.unwrap();
 }

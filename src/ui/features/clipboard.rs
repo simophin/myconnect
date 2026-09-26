@@ -14,6 +14,7 @@ use crate::{
         self, Origin,
         context::UiContext,
         error::{describe_code, describe_error as describe_core_error},
+        i18n::fl,
         shell, widgets,
     },
 };
@@ -53,7 +54,7 @@ pub fn device_actions(device: &DeviceSnapshot) -> Vec<DeviceAction> {
     }
     vec![DeviceAction {
         id: "send-clipboard",
-        label: "Send clipboard".into(),
+        label: fl!("clipboard-action"),
         icon: lucide::clipboard_paste,
         enabled: device.paired && device.reachability == DeviceReachability::Connected,
         visible_in_tray: true,
@@ -68,8 +69,8 @@ pub fn device_actions(device: &DeviceSnapshot) -> Vec<DeviceAction> {
 pub fn view_settings(settings: &SettingsSnapshot) -> Element<'_, Message> {
     widgets::switch_setting(
         lucide::clipboard_copy,
-        "Sync clipboard",
-        "Share copied text with paired devices",
+        fl!("clipboard-sync"),
+        fl!("clipboard-sync-detail"),
         ClipboardSettings::of(settings).sync_enabled,
         Message::SetSync,
     )
@@ -98,7 +99,7 @@ impl ClipboardUi {
                     },
                     move |result| {
                         let result = match result {
-                            Ok(Ok(())) => Ok(format!("Sent the clipboard to {name}.")),
+                            Ok(Ok(())) => Ok(fl!("clipboard-sent", name = name.as_str())),
                             Ok(Err(error)) => Err(describe_error(&error)),
                             Err(_) => Err(describe_code("internal")),
                         };
@@ -108,11 +109,9 @@ impl ClipboardUi {
             }
             Message::Sent { name, result } => match result {
                 Ok(text) => shell::done(origin, text),
-                Err(error) => shell::failed(
-                    origin,
-                    format!("Couldn’t send the clipboard to {name}"),
-                    error,
-                ),
+                Err(error) => {
+                    shell::failed(origin, fl!("clipboard-failed", name = name.as_str()), error)
+                }
             },
             Message::SetSync(enabled) => {
                 let core = ctx.core().clone();
@@ -144,8 +143,8 @@ pub fn describe_error(error: &ClipboardSyncError) -> String {
 /// Words this feature's codes and leaves the rest to `ui::error`.
 fn describe(code: &str) -> String {
     match code {
-        "clipboard_empty" => "There is no text on the clipboard to send.".into(),
-        "clipboard_text_too_large" => "The clipboard text is too long to send.".into(),
+        "clipboard_empty" => fl!("clipboard-error-clipboard_empty"),
+        "clipboard_text_too_large" => fl!("clipboard-error-clipboard_text_too_large"),
         code => describe_code(code),
     }
 }

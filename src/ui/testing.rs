@@ -10,6 +10,7 @@ use crate::{
     core::{Core, DeviceReachability, DeviceSnapshot, SettingsSnapshot, testing::make_identity},
     protocol::{DeviceType, Packet, PairingBody},
     ui::{
+        i18n,
         store::{Snapshot, Store},
         widgets,
     },
@@ -114,6 +115,7 @@ pub fn store(local_name: &str, devices: Vec<DeviceSnapshot>) -> Store {
             device_name: local_name.into(),
             download_dir: "/home/me/Downloads".into(),
             close_to_tray: true,
+            language: None,
             plugins: Default::default(),
         }),
     });
@@ -136,8 +138,15 @@ pub async fn outputs<T: 'static>(task: Task<T>) -> Vec<T> {
 }
 
 /// Render `view` headlessly, in light and dark, to
-/// `$SNAPSHOT_DIR/<name>-<light|dark>-<backend>.png`, to look at the UI
-/// without a display. Does nothing without the variable.
+/// `$SNAPSHOT_DIR/<name>-<light|dark>-<backend>.png`, and in the en-XA
+/// pseudo-locale, light only, to `<name>-en-XA-light-<backend>.png`, to
+/// look at the UI without a display. Does nothing without the variable.
+/// `SNAPSHOT_LANGUAGES`, a comma-separated list such as `de,zh-CN`, adds
+/// those translations, light only, as `<name>-<language>-light-…`.
+///
+/// In en-XA, a string that reads as plain English wasn't extracted (or
+/// was made before `view` ran, like a toast's text), and a missing closing
+/// bracket means the text was cut off.
 pub fn snapshot<'a, Message>(
     name: &str,
     size: impl Into<Size> + Copy,
@@ -147,10 +156,25 @@ pub fn snapshot<'a, Message>(
         return;
     };
     let directory = Path::new(&directory);
-    for (variant, theme) in [
-        ("light", super::theme::light()),
-        ("dark", super::theme::dark()),
-    ] {
+    let languages = std::env::var("SNAPSHOT_LANGUAGES").unwrap_or_default();
+    let variants = [
+        ("light".to_owned(), super::theme::light(), None),
+        ("dark".to_owned(), super::theme::dark(), None),
+    ]
+    .into_iter()
+    .chain(
+        std::iter::once("en-XA")
+            .chain(languages.split(',').map(str::trim))
+            .filter(|language| !language.is_empty())
+            .map(|language| {
+                (
+                    format!("{language}-light"),
+                    super::theme::light(),
+                    Some(language),
+                )
+            }),
+    );
+    for (variant, theme, language) in variants {
         let stem = format!("{name}-{variant}");
         remove_old_images(directory, &stem);
         let settings = Settings {
@@ -161,8 +185,15 @@ pub fn snapshot<'a, Message>(
             default_font: widgets::FONT,
             ..Settings::default()
         };
-        let mut ui = Simulator::with_size(settings, size, view());
-        let snapshot = ui.snapshot(&theme).expect("snapshot renders");
+        // Through layout too: `responsive` builds its content then.
+        let render = || {
+            let mut ui = Simulator::with_size(settings, size, view());
+            ui.snapshot(&theme).expect("snapshot renders")
+        };
+        let snapshot = match language {
+            Some(language) => i18n::in_locale(language, render),
+            None => render(),
+        };
         assert!(
             snapshot
                 .matches_image(directory.join(&stem))

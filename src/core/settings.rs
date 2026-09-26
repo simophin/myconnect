@@ -26,6 +26,10 @@ pub const DEVICE_NAME: ConfigKey<String> = ConfigKey::new("core.deviceName");
 pub const DOWNLOAD_DIR: ConfigKey<PathBuf> = ConfigKey::new("core.downloadDir");
 /// Owned by the UI; the daemon stores it without interpreting it.
 pub const CLOSE_TO_TRAY: ConfigKey<bool> = ConfigKey::new("ui.closeToTray");
+/// The language the app shows, a BCP 47 tag such as `de`; unset follows
+/// the system. Owned by the UI, which knows the translations; the daemon
+/// only checks that it looks like a tag.
+pub const LANGUAGE: ConfigKey<String> = ConfigKey::new("ui.language");
 /// Each plugin's settings section, by plugin id: only the fields the user
 /// set (see [`super::PluginSettings`]).
 pub const PLUGIN_SETTINGS: ConfigKey<Map<String, Value>, PerPlugin> =
@@ -37,6 +41,21 @@ fn read<T>(result: Result<Option<T>, StoreError>) -> Option<T> {
         .inspect_err(|error| tracing::warn!(%error, "ignoring unreadable settings"))
         .ok()
         .flatten()
+}
+
+/// Whether `tag` has the shape of a BCP 47 language tag (`de`, `zh-CN`,
+/// `zh-Hans-CN`): a language of 2–8 letters, then subtags of 1–8 letters
+/// or digits, joined by hyphens. Whether the app has that language is the
+/// UI's business; it falls back to English for one it lacks.
+fn looks_like_language_tag(tag: &str) -> bool {
+    let mut subtags = tag.split('-');
+    let language = subtags.next().unwrap_or_default();
+    (2..=8).contains(&language.len())
+        && language.bytes().all(|byte| byte.is_ascii_alphabetic())
+        && subtags.all(|subtag| {
+            (1..=8).contains(&subtag.len())
+                && subtag.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
 }
 
 /// A value per plugin, by plugin id.
@@ -55,6 +74,7 @@ pub(crate) struct StoredSettings {
     pub device_name: Option<String>,
     pub download_dir: Option<PathBuf>,
     pub close_to_tray: Option<bool>,
+    pub language: Option<String>,
     /// Plugins' sections, by plugin id. Each holds only the fields the user
     /// set, and none is empty.
     pub plugins: BTreeMap<String, Map<String, Value>>,
@@ -76,6 +96,10 @@ pub struct SettingsSnapshot {
     pub download_dir: PathBuf,
     /// Owned by the UI; the daemon stores it without interpreting it.
     pub close_to_tray: bool,
+    /// The app's language, a BCP 47 tag; `None` follows the system. Owned
+    /// by the UI, like `close_to_tray`.
+    #[serde(default)]
+    pub language: Option<String>,
     /// Every plugin's settings section, keyed by plugin id, with defaults
     /// filled in.
     #[serde(default)]
@@ -95,6 +119,8 @@ pub struct SettingsPatch {
     pub download_dir: Option<Option<PathBuf>>,
     #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     pub close_to_tray: Option<Option<bool>>,
+    #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    pub language: Option<Option<String>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plugins: BTreeMap<String, Value>,
 }
@@ -171,6 +197,7 @@ impl Settings {
             device_name: read(store.get(&DEVICE_NAME)),
             download_dir: read(store.get(&DOWNLOAD_DIR)),
             close_to_tray: read(store.get(&CLOSE_TO_TRAY)),
+            language: read(store.get(&LANGUAGE)),
             plugins: self
                 .sections
                 .iter()
@@ -205,6 +232,10 @@ impl Settings {
                 .close_to_tray
                 .or(stored.close_to_tray)
                 .unwrap_or(true),
+            language: overrides
+                .language
+                .clone()
+                .or_else(|| stored.language.clone()),
             plugins: self
                 .sections
                 .iter()
@@ -262,6 +293,17 @@ impl Settings {
         if let Some(value) = patch.close_to_tray {
             stored.close_to_tray = value;
             overrides.close_to_tray = None;
+        }
+        if let Some(value) = patch.language {
+            let value = value.map(|tag| tag.trim().to_owned());
+            if value
+                .as_deref()
+                .is_some_and(|tag| !looks_like_language_tag(tag))
+            {
+                return Err(CoreError::InvalidSettings);
+            }
+            stored.language = value;
+            overrides.language = None;
         }
         for (id, change) in patch.plugins {
             let section = self
@@ -322,6 +364,7 @@ impl Settings {
         put(transaction, &DEVICE_NAME, stored.device_name.as_ref())?;
         put(transaction, &DOWNLOAD_DIR, stored.download_dir.as_ref())?;
         put(transaction, &CLOSE_TO_TRAY, stored.close_to_tray.as_ref())?;
+        put(transaction, &LANGUAGE, stored.language.as_ref())?;
         for section in &self.sections {
             put(
                 transaction,
@@ -375,6 +418,40 @@ mod tests {
         assert_eq!(snapshot.device_name, "Renamed");
         assert_eq!(store.get(&DEVICE_NAME).unwrap().as_deref(), Some("Renamed"));
         assert_eq!(store.get(&CLOSE_TO_TRAY).unwrap(), Some(false));
+    }
+
+    #[test]
+    fn the_language_is_a_tag_or_unset_for_the_systems() {
+        let store = Store::open_in_memory().unwrap();
+        let mut settings = Settings::new(defaults()).with_store(store.clone());
+        assert_eq!(
+            settings.snapshot().language,
+            None,
+            "the system's by default"
+        );
+
+        let snapshot = settings.update(patch(r#"{"language": " zh-Hans-CN "}"#));
+        assert_eq!(snapshot.unwrap().language.as_deref(), Some("zh-Hans-CN"));
+        assert_eq!(store.get(&LANGUAGE).unwrap().as_deref(), Some("zh-Hans-CN"));
+        for invalid in [
+            "",
+            "d",
+            "de_DE",
+            "de-",
+            "-de",
+            "deutsch-sprache-",
+            "1a",
+            "de-DE!",
+        ] {
+            let body = serde_json::json!({ "language": invalid }).to_string();
+            let error = settings.update(patch(&body)).unwrap_err();
+            assert_eq!(format!("{error:?}"), "InvalidSettings", "{invalid:?}");
+        }
+        assert_eq!(settings.snapshot().language.as_deref(), Some("zh-Hans-CN"));
+
+        let snapshot = settings.update(patch(r#"{"language": null}"#)).unwrap();
+        assert_eq!(snapshot.language, None);
+        assert_eq!(store.get(&LANGUAGE).unwrap(), None);
     }
 
     #[test]

@@ -25,7 +25,14 @@ use crate::{
         BrowsePlugin, DirectoryListing, FileEntry, FileKind, REQUEST_PACKET_TYPE,
         files::{join_remote_path, split_remote_path},
     },
-    ui::{self, Origin, context::UiContext, error::describe_file_failures, route::Route, shell},
+    ui::{
+        self, Origin,
+        context::UiContext,
+        error::{FileBatch, describe_file_failures},
+        i18n::fl,
+        route::Route,
+        shell,
+    },
 };
 pub use describe::describe_error;
 use describe::describe_upload_error;
@@ -162,7 +169,7 @@ pub enum Change {
 pub fn device_actions(device: &DeviceSnapshot) -> Vec<DeviceAction> {
     vec![DeviceAction {
         id: "browse-files",
-        label: "Browse files".into(),
+        label: fl!("browse-action"),
         icon: lucide::folder_open,
         enabled: shares_files(device),
         // The tray lists it only for a device that can share files.
@@ -287,8 +294,8 @@ impl BrowseUi {
     /// Ask for a name, then make `change` of it.
     fn prompt(
         &self,
-        title: &str,
-        confirm_label: &str,
+        title: String,
+        confirm_label: String,
         initial: &str,
         folder: String,
         origin: Origin,
@@ -303,16 +310,16 @@ impl BrowseUi {
             _ => initial.chars().count(),
         };
         shell::prompt(shell::Prompt {
-            title: title.into(),
+            title,
             body: None,
-            label: "Name".into(),
+            label: fl!("browse-name-label"),
             initial: initial.into(),
             selection: (!initial.is_empty()).then_some(Range {
                 start: 0,
                 end: stem,
             }),
-            confirm_label: confirm_label.into(),
-            validate: Arc::new(|name| invalid_name_reason(name).map(str::to_owned)),
+            confirm_label,
+            validate: Arc::new(invalid_name_reason),
             then: Arc::new(move |name| {
                 Feature::Browse(match change(name) {
                     Some(change) => Message::Change {
@@ -416,7 +423,7 @@ impl BrowseUi {
                         failures.push((path, describe_upload_error(&error)));
                     }
                 }
-                describe_file_failures("upload", &failures)
+                describe_file_failures(FileBatch::Upload, &failures)
             }
         };
         ctx.spawn(uploaded, move |error| {
@@ -446,7 +453,10 @@ impl BrowseUi {
         let device_id = device_id.clone();
         let folder = folder.clone();
         Some(DropTarget {
-            label: format!("Drop to upload to {}", folder_name(&folder, self.roots())),
+            label: fl!(
+                "browse-drop-hint",
+                folder = folder_name(&folder, self.roots())
+            ),
             on_drop: Arc::new(move |paths| {
                 Feature::Browse(Message::Upload {
                     device_id: device_id.clone(),
@@ -587,8 +597,8 @@ impl BrowseUi {
                 self.download(ctx, file, origin)
             }
             Message::Downloading(Ok(name)) => Task::done(ui::Message::Toast {
-                text: format!("Downloading {name}"),
-                action: Some(("Transfers".into(), Route::Transfers)),
+                text: fl!("browse-downloading", file = name),
+                action: Some((fl!("browse-see-transfers"), Route::Transfers)),
                 origin,
             }),
             Message::Downloading(Err(error)) => shell::toast(origin, error),
@@ -613,9 +623,14 @@ impl BrowseUi {
                     return Task::none();
                 };
                 let parent = folder.clone();
-                self.prompt("New folder", "Create", "", folder, origin, move |name| {
-                    Some(Change::CreateDirectory(join_remote_path(&parent, &name)))
-                })
+                self.prompt(
+                    fl!("browse-new-folder-title"),
+                    fl!("browse-new-folder-confirm"),
+                    "",
+                    folder,
+                    origin,
+                    move |name| Some(Change::CreateDirectory(join_remote_path(&parent, &name))),
+                )
             }
             Message::Rename(file) => {
                 self.menu = None;
@@ -624,12 +639,19 @@ impl BrowseUi {
                 };
                 let folder = parent.clone();
                 let initial = file.name.clone();
-                self.prompt("Rename", "Rename", &initial, folder, origin, move |name| {
-                    (name != file.name).then(|| Change::Move {
-                        from: file.path.clone(),
-                        to: join_remote_path(&parent, &name),
-                    })
-                })
+                self.prompt(
+                    fl!("browse-rename-title"),
+                    fl!("browse-rename-confirm"),
+                    &initial,
+                    folder,
+                    origin,
+                    move |name| {
+                        (name != file.name).then(|| Change::Move {
+                            from: file.path.clone(),
+                            to: join_remote_path(&parent, &name),
+                        })
+                    },
+                )
             }
             Message::Delete(file) => {
                 self.menu = None;
@@ -639,27 +661,20 @@ impl BrowseUi {
                 };
                 let (title, body) = if file.kind == FileKind::Directory {
                     (
-                        "Delete folder?",
-                        format!(
-                            "“{}” and everything in it will be deleted from the device. \
-                             This can’t be undone.",
-                            file.name
-                        ),
+                        fl!("browse-delete-folder-title"),
+                        fl!("browse-delete-folder-body", name = file.name.as_str()),
                     )
                 } else {
                     (
-                        "Delete file?",
-                        format!(
-                            "“{}” will be deleted from the device. This can’t be undone.",
-                            file.name
-                        ),
+                        fl!("browse-delete-file-title"),
+                        fl!("browse-delete-file-body", name = file.name.as_str()),
                     )
                 };
                 shell::confirm(
                     origin,
                     title,
                     body,
-                    "Delete",
+                    fl!("browse-delete-confirm"),
                     Feature::Browse(Message::Change {
                         device_id,
                         folder,
@@ -700,7 +715,10 @@ impl BrowseUi {
                 };
                 shell::pick_files(
                     origin,
-                    format!("Upload files to {}", folder_name(&folder, self.roots())),
+                    fl!(
+                        "browse-upload-title",
+                        folder = folder_name(&folder, self.roots())
+                    ),
                     Arc::new(move |paths| {
                         Feature::Browse(Message::Upload {
                             device_id: device_id.clone(),
@@ -738,13 +756,13 @@ fn parent_of(path: &str) -> Option<String> {
 }
 
 /// Why `name` can't name a file, checked before asking the device.
-fn invalid_name_reason(name: &str) -> Option<&'static str> {
+fn invalid_name_reason(name: &str) -> Option<String> {
     if name.trim().is_empty() {
-        Some("Enter a name.")
+        Some(fl!("browse-name-empty"))
     } else if name == "." || name == ".." {
-        Some("That name is reserved.")
+        Some(fl!("browse-name-reserved"))
     } else if name.contains('/') {
-        Some("Names can’t contain “/”.")
+        Some(fl!("browse-name-slash"))
     } else {
         None
     }
@@ -923,7 +941,7 @@ pub(crate) mod tests {
         // Folders first; hidden files stay hidden.
         assert!(browser.top("DCIM") < browser.top("notes.txt"));
         assert!(browser.shows("2.0 KB"));
-        assert!(browser.shows("2026-09-24 14:03"));
+        assert!(browser.shows("Sep 24, 2026, 2:03\u{A0}PM"));
         assert!(!browser.shows(".nomedia"));
 
         browser.click("DCIM").await;

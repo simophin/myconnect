@@ -11,6 +11,7 @@ use crate::{
     protocol::DeviceType,
     ui::{
         features::DeviceStatus,
+        i18n::fl,
         route::Route,
         store::{Load, Store},
         widgets::{self, HeaderAction},
@@ -27,13 +28,17 @@ pub fn view<'a, Message: Clone + 'a>(
     retry: Message,
 ) -> Element<'a, Message> {
     let title = widgets::page_header(
-        "Devices",
+        fl!("devices-title"),
         None,
         vec![
-            HeaderAction::new(lucide::settings, "Settings", navigate(Route::Settings)),
+            HeaderAction::new(
+                lucide::settings,
+                fl!("devices-settings"),
+                navigate(Route::Settings),
+            ),
             HeaderAction::new(
                 lucide::arrow_up_down,
-                "Transfers",
+                fl!("devices-transfers"),
                 navigate(Route::Transfers),
             ),
         ],
@@ -41,10 +46,13 @@ pub fn view<'a, Message: Clone + 'a>(
     let this_computer: Element<'a, Message> = match store.settings().loaded() {
         Some(settings) => row![
             lucide::monitor().size(13).style(text::secondary),
-            text(format!("This computer: {}", settings.device_name))
-                .size(13)
-                .style(text::secondary)
-                .wrapping(text::Wrapping::None),
+            text(fl!(
+                "devices-this-computer",
+                name = settings.device_name.as_str()
+            ))
+            .size(13)
+            .style(text::secondary)
+            .wrapping(text::Wrapping::WordOrGlyph),
         ]
         .spacing(6)
         .align_y(Alignment::Center)
@@ -52,7 +60,7 @@ pub fn view<'a, Message: Clone + 'a>(
         None => Space::new().into(),
     };
     let add = button(
-        row![lucide::plus().size(16), text("Add device")]
+        row![lucide::plus().size(16), text(fl!("devices-add"))]
             .spacing(6)
             .align_y(Alignment::Center),
     )
@@ -62,10 +70,7 @@ pub fn view<'a, Message: Clone + 'a>(
     let header = column![
         title,
         row![
-            container(this_computer)
-                .padding([0, 4])
-                .width(Length::Fill)
-                .clip(true),
+            container(this_computer).padding([0, 4]).width(Length::Fill),
             add
         ]
         .spacing(12)
@@ -74,13 +79,13 @@ pub fn view<'a, Message: Clone + 'a>(
     .spacing(8);
 
     let body: Element<'a, Message> = match store.paired_devices() {
-        Load::Loading => widgets::loading("Loading devices…"),
+        Load::Loading => widgets::loading(fl!("devices-loading")),
         Load::Failed(error) => widgets::error_view(error, Some(retry)),
         Load::Loaded(paired) if paired.is_empty() => widgets::empty_state(
             lucide::monitor_smartphone,
-            "No paired devices yet",
+            fl!("devices-empty"),
             None,
-            Some(("Find a device to pair", navigate(Route::AddDevice))),
+            Some((fl!("devices-find"), navigate(Route::AddDevice))),
         ),
         Load::Loaded(mut paired) => {
             // Connected first; the store sorts by name.
@@ -212,11 +217,11 @@ pub fn is_connected(device: &DeviceSnapshot) -> bool {
 
 /// How reachable a device is, in the Flutter app's words
 /// (`shared/widgets.dart`).
-pub fn reachability_label(reachability: DeviceReachability) -> &'static str {
+pub fn reachability_label(reachability: DeviceReachability) -> String {
     match reachability {
-        DeviceReachability::Connected => "Connected",
-        DeviceReachability::Discovered => "Nearby",
-        DeviceReachability::Unavailable => "Not reachable",
+        DeviceReachability::Connected => fl!("device-reachability-connected"),
+        DeviceReachability::Discovered => fl!("device-reachability-nearby"),
+        DeviceReachability::Unavailable => fl!("device-reachability-unavailable"),
     }
 }
 
@@ -429,5 +434,15 @@ mod tests {
         testing::snapshot("devices-empty", (440.0, 400.0), || page(&empty, signal));
         let failed = failed();
         testing::snapshot("devices-failed", (440.0, 400.0), || page(&failed, signal));
+        // Figtree has no CJK glyphs: these come from a system font, and
+        // show as boxes without one (a .deb recommends Noto CJK).
+        let cjk = testing::store(
+            "张伟的电脑",
+            vec![
+                testing::device("小米 14 Pro"),
+                testing::device("華為平板 MatePad"),
+            ],
+        );
+        testing::snapshot("devices-cjk", (440.0, 400.0), || page(&cjk, signal));
     }
 }

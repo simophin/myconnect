@@ -165,6 +165,7 @@ mod dbus {
         super::{APP_ID, DesktopEvent},
         Events, Notifier,
     };
+    use crate::ui::i18n::fl;
 
     const DESTINATION: &str = "org.freedesktop.Notifications";
     const PATH: &str = "/org/freedesktop/Notifications";
@@ -229,6 +230,7 @@ mod dbus {
                         // from its `.desktop` file.
                         let hints: HashMap<&str, Value<'_>> =
                             HashMap::from([("desktop-entry", Value::from(APP_ID))]);
+                        let open = fl!("notify-open");
                         let shown = server
                             .call::<_, _, u32>(
                                 "Notify",
@@ -239,7 +241,7 @@ mod dbus {
                                     title.as_str(),
                                     body.as_str(),
                                     // A click on the body is `default`.
-                                    vec!["default", "Open"],
+                                    vec!["default", open.as_str()],
                                     hints,
                                     -1_i32,
                                 ),

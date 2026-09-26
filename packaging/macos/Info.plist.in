@@ -4,6 +4,11 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<!-- The app's languages (packaging/i18n.sh), so that the system's own
+	     dialogs and texts in it (file pickers, notifications' buttons,
+	     prompts) follow the app's language rather than staying English. -->
+	<key>CFBundleLocalizations</key>
+	<array>@LOCALIZATIONS@</array>
 	<key>CFBundleExecutable</key>
 	<string>Ferry</string>
 	<key>CFBundleIconFile</key>
@@ -31,6 +36,7 @@
 	<string>public.app-category.utilities</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<!-- Each <lang>.lproj/InfoPlist.strings has it in its language. -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Ferry finds and connects to your devices on the local network.</string>
 	<key>NSHumanReadableCopyright</key>

@@ -451,6 +451,8 @@ impl Test {
 
     /// Start the app on a fresh identity and wait for its empty home page.
     fn launch(&self) -> App<impl iced::Program + use<>> {
+        // What the tests look for is en-US, with names and numbers as is.
+        ui::i18n::use_test_language();
         let request = RunRequest {
             // Off, as the app starts by default.
             api: ApiMode::Stored {

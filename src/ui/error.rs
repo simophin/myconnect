@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::core::CoreError;
+use crate::{core::CoreError, ui::i18n::fl};
 
 /// A sentence for the user about `error`.
 pub fn describe_error(error: &CoreError) -> String {
@@ -16,46 +16,78 @@ pub fn describe_error(error: &CoreError) -> String {
 
 /// A sentence for the user about a failure with this code.
 pub fn describe_code(code: &str) -> String {
-    let message = match code {
-        "daemon_unavailable" => "Ferry is not responding.",
-        "unauthorized" => "Ferry rejected this app’s access token.",
-        "device_not_found" => "That device is no longer known.",
-        "device_not_connected" => "The device is not connected right now.",
-        "already_paired" => "The device is already paired.",
-        "pairing_in_progress" => "A pairing with this device is already running.",
-        "pairing_not_found" => "That pairing request no longer exists.",
+    match code {
+        "daemon_unavailable" => fl!("error-daemon_unavailable"),
+        "unauthorized" => fl!("error-unauthorized"),
+        "device_not_found" => fl!("error-device_not_found"),
+        "device_not_connected" => fl!("error-device_not_connected"),
+        "already_paired" => fl!("error-already_paired"),
+        "pairing_in_progress" => fl!("error-pairing_in_progress"),
+        "pairing_not_found" => fl!("error-pairing_not_found"),
         "invalid_pairing_state" | "invalid_pairing_direction" => {
-            "That pairing request is no longer active."
+            fl!("error-invalid_pairing_state")
         }
-        "device_not_paired" => "The device is not paired.",
-        "unsupported_by_peer" => "The device doesn’t support that.",
-        "invalid_file_name" => "That file name can’t be sent.",
-        "transfer_too_large" | "payload_too_large" => "The file is too large to send.",
-        "transfer_not_found" => "That transfer no longer exists.",
-        "invalid_transfer_state" => "That transfer has already finished.",
-        "request_timeout" => "Ferry took too long to respond.",
-        "invalid_device_name" => {
-            "Use 1 to 32 characters, without . , : ; ! ? ( ) [ ] < > or quotes."
-        }
-        "invalid_download_dir" => "That folder can’t be used for downloads.",
-        "invalid_address" => "Enter an IPv4 address, like 192.168.1.20.",
-        code => return format!("Something went wrong ({code})."),
-    };
-    message.into()
+        "device_not_paired" => fl!("error-device_not_paired"),
+        "unsupported_by_peer" => fl!("error-unsupported_by_peer"),
+        "invalid_file_name" => fl!("error-invalid_file_name"),
+        "transfer_too_large" | "payload_too_large" => fl!("error-transfer_too_large"),
+        "transfer_not_found" => fl!("error-transfer_not_found"),
+        "invalid_transfer_state" => fl!("error-invalid_transfer_state"),
+        "request_timeout" => fl!("error-request_timeout"),
+        "invalid_device_name" => fl!("error-invalid_device_name"),
+        "invalid_download_dir" => fl!("error-invalid_download_dir"),
+        "invalid_address" => fl!("error-invalid_address"),
+        code => fl!("error-unknown", code = code),
+    }
 }
 
-/// One sentence about the files among a batch that failed, if any:
-/// `verb` is what was being done ("send", "upload"), and each failure is a
-/// file and why. Only the first reason is given, as the Flutter app did.
-pub fn describe_file_failures(verb: &str, failures: &[(PathBuf, String)]) -> Option<String> {
-    match failures {
-        [] => None,
-        [(path, reason)] => Some(format!("Couldn’t {verb} {}: {reason}", file_name(path))),
-        [(_, reason), ..] => Some(format!(
-            "Couldn’t {verb} {} files: {reason}",
-            failures.len()
-        )),
-    }
+/// What was being done to a batch of files, for [`describe_file_failures`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileBatch {
+    /// Sending files to a device.
+    Send,
+    /// Uploading files to a folder on a device.
+    Upload,
+}
+
+/// One sentence about the files among a batch that failed, if any: each
+/// failure is a file and why. Only the first reason is given, as the
+/// Flutter app did.
+pub fn describe_file_failures(batch: FileBatch, failures: &[(PathBuf, String)]) -> Option<String> {
+    let [(path, reason), rest @ ..] = failures else {
+        return None;
+    };
+    let reason = reason.as_str();
+    Some(match (batch, rest.is_empty()) {
+        (FileBatch::Send, true) => {
+            fl!(
+                "error-send-file-failed",
+                file = file_name(path),
+                reason = reason
+            )
+        }
+        (FileBatch::Send, false) => {
+            fl!(
+                "error-send-files-failed",
+                count = failures.len(),
+                reason = reason
+            )
+        }
+        (FileBatch::Upload, true) => {
+            fl!(
+                "error-upload-file-failed",
+                file = file_name(path),
+                reason = reason
+            )
+        }
+        (FileBatch::Upload, false) => {
+            fl!(
+                "error-upload-files-failed",
+                count = failures.len(),
+                reason = reason
+            )
+        }
+    })
 }
 
 /// The last part of `path`, for the user.
@@ -148,18 +180,30 @@ mod tests {
     fn failed_files_are_summed_up_in_one_sentence() {
         let failed =
             |name: &str, reason: &str| (PathBuf::from(format!("/tmp/{name}")), reason.into());
-        assert_eq!(describe_file_failures("send", &[]), None);
+        assert_eq!(describe_file_failures(FileBatch::Send, &[]), None);
         assert_eq!(
-            describe_file_failures("send", &[failed("photo.jpg", "It broke.")]).unwrap(),
+            describe_file_failures(FileBatch::Send, &[failed("photo.jpg", "It broke.")]).unwrap(),
             "Couldn’t send photo.jpg: It broke."
         );
         assert_eq!(
             describe_file_failures(
-                "upload",
+                FileBatch::Upload,
                 &[failed("a.txt", "First."), failed("b.txt", "Second.")]
             )
             .unwrap(),
             "Couldn’t upload 2 files: First."
+        );
+        assert_eq!(
+            describe_file_failures(FileBatch::Upload, &[failed("a.txt", "Gone.")]).unwrap(),
+            "Couldn’t upload a.txt: Gone."
+        );
+        assert_eq!(
+            describe_file_failures(
+                FileBatch::Send,
+                &[failed("a.txt", "First."), failed("b.txt", "Second.")]
+            )
+            .unwrap(),
+            "Couldn’t send 2 files: First."
         );
     }
 }

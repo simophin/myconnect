@@ -27,6 +27,7 @@ use crate::{
         self, Origin,
         context::UiContext,
         error::describe_code,
+        i18n::fl,
         route::Route,
         shell::{self, Prompt},
         widgets,
@@ -99,10 +100,7 @@ impl NotificationsUi {
         let count = self.devices.get(&device.device_id).map_or(0, Vec::len);
         vec![DeviceAction {
             id: "notifications",
-            label: match count {
-                0 => "Notifications".into(),
-                count => format!("Notifications ({count})"),
-            },
+            label: fl!("notifications-action", count = count),
             icon: lucide::inbox,
             enabled: device.reachability == DeviceReachability::Connected,
             visible_in_tray: false,
@@ -198,17 +196,17 @@ impl NotificationsUi {
                 id,
                 title,
             } => shell::prompt(Prompt {
-                title: "Reply".into(),
-                body: Some(format!("To “{title}”")),
-                label: "Message".into(),
+                title: fl!("notifications-reply-title"),
+                body: Some(fl!("notifications-reply-to", title = title.as_str())),
+                label: fl!("notifications-reply-label"),
                 initial: String::new(),
                 selection: None,
-                confirm_label: "Send".into(),
+                confirm_label: fl!("notifications-reply-send"),
                 validate: Arc::new(|message: &str| {
                     message
                         .trim()
                         .is_empty()
-                        .then(|| "Write a message.".to_owned())
+                        .then(|| fl!("notifications-error-empty_reply"))
                 }),
                 then: Arc::new(move |message| {
                     Feature::Notifications(Message::SendReply {
@@ -224,8 +222,10 @@ impl NotificationsUi {
                 id,
                 message,
             } => match self.plugin.reply(&plugin_ctx, &device_id, &id, &message) {
-                Ok(()) => shell::done(origin, "Reply sent."),
-                Err(error) => shell::failed(origin, "Couldn’t send the reply", describe(&error)),
+                Ok(()) => shell::done(origin, fl!("notifications-reply-sent")),
+                Err(error) => {
+                    shell::failed(origin, fl!("notifications-reply-failed"), describe(&error))
+                }
             },
             Message::Action {
                 device_id,
@@ -236,7 +236,11 @@ impl NotificationsUi {
                 .run_action(&plugin_ctx, &device_id, &id, &action)
             {
                 Ok(()) => Task::none(),
-                Err(error) => shell::failed(origin, format!("Couldn’t {action}"), describe(&error)),
+                Err(error) => shell::failed(
+                    origin,
+                    fl!("notifications-action-failed", action = action.as_str()),
+                    describe(&error),
+                ),
             },
             Message::Dismiss { device_id, id } => {
                 match self.plugin.dismiss(&plugin_ctx, &device_id, &id) {
@@ -244,7 +248,11 @@ impl NotificationsUi {
                         self.refresh(&device_id);
                         Task::none()
                     }
-                    Err(error) => shell::failed(origin, "Couldn’t dismiss it", describe(&error)),
+                    Err(error) => shell::failed(
+                        origin,
+                        fl!("notifications-dismiss-failed"),
+                        describe(&error),
+                    ),
                 }
             }
         }
@@ -252,7 +260,7 @@ impl NotificationsUi {
 
     /// The page of `device`'s notifications.
     pub(crate) fn view<'a>(&'a self, device: &'a DeviceSnapshot) -> Element<'a, Message> {
-        let header = widgets::page_header("Notifications", Some(back(device)), vec![]);
+        let header = widgets::page_header(fl!("notifications-title"), Some(back(device)), vec![]);
         let shown = self
             .devices
             .get(&device.device_id)
@@ -261,18 +269,15 @@ impl NotificationsUi {
         let body: Element<'a, Message> = if device.reachability != DeviceReachability::Connected {
             widgets::empty_state(
                 lucide::wifi_off,
-                format!("{} isn’t connected.", device.device_name),
-                Some("Its notifications show here while it is."),
+                fl!("notifications-offline", name = device.device_name.as_str()),
+                Some(fl!("notifications-offline-detail")),
                 None,
             )
         } else if shown.is_empty() {
             widgets::empty_state(
                 lucide::inbox,
-                format!("No notifications from {}.", device.device_name),
-                Some(
-                    "On the phone, let KDE Connect read notifications, and choose \
-                     which apps share them.",
-                ),
+                fl!("notifications-empty", name = device.device_name.as_str()),
+                Some(fl!("notifications-empty-detail")),
                 None,
             )
         } else {
@@ -336,7 +341,7 @@ fn card<'a>(device_id: &str, shown: &'a Shown) -> Element<'a, Message> {
             .clone()
             .unwrap_or_else(|| notification.app_name.clone());
         buttons.push(small_button(
-            "Reply",
+            &fl!("notifications-reply"),
             Message::Reply {
                 device_id: device_id.to_owned(),
                 id: notification.id.clone(),
@@ -375,7 +380,7 @@ fn card<'a>(device_id: &str, shown: &'a Shown) -> Element<'a, Message> {
     widgets::card(
         row![
             content.width(Length::Fill),
-            widgets::icon_button(lucide::x, "Dismiss", dismiss),
+            widgets::icon_button(lucide::x, fl!("notifications-dismiss"), dismiss),
         ]
         .spacing(8),
     )
@@ -400,7 +405,14 @@ fn announce(posted: &NotificationPosted) -> Task<ui::Message> {
         None => notification.app_name.clone(),
     };
     let body = notification.text.clone().unwrap_or_default();
-    shell::notify(format!("{title} · {}", posted.device_name), body)
+    shell::notify(
+        fl!(
+            "notifications-announce-title",
+            title = title,
+            name = posted.device_name.as_str()
+        ),
+        body,
+    )
 }
 
 /// `--demo`: a made-up phone shows two notifications from the start, and
@@ -457,11 +469,13 @@ fn shares_notifications(device: &DeviceSnapshot) -> bool {
 /// A sentence about a failed action on a notification.
 fn describe(error: &NotificationError) -> String {
     match error {
-        NotificationError::NotFound => "It’s no longer on the device.".into(),
-        NotificationError::NotRepliable => "It doesn’t take a reply.".into(),
-        NotificationError::NotDismissable => "It can’t be dismissed from here.".into(),
-        NotificationError::UnknownAction => "It no longer has that button.".into(),
-        NotificationError::EmptyReply => "Write a message.".into(),
+        NotificationError::NotFound => fl!("notifications-error-notification_not_found"),
+        NotificationError::NotRepliable => fl!("notifications-error-notification_not_repliable"),
+        NotificationError::NotDismissable => {
+            fl!("notifications-error-notification_not_dismissable")
+        }
+        NotificationError::UnknownAction => fl!("notifications-error-unknown_notification_action"),
+        NotificationError::EmptyReply => fl!("notifications-error-empty_reply"),
         NotificationError::Core(error) => describe_code(error.code()),
     }
 }

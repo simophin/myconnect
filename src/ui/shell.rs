@@ -11,6 +11,7 @@ use iced::Task;
 use crate::ui::{
     App, Message, Origin, context,
     features::{Callback, Feature},
+    i18n::fl,
     overlay::{
         dialog::{Dialog, DialogEvent, Field, Step, Submit, Validator},
         toast,
@@ -219,7 +220,10 @@ impl App {
     /// otherwise in a desktop notification.
     pub(super) fn notify(&mut self, title: &str, body: &str) -> Task<Message> {
         if self.focused() {
-            return self.toast(format!("{title}: {body}"), None);
+            return self.toast(
+                fl!("shell-notification-toast", title = title, body = body),
+                None,
+            );
         }
         self.notifications
             .show(&*self.desktop.notifier, title, body);

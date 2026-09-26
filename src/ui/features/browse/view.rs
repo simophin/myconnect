@@ -18,6 +18,7 @@ use crate::{
     core::{DeviceReachability, DeviceSnapshot},
     plugins::browse::{FileEntry, FileKind, files::join_remote_path},
     ui::{
+        i18n::fl,
         overlay::dialog,
         widgets::{self, HeaderAction, Icon, bold, format_bytes, format_timestamp},
     },
@@ -58,35 +59,43 @@ impl BrowseUi {
         let actions = vec![
             HeaderAction {
                 icon: lucide::file_up,
-                tooltip: "Upload files".into(),
+                tooltip: fl!("browse-upload"),
                 on_press: when(available && in_folder, Message::PickUploads),
             },
             HeaderAction {
                 icon: lucide::folder_plus,
-                tooltip: "New folder".into(),
+                tooltip: fl!("browse-new-folder"),
                 on_press: when(available && in_folder, Message::NewFolder),
             },
             HeaderAction {
                 icon: lucide::refresh_cw,
-                tooltip: "Refresh".into(),
+                tooltip: fl!("browse-refresh"),
                 on_press: when(available, Message::Refresh),
             },
             if self.show_hidden {
-                HeaderAction::new(lucide::eye_off, "Hide hidden files", Message::ToggleHidden)
+                HeaderAction::new(
+                    lucide::eye_off,
+                    fl!("browse-hide-hidden"),
+                    Message::ToggleHidden,
+                )
             } else {
-                HeaderAction::new(lucide::eye, "Show hidden files", Message::ToggleHidden)
+                HeaderAction::new(
+                    lucide::eye,
+                    fl!("browse-show-hidden"),
+                    Message::ToggleHidden,
+                )
             },
         ];
         let header = widgets::page_header(
-            format!("Files on {}", device.device_name),
+            fl!("browse-title", name = device.device_name.as_str()),
             Some(Message::Back),
             actions,
         );
         let body: Element<'a, Message> = if !available {
             let reason = if device.reachability == DeviceReachability::Connected {
-                format!("{} doesn’t share its files.", device.device_name)
+                fl!("browse-not-shared", name = device.device_name.as_str())
             } else {
-                format!("Connect {} to browse its files.", device.device_name)
+                fl!("browse-not-connected", name = device.device_name.as_str())
             };
             widgets::error_view(reason, None)
         } else {
@@ -108,8 +117,8 @@ impl BrowseUi {
             .get(&folder)
             .and_then(|listing| listing.answer.as_ref());
         let listing = match answer {
-            None if in_folder => return widgets::loading("Loading the folder…"),
-            None => return widgets::loading("Connecting to the device…"),
+            None if in_folder => return widgets::loading(fl!("browse-loading-folder")),
+            None => return widgets::loading(fl!("browse-connecting")),
             Some(Err(error)) => return widgets::error_view(error.as_str(), Some(Message::Refresh)),
             Some(Ok(listing)) => listing,
         };
@@ -122,7 +131,7 @@ impl BrowseUi {
             if entries.is_empty() {
                 return widgets::empty_state(
                     lucide::hard_drive,
-                    "The device isn’t sharing any storage.",
+                    fl!("browse-no-storage"),
                     None,
                     None,
                 );
@@ -157,12 +166,7 @@ impl BrowseUi {
         responsive(move |size| {
             let wide = size.width >= WIDE;
             let list: Element<'a, Message> = if entries.is_empty() {
-                widgets::empty_state(
-                    lucide::folder_open,
-                    "This folder is empty. Drop files here to upload them.",
-                    None,
-                    None,
-                )
+                widgets::empty_state(lucide::folder_open, fl!("browse-empty-folder"), None, None)
             } else {
                 scrollable(column(entries.iter().map(|file| self.file_row(file, wide))).spacing(2))
                     .spacing(6)
@@ -202,7 +206,7 @@ impl BrowseUi {
         line = line.push(
             container(widgets::icon_button(
                 lucide::ellipsis_vertical,
-                "More",
+                fl!("browse-more"),
                 Some(Message::Menu(file.path.clone())),
             ))
             .width(MORE_WIDTH)
@@ -221,26 +225,26 @@ impl BrowseUi {
         if can_preview(file) {
             actions = actions.push(menu_button(
                 lucide::eye,
-                "Preview",
+                fl!("browse-preview"),
                 Message::Preview(file.clone()),
             ));
         }
         if file.kind != FileKind::Directory {
             actions = actions.push(menu_button(
                 lucide::download,
-                "Download",
+                fl!("browse-download"),
                 Message::Download(file.clone()),
             ));
         }
         actions = actions
             .push(menu_button(
                 lucide::pencil,
-                "Rename",
+                fl!("browse-rename"),
                 Message::Rename(file.clone()),
             ))
             .push(menu_button(
                 lucide::trash_two,
-                "Delete",
+                fl!("browse-delete"),
                 Message::Delete(file.clone()),
             ));
         column![
@@ -275,7 +279,11 @@ fn breadcrumbs<'a>(folder: Option<&str>, roots: &[FileEntry]) -> Element<'a, Mes
         });
     }
     row![
-        widgets::icon_button(lucide::arrow_up, "Up", folder.map(|_| Message::Up)),
+        widgets::icon_button(
+            lucide::arrow_up,
+            fl!("browse-up"),
+            folder.map(|_| Message::Up)
+        ),
         // Deep paths scroll, showing their end.
         scrollable(trail)
             .direction(scrollable::Direction::Horizontal(
@@ -291,7 +299,7 @@ fn breadcrumbs<'a>(folder: Option<&str>, roots: &[FileEntry]) -> Element<'a, Mes
 
 /// Each breadcrumb's label and the folder it opens (`None`: the storage).
 fn crumbs(folder: Option<&str>, roots: &[FileEntry]) -> Vec<(String, Option<String>)> {
-    let mut crumbs = vec![("Storage".to_owned(), None)];
+    let mut crumbs = vec![(fl!("browse-storage"), None)];
     let Some(folder) = folder else {
         return crumbs;
     };
@@ -320,7 +328,7 @@ pub(super) fn folder_name(folder: &str, roots: &[FileEntry]) -> String {
 }
 
 fn header_row<'a>(wide: bool, sort: Sort) -> Element<'a, Message> {
-    let column_button = |label: &'static str, by: Column| -> Element<'a, Message> {
+    let column_button = |label: String, by: Column| -> Element<'a, Message> {
         let mut content = row![text(label).size(13).font(bold())]
             .spacing(4)
             .align_y(Alignment::Center);
@@ -340,8 +348,8 @@ fn header_row<'a>(wide: bool, sort: Sort) -> Element<'a, Message> {
     };
     let mut header = row![
         Space::new().width(ICON_WIDTH),
-        container(column_button("Name", Column::Name)).width(Length::Fill),
-        container(column_button("Size", Column::Size))
+        container(column_button(fl!("browse-column-name"), Column::Name)).width(Length::Fill),
+        container(column_button(fl!("browse-column-size"), Column::Size))
             .width(SIZE_WIDTH)
             .align_x(Alignment::End),
     ]
@@ -349,9 +357,12 @@ fn header_row<'a>(wide: bool, sort: Sort) -> Element<'a, Message> {
     .align_y(Alignment::Center);
     if wide {
         header = header.push(
-            container(column_button("Modified", Column::Modified))
-                .width(MODIFIED_WIDTH)
-                .align_x(Alignment::End),
+            container(column_button(
+                fl!("browse-column-modified"),
+                Column::Modified,
+            ))
+            .width(MODIFIED_WIDTH)
+            .align_x(Alignment::End),
         );
     }
     container(header.push(Space::new().width(MORE_WIDTH)))
@@ -375,7 +386,7 @@ fn row_style(theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-fn menu_button<'a>(icon: Icon, label: &'a str, message: Message) -> Element<'a, Message> {
+fn menu_button<'a>(icon: Icon, label: String, message: Message) -> Element<'a, Message> {
     button(
         row![icon().size(14), text(label).size(13)]
             .spacing(6)
@@ -510,7 +521,7 @@ mod tests {
         let mut browser = Browser::new();
         browser.go(Some(INTERNAL)).await;
         let narrow = Simulator::with_size(Default::default(), (500.0, 600.0), browser.page())
-            .find("2026-09-24 14:03")
+            .find("Sep 24, 2026, 2:03\u{A0}PM")
             .is_ok();
         assert!(!narrow);
         assert!(browser.shows("Modified"), "the default size is wide");
