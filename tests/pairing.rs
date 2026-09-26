@@ -3,13 +3,14 @@
 use std::{sync::Arc, time::Duration};
 
 use ferry::{
-    config::{FilesystemTrustStore, LocalIdentity, TrustStore},
+    config::LocalIdentity,
     core::{
         Core, CoreError, CoreEvent, EventData, LanCommand, LocalDeviceSnapshot, PairingDirection,
         PairingStatus, TransferConfig,
     },
     plugins::clipboard::InMemoryClipboard,
     protocol::{DeviceType, IdentityBody, Packet, PairingBody},
+    store::Store,
     transport::tls::subject_public_key_info,
 };
 use serde_json::Map;
@@ -22,7 +23,7 @@ struct Harness {
     application: Core,
     peer_id: String,
     peer_certificate_der: Vec<u8>,
-    trust_store: Arc<dyn TrustStore + Send + Sync>,
+    store: Store,
     packets: mpsc::Receiver<Packet>,
     events: broadcast::Receiver<CoreEvent>,
     _commands: mpsc::Receiver<LanCommand>,
@@ -31,10 +32,8 @@ struct Harness {
 
 fn harness() -> Harness {
     let directory = tempfile::tempdir().unwrap();
-    let trust_store: Arc<dyn TrustStore + Send + Sync> =
-        Arc::new(FilesystemTrustStore::new(directory.path()));
-    let local_identity =
-        Arc::new(LocalIdentity::load_or_create(directory.path().join("local")).unwrap());
+    let store = Store::open(directory.path()).unwrap();
+    let local_identity = Arc::new(LocalIdentity::load_or_create(&store).unwrap());
     let local_public_key = subject_public_key_info(local_identity.certificate_der()).unwrap();
     let (application, commands) = Core::new(
         LocalDeviceSnapshot {
@@ -43,7 +42,7 @@ fn harness() -> Harness {
         },
         8,
         local_public_key,
-        trust_store.clone(),
+        store.clone(),
         ferry::plugins::builtin(InMemoryClipboard::shared()),
         8,
         32,
@@ -52,8 +51,7 @@ fn harness() -> Harness {
     )
     .unwrap();
 
-    let peer_identity_dir = tempfile::tempdir().unwrap();
-    let peer_identity = LocalIdentity::load_or_create(peer_identity_dir.path()).unwrap();
+    let peer_identity = LocalIdentity::load_or_create(&Store::open_in_memory().unwrap()).unwrap();
     let peer_id = peer_identity.device_id().to_owned();
     let peer_certificate_der = peer_identity.certificate_der().to_vec();
 
@@ -91,7 +89,7 @@ fn harness() -> Harness {
         application,
         peer_id,
         peer_certificate_der,
-        trust_store,
+        store,
         packets,
         events,
         _commands: commands,
@@ -208,7 +206,7 @@ async fn accepting_an_incoming_pairing_persists_trust_only_after_confirmation() 
         trust_store_before,
         Some(device) if !device.paired
     ));
-    assert!(harness.trust_store.get(&harness.peer_id).unwrap().is_none());
+    assert!(harness.store.device(&harness.peer_id).unwrap().is_none());
 
     let accepted = harness.application.accept_pairing(pairing.id).unwrap();
     assert_eq!(accepted.status, PairingStatus::Accepted);
@@ -224,8 +222,8 @@ async fn accepting_an_incoming_pairing_persists_trust_only_after_confirmation() 
     assert!(body.pair);
 
     let pinned = harness
-        .trust_store
-        .get(&harness.peer_id)
+        .store
+        .device(&harness.peer_id)
         .unwrap()
         .expect("trust is pinned only after confirmation");
     assert_eq!(pinned.certificate_der, harness.peer_certificate_der);

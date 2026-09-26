@@ -5,10 +5,11 @@ use std::{
 };
 
 use ferry::{
-    config::{FilesystemTrustStore, LocalIdentity, TrustStore},
+    config::LocalIdentity,
     core::{Core, DeviceReachability, EventData, LanCommand, LocalDeviceSnapshot, SettingsPatch},
     plugins::clipboard::InMemoryClipboard,
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
+    store::Store,
     transport::{
         lan::{
             LOOPBACK_BROADCAST, LanConfig, LanService, LocalDeviceInfo, MAX_DISCOVERY_DATAGRAM,
@@ -28,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 
 struct Peer {
     identity: Arc<LocalIdentity>,
-    trust_store: Arc<dyn TrustStore + Send + Sync>,
+    store: Store,
     application: Core,
     commands: mpsc::Receiver<LanCommand>,
     _directory: tempfile::TempDir,
@@ -36,9 +37,8 @@ struct Peer {
 
 fn peer(name: &str) -> Peer {
     let directory = tempfile::tempdir().unwrap();
-    let identity = Arc::new(LocalIdentity::load_or_create(directory.path()).unwrap());
-    let trust_store: Arc<dyn TrustStore + Send + Sync> =
-        Arc::new(FilesystemTrustStore::new(directory.path()));
+    let store = Store::open(directory.path()).unwrap();
+    let identity = Arc::new(LocalIdentity::load_or_create(&store).unwrap());
     let public_key_der = subject_public_key_info(identity.certificate_der()).unwrap();
     let (application, commands) = Core::new(
         LocalDeviceSnapshot {
@@ -47,17 +47,18 @@ fn peer(name: &str) -> Peer {
         },
         8,
         public_key_der,
-        trust_store.clone(),
+        store.clone(),
         ferry::plugins::builtin(InMemoryClipboard::shared()),
         32,
         128,
         identity.clone(),
-        ferry::core::TransferConfig::new(directory.path().join("downloads")),
+        ferry::core::TransferConfig::new(directory.path().join("downloads"))
+            .with_payload_bind_ip(Ipv4Addr::LOCALHOST),
     )
     .unwrap();
     Peer {
         identity,
-        trust_store,
+        store,
         application,
         commands,
         _directory: directory,
@@ -123,7 +124,7 @@ async fn a_renamed_device_is_seen_under_its_new_name() {
         a.application.clone(),
         a.commands,
         a.identity.clone(),
-        a.trust_store.clone(),
+        a.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -134,7 +135,7 @@ async fn a_renamed_device_is_seen_under_its_new_name() {
         b.application.clone(),
         b.commands,
         b.identity.clone(),
-        b.trust_store.clone(),
+        b.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -181,7 +182,7 @@ async fn two_peers_discover_connect_deduplicate_and_follow_address_changes() {
         a.application.clone(),
         a.commands,
         a.identity.clone(),
-        a.trust_store.clone(),
+        a.store.clone(),
         a_shutdown,
     )
     .await
@@ -192,7 +193,7 @@ async fn two_peers_discover_connect_deduplicate_and_follow_address_changes() {
         b.application.clone(),
         b.commands,
         b.identity.clone(),
-        b.trust_store.clone(),
+        b.store.clone(),
         b_shutdown,
     )
     .await
@@ -230,7 +231,7 @@ async fn two_peers_discover_connect_deduplicate_and_follow_address_changes() {
         new_a.application,
         new_a.commands,
         a.identity.clone(),
-        a.trust_store.clone(),
+        a.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -266,7 +267,7 @@ async fn a_peer_added_by_address_connects_without_broadcast() {
         a.application.clone(),
         a.commands,
         a.identity.clone(),
-        a.trust_store.clone(),
+        a.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -277,7 +278,7 @@ async fn a_peer_added_by_address_connects_without_broadcast() {
         b.application.clone(),
         b.commands,
         b.identity.clone(),
-        b.trust_store.clone(),
+        b.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -328,7 +329,7 @@ async fn loopback_only_peers_bind_nothing_but_loopback_and_still_meet() {
         a.application.clone(),
         a.commands,
         a.identity.clone(),
-        a.trust_store.clone(),
+        a.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -339,7 +340,7 @@ async fn loopback_only_peers_bind_nothing_but_loopback_and_still_meet() {
         b.application.clone(),
         b.commands,
         b.identity.clone(),
-        b.trust_store.clone(),
+        b.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -362,7 +363,7 @@ async fn loopback_only_peers_bind_nothing_but_loopback_and_still_meet() {
         c.application.clone(),
         c.commands,
         c.identity.clone(),
-        c.trust_store.clone(),
+        c.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -396,7 +397,7 @@ async fn accepts_a_kde_connect_dialer_as_tls_client() {
         local_peer.application.clone(),
         local_peer.commands,
         local_peer.identity,
-        local_peer.trust_store,
+        local_peer.store,
         CancellationToken::new(),
     )
     .await
@@ -462,7 +463,7 @@ async fn dials_a_kde_connect_peer_as_tls_server() {
         local_peer.application.clone(),
         local_peer.commands,
         local_peer.identity,
-        local_peer.trust_store,
+        local_peer.store,
         CancellationToken::new(),
     )
     .await
@@ -575,7 +576,7 @@ async fn malformed_oversized_self_and_unsupported_discovery_are_ignored() {
         local_peer.application.clone(),
         local_peer.commands,
         local_peer.identity,
-        local_peer.trust_store,
+        local_peer.store,
         CancellationToken::new(),
     )
     .await
@@ -620,13 +621,62 @@ async fn service_can_restart_without_leaking_sockets_or_tasks() {
             restart_peer.application,
             restart_peer.commands,
             restart_peer.identity,
-            restart_peer.trust_store,
+            restart_peer.store,
             CancellationToken::new(),
         )
         .await
         .unwrap();
         service.shutdown().await.unwrap();
     }
+}
+
+/// A running Ferry or KDE Connect listens on the wildcard address, say at
+/// 1716. macOS lets a listener on 127.0.0.1 share that port, and dials to
+/// 127.0.0.1 then reach whichever listener it prefers, so neither the
+/// control nor a payload listener may take it. (Linux refuses the bind
+/// itself.) A socket bound without listening stands in for that app, so
+/// nothing here can be reached from the network.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn ports_held_on_the_wildcard_address_are_skipped() {
+    use ferry::transport::{
+        lan::LanError,
+        payload::{PayloadError, bind_payload_listener},
+    };
+    use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+
+    let (_held, port) = TCP_PORT_RANGE
+        .clone()
+        .find_map(|port| {
+            let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).unwrap();
+            socket.set_reuse_address(true).unwrap();
+            let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, port));
+            socket
+                .bind(&SockAddr::from(address))
+                .ok()
+                .map(|()| (socket, port))
+        })
+        .expect("a free port in the KDE Connect range");
+
+    assert!(matches!(
+        bind_payload_listener(Ipv4Addr::LOCALHOST, port..=port).await,
+        Err(PayloadError::NoPort)
+    ));
+    let local_peer = peer("Local");
+    let id = local_peer.identity.device_id().to_owned();
+    let started = LanService::start(
+        test_config(free_udp_addr(), free_udp_addr())
+            .with_announcement_targets(Vec::new())
+            .with_tcp_bind(Ipv4Addr::LOCALHOST, port..=port),
+        local(&id, "Local"),
+        local_peer.application,
+        local_peer.commands,
+        local_peer.identity,
+        local_peer.trust_store,
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(matches!(started, Err(LanError::NoTcpPort)));
 }
 
 fn identity_packet(device_id: &str, protocol_version: u8) -> Vec<u8> {

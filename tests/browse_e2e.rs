@@ -19,7 +19,7 @@ use std::{
 use ferry::{
     api::{ApiServer, ApiServerConfig},
     client::{ApiClient, ClientError},
-    config::{FilesystemTrustStore, LocalIdentity, TrustStore},
+    config::LocalIdentity,
     core::{
         Core, DeviceReachability, LocalDeviceSnapshot, Plugin, TransferConfig, TransferDirection,
         TransferSnapshot, TransferStatus,
@@ -30,6 +30,7 @@ use ferry::{
         browse::{BrowseError, BrowsePlugin, FileKind, UploadPathError},
     },
     protocol::DeviceType,
+    store::Store,
     transport::{
         lan::{LanConfig, LanService, LocalDeviceInfo, TCP_PORT_RANGE},
         tls::subject_public_key_info,
@@ -144,10 +145,9 @@ async fn harness(reply: BrowseReply, wrong_host_key: bool) -> Harness {
     )
     .unwrap();
 
-    let identity = Arc::new(LocalIdentity::load_or_create(desktop_dir.path()).unwrap());
+    let store = Store::open(desktop_dir.path()).unwrap();
+    let identity = Arc::new(LocalIdentity::load_or_create(&store).unwrap());
     let desktop_id = identity.device_id().to_owned();
-    let trust_store: Arc<dyn TrustStore + Send + Sync> =
-        Arc::new(FilesystemTrustStore::new(desktop_dir.path()));
     let browse = Arc::new(BrowsePlugin::default());
     let (desktop, commands) = Core::new(
         LocalDeviceSnapshot {
@@ -156,12 +156,12 @@ async fn harness(reply: BrowseReply, wrong_host_key: bool) -> Harness {
         },
         8,
         subject_public_key_info(identity.certificate_der()).unwrap(),
-        trust_store.clone(),
+        store.clone(),
         builtin_with(browse.clone()),
         32,
         256,
         identity.clone(),
-        TransferConfig::new(download_dir.clone()),
+        TransferConfig::new(download_dir.clone()).with_payload_bind_ip(Ipv4Addr::LOCALHOST),
     )
     .unwrap();
 
@@ -190,7 +190,7 @@ async fn harness(reply: BrowseReply, wrong_host_key: bool) -> Harness {
         desktop.clone(),
         commands,
         identity,
-        trust_store,
+        store,
         CancellationToken::new(),
     )
     .await

@@ -51,3 +51,15 @@ jobs:
             echo "iced is in the CLI's dependency tree"
             exit 1
           fi
+
+  # Every dependency's license must be one about.toml accepts: the packages
+  # ship their notices, and a new license needs a decision first.
+  licenses:
+    name: Licenses
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9
+      - run: cargo about generate --locked --fail about.hbs -o THIRD_PARTY_LICENSES.html

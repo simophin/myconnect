@@ -1,10 +1,12 @@
 #!/bin/sh
 # Assemble Ferry.app from the app's binaries and pack it into a DMG.
 #
-#   build_app.sh VERSION BUILD DMG BINARY...
+#   build_app.sh VERSION BUILD DMG LICENSES BINARY...
 #
 # Each BINARY is cargo's ferry-gui for one architecture; with more than
-# one, lipo joins them into a universal binary. VERSION is MAJOR.MINOR.PATCH
+# one, lipo joins them into a universal binary. LICENSES is the
+# THIRD_PARTY_LICENSES.html cargo-about wrote (about.toml), which goes in
+# Resources, where About opens it. VERSION is MAJOR.MINOR.PATCH
 # (macOS accepts nothing else) and BUILD a number. Writes the DMG, and leaves
 # Ferry.app next to it. Needs macOS: lipo, iconutil, codesign and
 # hdiutil.
@@ -14,14 +16,15 @@
 # System Settings → Privacy & Security.
 set -eu
 
-if [ $# -lt 4 ]; then
-  echo "usage: $0 VERSION BUILD DMG BINARY..." >&2
+if [ $# -lt 5 ]; then
+  echo "usage: $0 VERSION BUILD DMG LICENSES BINARY..." >&2
   exit 2
 fi
 version=$1
 build=$2
 dmg=$3
-shift 3
+licenses=$4
+shift 4
 out_dir=$(dirname "$dmg")
 
 packaging=$(cd "$(dirname "$0")" && pwd)
@@ -41,6 +44,7 @@ plutil -lint "$app/Contents/Info.plist"
 printf 'APPL????' >"$app/Contents/PkgInfo"
 iconutil -c icns -o "$app/Contents/Resources/AppIcon.icns" \
   "$assets/macos/AppIcon.iconset"
+cp "$licenses" "$app/Contents/Resources/THIRD_PARTY_LICENSES.html"
 codesign --force --sign - --identifier dev.fanchao.Ferry "$app"
 codesign --verify --strict --verbose=2 "$app"
 

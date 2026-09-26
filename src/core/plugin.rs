@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
 use super::{Core, CoreError, DeviceSnapshot, EventData, PayloadPeer, Transfers};
-use crate::protocol::Packet;
+use crate::{protocol::Packet, store::Store};
 
 /// A feature of the daemon, plugged into the core.
 pub trait Plugin: Send + Sync + 'static {
@@ -140,6 +140,13 @@ impl PluginContext {
         self.core.broadcast_to_capable(packet, except);
     }
 
+    /// Where the plugin keeps its data: configs under keys it declares,
+    /// named `<plugin id>.<name>` (see [`crate::store::ConfigKey`]). Its
+    /// settings section is kept for it; read that with [`Self::settings`].
+    pub fn store(&self) -> &Store {
+        self.core.store()
+    }
+
     /// The plugin's settings section, as in effect now: stored values over
     /// the section's defaults.
     pub fn settings<T: PluginSettings>(&self) -> T {
@@ -218,7 +225,7 @@ impl PluginEvent {
     }
 }
 
-/// A plugin's settings: a section of `settings.json` and of
+/// A plugin's settings: a section of the stored settings and of
 /// `GET`/`PATCH /settings`, under `plugins.<ID>`.
 ///
 /// Every field has a default (`#[serde(default)]` on the type), so a section

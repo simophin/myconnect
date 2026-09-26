@@ -66,7 +66,7 @@ enum Command {
     Run {
         #[arg(long, value_name = "DIRECTORY")]
         download_dir: Option<PathBuf>,
-        /// Directory holding local identity and trust state.
+        /// Directory holding the daemon's data: its identity, paired devices and settings.
         #[arg(long, value_name = "DIRECTORY")]
         data_dir: Option<PathBuf>,
         /// Name this device advertises to peers.
