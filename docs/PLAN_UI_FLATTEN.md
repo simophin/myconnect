@@ -7,11 +7,12 @@ ground rules, the done-means checks and how to run things in isolation
 (CLAUDE.md). **Where this plan and the docs disagree about where UI code
 lives, this plan wins**: PR 3 brings the docs in line.
 
-Status (2026-09-26): decided by the owner, not started.
+Status (2026-09-26): PR 1 done (branch `ui-flatten`); PR 2 and PR 3 not
+started.
 
 | PR | What | Needs |
 | --- | --- | --- |
-| 1 | Move each feature's `ui.rs` into `src/ui/features/` **and** replace the erased `UiPlugin` seam with concrete messages and routes | — |
+| 1 | Move each feature's `ui.rs` into `src/ui/features/` **and** replace the erased `UiPlugin` seam with concrete messages and routes. **Done** | — |
 | 2 | Split the two big files: `ui/features/browse.rs` and `ui/mod.rs` | PR 1 merged |
 | 3 | Docs: ADR 0001, `ARCHITECTURE.md`, `HANDOFF.md`, `README.md` | PR 1 merged; can run beside PR 2 |
 
@@ -222,6 +223,46 @@ Notes on the pieces:
 
 Branch suggestion `ui-flatten`. One PR, because a pure file move that keeps
 the trait would be churn that the second half immediately rewrites.
+
+**Done (2026-09-26)**, in two commits: the `git mv` (still on the trait,
+with the construction change), then the rewrite. Where it differs from
+this plan:
+
+- **Callbacks make a `Feature`, not a `Message`.** `features::Callback<A>`
+  (drops, picked files, a prompt's text) and `Message::Confirm`'s `then`
+  are the feature's message; the shell adds the origin: `Window` for what
+  a dialog sends, the request's own origin for picked files. So the
+  per-origin rules stay in the shell's handlers, as before.
+- **Shell messages.** `Toast` carries an origin too (the tray drops
+  toasts). `Navigate(Route, Origin)` replaces the shell's old
+  `Navigate(Route)`: from the tray it also shows the window. `Prompt` and
+  `PickFiles` hold a `shell::Prompt` / `shell::PickFiles` struct (they
+  hold closures, so they need a hand-written `Debug`). `ShowWindow` went:
+  no feature asked for it. `PickFiles` lost its `confirm_label`, which the
+  shell never used (rfd can't relabel the button).
+- **Pages** take closures, not `&Features`, so their tests keep their
+  stand-in chips and actions and the snapshots stay the same: `devices`
+  takes `statuses`, `device` a `DeviceFeatures { statuses, actions }`,
+  `settings` a `sections` closure.
+- **`UiContext::spawn`** stays generic (`-> Task<M>`); features pass a
+  `then` that makes the app's `Message`.
+- **Construction.** `plugins::builtin_parts(clipboard) -> Parts { core,
+  clipboard, browse }`; `ui::Started { service, clipboard, browse }`.
+- **Visibility.** `Message`, `Origin`, `KeyCommand` and `Handoff` are
+  `pub(crate)` (a `pub(crate)` `Message` can't hold private types);
+  `plugins::browse::files` is `pub(crate)`.
+- **`Icon`** moved to `widgets`, `Validator` and the dialog's
+  `Callback<A, M>` to `overlay/dialog.rs`.
+
+Tests: the two erasure tests and the plugin order test are gone with
+what they tested. The shell's tests that used the fake `opener` plugin
+now drive shell messages or real features: toast and navigate (a `Toast`
+message, then browse's action), confirm (a `Confirm` whose `then` pings
+a connected peer), the forgotten device's page (`Route::Browse`), and the
+tray action that opens a page (browse's tray item, plus a tray `Toast`
+that must not show). The tray-label test uses battery's real chip (a
+battery packet), and the page tests use closures in place of the fake
+plugins. Snapshots are pixel-identical to `main` (66 files).
 
 Suggested order inside the PR (commit as you go; each commit should
 build):
