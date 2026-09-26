@@ -241,6 +241,14 @@ impl Store {
         Ok(decode_raw(entry.name(), raw.as_deref()))
     }
 
+    /// Like [`Store::get`], but a value that doesn't decode is an error:
+    /// for a value that mustn't be replaced by a default as if it were
+    /// missing.
+    pub fn get_strict<E: Entry>(&self, entry: &E) -> Result<Option<E::Value>, StoreError> {
+        let raw = read(&self.lock().connection, &EntryId::of(entry))?;
+        decode_strict(entry.name(), raw.as_deref())
+    }
+
     pub fn set<E: Entry>(&self, entry: &E, value: &E::Value) -> Result<(), StoreError> {
         self.transaction(|transaction| transaction.set(entry, value))
     }
@@ -290,6 +298,12 @@ impl Transaction<'_> {
     pub fn get<E: Entry>(&self, entry: &E) -> Result<Option<E::Value>, StoreError> {
         let raw = read(&self.inner, &EntryId::of(entry))?;
         Ok(decode_raw(entry.name(), raw.as_deref()))
+    }
+
+    /// Like [`Store::get_strict`], seeing this transaction's writes.
+    pub fn get_strict<E: Entry>(&self, entry: &E) -> Result<Option<E::Value>, StoreError> {
+        let raw = read(&self.inner, &EntryId::of(entry))?;
+        decode_strict(entry.name(), raw.as_deref())
     }
 
     pub fn set<E: Entry>(&mut self, entry: &E, value: &E::Value) -> Result<(), StoreError> {
@@ -407,6 +421,16 @@ fn decode_raw<T: DeserializeOwned>(name: &str, json: Option<&str>) -> Option<T> 
         .ok()
 }
 
+fn decode_strict<T: DeserializeOwned>(
+    key: &'static str,
+    json: Option<&str>,
+) -> Result<Option<T>, StoreError> {
+    json.map(|json| {
+        serde_json::from_str(json).map_err(|source| StoreError::Undecodable { key, source })
+    })
+    .transpose()
+}
+
 const fn is_valid_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     let mut dot = None;
@@ -484,6 +508,22 @@ mod tests {
         let store = store();
         store.set(&NAME, &"Desk".to_owned()).unwrap();
         assert_eq!(store.get(&SAME_NAME).unwrap(), None);
+    }
+
+    #[test]
+    fn a_strict_read_reports_a_value_that_does_not_decode() {
+        const SAME_NAME: ConfigKey<u32> = ConfigKey::new("test.name");
+        let store = store();
+        assert_eq!(store.get_strict(&SAME_NAME).unwrap(), None);
+        store.set(&NAME, &"Desk".to_owned()).unwrap();
+        assert!(matches!(
+            store.get_strict(&SAME_NAME),
+            Err(StoreError::Undecodable {
+                key: "test.name",
+                ..
+            })
+        ));
+        assert_eq!(store.get_strict(&NAME).unwrap().as_deref(), Some("Desk"));
     }
 
     #[test]

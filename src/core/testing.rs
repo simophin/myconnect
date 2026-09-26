@@ -47,8 +47,8 @@ fn build(
     event_capacity: usize,
 ) -> (Core, mpsc::Receiver<LanCommand>) {
     let directory = tempfile::tempdir().unwrap();
-    let identity = Arc::new(LocalIdentity::load_or_create(directory.path()).unwrap());
     let store = Store::open_in_memory().unwrap();
+    let identity = Arc::new(LocalIdentity::load_or_create(&store).unwrap());
     for device in &paired {
         store.put_device(device).unwrap();
     }

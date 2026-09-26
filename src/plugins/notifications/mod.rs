@@ -621,8 +621,8 @@ mod tests {
         core.discover_device(&make_identity(PEER, capabilities), false, 1)
             .unwrap();
         // Pairing stores the peer's certificate, so it needs a real one.
-        let directory = tempfile::tempdir().unwrap();
-        let identity = crate::config::LocalIdentity::load_or_create(directory.path()).unwrap();
+        let store = crate::store::Store::open_in_memory().unwrap();
+        let identity = crate::config::LocalIdentity::load_or_create(&store).unwrap();
         let (tx, mut sent) = mpsc::channel(8);
         core.register_connection(
             PEER,

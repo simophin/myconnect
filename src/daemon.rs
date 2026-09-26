@@ -108,8 +108,8 @@ impl RunningService {
             .clone()
             .or_else(default_config_dir)
             .context("could not determine configuration directory")?;
-        let identity = Arc::new(LocalIdentity::load_or_create(&config_dir)?);
         let store = Store::open(&config_dir)?;
+        let identity = Arc::new(LocalIdentity::load_or_create(&store)?);
         let local_public_key_der = subject_public_key_info(identity.certificate_der())
             .context("local identity certificate could not be parsed")?;
         let settings_file = SettingsFile::new(&config_dir);

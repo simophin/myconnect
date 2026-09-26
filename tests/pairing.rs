@@ -33,8 +33,7 @@ struct Harness {
 fn harness() -> Harness {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
-    let local_identity =
-        Arc::new(LocalIdentity::load_or_create(directory.path().join("local")).unwrap());
+    let local_identity = Arc::new(LocalIdentity::load_or_create(&store).unwrap());
     let local_public_key = subject_public_key_info(local_identity.certificate_der()).unwrap();
     let (application, commands) = Core::new(
         LocalDeviceSnapshot {
@@ -52,8 +51,7 @@ fn harness() -> Harness {
     )
     .unwrap();
 
-    let peer_identity_dir = tempfile::tempdir().unwrap();
-    let peer_identity = LocalIdentity::load_or_create(peer_identity_dir.path()).unwrap();
+    let peer_identity = LocalIdentity::load_or_create(&Store::open_in_memory().unwrap()).unwrap();
     let peer_id = peer_identity.device_id().to_owned();
     let peer_certificate_der = peer_identity.certificate_der().to_vec();
 

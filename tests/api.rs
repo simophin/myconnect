@@ -38,8 +38,8 @@ impl TestServer {
 
     async fn start_with(token: Option<ApiToken>, request_timeout: Duration) -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let identity =
-            Arc::new(LocalIdentity::load_or_create(directory.path().join("identity")).unwrap());
+        let store = Store::open(directory.path()).unwrap();
+        let identity = Arc::new(LocalIdentity::load_or_create(&store).unwrap());
         let (application, commands) = Core::new(
             LocalDeviceSnapshot {
                 device_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
@@ -47,7 +47,7 @@ impl TestServer {
             },
             8,
             b"test-local-pubkey".to_vec(),
-            Store::open(directory.path()).unwrap(),
+            store,
             ferry::plugins::builtin(InMemoryClipboard::shared()),
             4,
             4,
@@ -135,9 +135,7 @@ impl TestServer {
             .discover_device(&identity, paired, 20)
             .unwrap();
         // A real certificate, so pairing can derive a verification code.
-        let peer =
-            LocalIdentity::load_or_create(self._directory.path().join(format!("peer-{device_id}")))
-                .unwrap();
+        let peer = LocalIdentity::load_or_create(&Store::open_in_memory().unwrap()).unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel(8);
         self.application
             .register_connection(

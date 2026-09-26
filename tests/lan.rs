@@ -37,8 +37,8 @@ struct Peer {
 
 fn peer(name: &str) -> Peer {
     let directory = tempfile::tempdir().unwrap();
-    let identity = Arc::new(LocalIdentity::load_or_create(directory.path()).unwrap());
     let store = Store::open(directory.path()).unwrap();
+    let identity = Arc::new(LocalIdentity::load_or_create(&store).unwrap());
     let public_key_der = subject_public_key_info(identity.certificate_der()).unwrap();
     let (application, commands) = Core::new(
         LocalDeviceSnapshot {

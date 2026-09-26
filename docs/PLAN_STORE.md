@@ -138,7 +138,11 @@ The HTTP API doesn't change, so neither do the CLI and the UI.
 4. The `devices` table, wired into `daemon.rs`, the core, `lan.rs` and
    the integration tests; `trust.rs`, the `TrustStore` trait and
    `MemoryTrustStore` go.
-5. The identity as `core.identity`; `identity.json` handling goes.
+5. The identity as `core.identity`; `identity.json` handling goes. It's
+   read with `get_strict`, so a stored identity that doesn't decode is an
+   error rather than replaced (a new identity is a new device ID, and
+   every pairing lost), and made in an `IMMEDIATE` transaction, so two
+   processes starting on a new data directory can't both make one.
 6. Settings on configs, and `PluginContext::store()`; `config/settings.rs`
    goes.
 7. Docs: ARCHITECTURE §2, §5, §7 and §11, HANDOFF's ground rules (plugins

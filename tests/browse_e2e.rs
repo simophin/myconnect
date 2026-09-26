@@ -145,9 +145,9 @@ async fn harness(reply: BrowseReply, wrong_host_key: bool) -> Harness {
     )
     .unwrap();
 
-    let identity = Arc::new(LocalIdentity::load_or_create(desktop_dir.path()).unwrap());
-    let desktop_id = identity.device_id().to_owned();
     let store = Store::open(desktop_dir.path()).unwrap();
+    let identity = Arc::new(LocalIdentity::load_or_create(&store).unwrap());
+    let desktop_id = identity.device_id().to_owned();
     let browse = Arc::new(BrowsePlugin::default());
     let (desktop, commands) = Core::new(
         LocalDeviceSnapshot {

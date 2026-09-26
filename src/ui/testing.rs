@@ -66,8 +66,8 @@ pub fn connect_unpaired_peer(
 ) -> (DeviceSnapshot, tokio::sync::mpsc::Receiver<Packet>) {
     core.discover_device(&make_identity(device_id, Vec::new()), false, 1)
         .expect("discovered");
-    let directory = tempfile::tempdir().expect("a temporary directory");
-    let identity = LocalIdentity::load_or_create(directory.path()).expect("an identity");
+    let store = crate::store::Store::open_in_memory().expect("a store");
+    let identity = LocalIdentity::load_or_create(&store).expect("an identity");
     let (packets, received) = tokio::sync::mpsc::channel(8);
     let device = core
         .register_connection(

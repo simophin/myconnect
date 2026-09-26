@@ -16,7 +16,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 use thiserror::Error;
 use tokio::sync::{broadcast, watch};
 
@@ -124,6 +124,10 @@ impl Store {
     /// Run `body` in one transaction: it commits if `body` returns `Ok`,
     /// and changes nothing otherwise. Watchers hear about what it changed
     /// once it has committed.
+    ///
+    /// It takes the database's write lock at the start, so another process
+    /// on the same data directory waits (up to the busy timeout) rather
+    /// than failing midway, after both have read the same state.
     pub fn transaction<R, E>(
         &self,
         body: impl FnOnce(&mut Transaction<'_>) -> Result<R, E>,
@@ -138,7 +142,9 @@ impl Store {
             changes,
         } = &mut *state;
         let mut transaction = Transaction {
-            inner: connection.transaction().map_err(StoreError::from)?,
+            inner: connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(StoreError::from)?,
             changed: BTreeMap::new(),
         };
         let result = body(&mut transaction)?;
@@ -177,6 +183,12 @@ pub enum StoreError {
     Database(#[from] rusqlite::Error),
     #[error("a value could not be encoded")]
     Encoding(#[source] serde_json::Error),
+    #[error("the stored value of {key} doesn't decode")]
+    Undecodable {
+        key: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
     #[error("peer device ID is invalid")]
     InvalidDeviceId,
     #[error("peer certificate is invalid")]

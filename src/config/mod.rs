@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use directories::ProjectDirs;
 
-pub use identity::{IdentityError, LocalIdentity};
+pub use identity::{IDENTITY, IdentityError, LocalIdentity, StoredIdentity};
 pub use settings::{SettingsError, SettingsFile, StoredSettings};
 pub use token::{ApiToken, ApiTokenError};
 

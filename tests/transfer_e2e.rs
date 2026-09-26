@@ -159,10 +159,10 @@ async fn connected_and_paired_with(
 ) -> Harness {
     let a_dir = tempfile::tempdir().unwrap();
     let b_dir = tempfile::tempdir().unwrap();
-    let a_identity = Arc::new(LocalIdentity::load_or_create(a_dir.path()).unwrap());
-    let b_identity = Arc::new(LocalIdentity::load_or_create(b_dir.path()).unwrap());
     let a_store = Store::open(a_dir.path()).unwrap();
     let b_store = Store::open(b_dir.path()).unwrap();
+    let a_identity = Arc::new(LocalIdentity::load_or_create(&a_store).unwrap());
+    let b_identity = Arc::new(LocalIdentity::load_or_create(&b_store).unwrap());
     let a_pubkey = subject_public_key_info(a_identity.certificate_der()).unwrap();
     let b_pubkey = subject_public_key_info(b_identity.certificate_der()).unwrap();
     let b_download_dir = b_dir.path().join("downloads");
@@ -376,7 +376,8 @@ async fn a_local_file_is_sent_from_disk_under_its_own_name() {
 #[tokio::test]
 async fn unpaired_device_cannot_initiate_a_transfer() {
     let a_dir = tempfile::tempdir().unwrap();
-    let a_identity = Arc::new(LocalIdentity::load_or_create(a_dir.path()).unwrap());
+    let a_store = Store::open(a_dir.path()).unwrap();
+    let a_identity = Arc::new(LocalIdentity::load_or_create(&a_store).unwrap());
     let a_pubkey = subject_public_key_info(a_identity.certificate_der()).unwrap();
     let (a_application, _commands) = Core::new(
         LocalDeviceSnapshot {
@@ -385,7 +386,7 @@ async fn unpaired_device_cannot_initiate_a_transfer() {
         },
         8,
         a_pubkey,
-        Store::open(a_dir.path()).unwrap(),
+        a_store,
         ferry::plugins::builtin(InMemoryClipboard::shared()),
         8,
         32,
