@@ -102,7 +102,7 @@ mac-usernotifications = { version = "0.3.1", optional = true }
 # The Dock icon (`gui`), shown only while the window is open, and files
 # dropped on the menu bar icon. Already in the tree through `tray-icon`.
 objc2 = { version = "0.6", optional = true }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSDragging", "NSPasteboard", "NSResponder", "NSRunningApplication", "NSStatusBarButton", "NSStatusItem", "NSView", "NSWindow"], optional = true }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSDragging", "NSMenu", "NSPasteboard", "NSResponder", "NSRunningApplication", "NSStatusBarButton", "NSStatusItem", "NSView", "NSWindow"], optional = true }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSObject", "NSString", "NSURL", "NSValue"], optional = true }
 
 [target.'cfg(windows)'.dependencies]

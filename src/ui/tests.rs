@@ -29,12 +29,22 @@ use crate::{
 pub(super) struct FakeTray {
     pub(super) menu: Mutex<Vec<TrayItem>>,
     pub(super) updates: AtomicUsize,
+    /// Whether it pops up menus, as macOS's does.
+    pub(super) pops_up: bool,
+    pub(super) popped_up: Mutex<Vec<Vec<TrayItem>>>,
 }
 
 impl Tray for FakeTray {
     fn set_menu(&self, menu: Vec<TrayItem>) {
         *self.menu.lock().unwrap() = menu;
         self.updates.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn pop_up(&self, menu: Vec<TrayItem>) -> bool {
+        if self.pops_up {
+            self.popped_up.lock().unwrap().push(menu);
+        }
+        self.pops_up
     }
 }
 

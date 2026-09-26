@@ -6,17 +6,24 @@ use std::path::PathBuf;
 use iced::{Element, Task};
 
 use super::{
-    App, Message, Origin, Phase, error, features::DropTarget, overlay::drop as dropping,
+    App, Message, Origin, Phase,
+    desktop::tray::{TrayCommand, TrayItem},
+    error,
+    features::DropTarget,
+    overlay::drop as dropping,
     route::Route,
 };
+
+const COULDNT_SEND: &str = "Couldn’t send";
 
 impl App {
     /// Files were dropped on the window: send them where the page says, if
     /// a feature takes them there, or ask where. Folders are refused.
     pub(super) fn dropped(&mut self, paths: Vec<PathBuf>) -> Task<Message> {
-        let files = match self.sendable(paths) {
+        let files = match self.sendable(&paths) {
             Ok(files) => files,
-            Err(refused) => return refused,
+            Err(None) => return Task::none(),
+            Err(Some(refused)) => return self.toast(refused.into(), None),
         };
         match self.drop_target_here() {
             Some(target) => Task::done(Message::Feature((target.on_drop)(files), Origin::Window)),
@@ -27,28 +34,69 @@ impl App {
         }
     }
 
-    /// Files were dropped on the tray icon: show the window, asking which
-    /// device to send them to, whatever page it shows.
+    /// Files were dropped on the tray icon: ask which device to send them
+    /// to in a menu from the icon, or, where the tray can't show one, in
+    /// the window.
     pub(super) fn dropped_on_tray(&mut self, paths: Vec<PathBuf>) -> Task<Message> {
-        let shown = self.show_window();
-        // The pairing prompt is modal: the chooser would open under it.
+        let files = match self.sendable(&paths) {
+            Ok(files) => files,
+            Err(None) => return Task::none(),
+            Err(Some(refused)) => return self.notify(COULDNT_SEND, refused),
+        };
+        // The pairing prompt is modal: it is answered first.
         if self.incoming_prompt_shows() {
-            return shown;
+            return self.show_window();
         }
-        match self.sendable(paths) {
-            Ok(files) => {
-                self.choosing = Some(files);
-                shown
-            }
-            Err(refused) => Task::batch([shown, refused]),
+        self.tray_dropped = Some(files);
+        let count = self.tray_dropped.as_ref().map_or(0, Vec::len);
+        if self.desktop.tray.pop_up(self.tray_chooser(count)) {
+            return Task::none();
+        }
+        self.choosing = self.tray_dropped.take();
+        self.show_window()
+    }
+
+    /// The tray's menu for files dropped on it: which device to send
+    /// `count` files to. No file names: they can be any length.
+    fn tray_chooser(&self, count: usize) -> Vec<TrayItem> {
+        let header = match count {
+            1 => "Send 1 file to:".to_owned(),
+            _ => format!("Send {count} files to:"),
+        };
+        let mut menu = vec![TrayItem::item(header, None)];
+        let devices = self.recipients();
+        if devices.is_empty() {
+            menu.push(TrayItem::item("No paired device can receive files", None));
+        }
+        menu.extend(devices.into_iter().map(|device| {
+            TrayItem::item(
+                &device.device_name,
+                Some(TrayCommand::SendDropped(device.device_id.clone())),
+            )
+        }));
+        menu
+    }
+
+    /// A device was chosen in the tray's menu for dropped files: send them,
+    /// without showing the window.
+    pub(super) fn send_tray_drop(&mut self, device_id: String) -> Task<Message> {
+        let Some(files) = self.tray_dropped.take() else {
+            return Task::none();
+        };
+        let route = Route::Device(device_id.clone());
+        match self.drop_target(&device_id, &route) {
+            Some(target) => Task::done(Message::Feature((target.on_drop)(files), Origin::Tray)),
+            // It dropped out of the list as it was chosen.
+            None => self.notify(COULDNT_SEND, &error::describe_code("device_not_connected")),
         }
     }
 
-    /// The files among dropped `paths`, or what to do instead if there are
-    /// none. Folders can't be sent, and some drops aren't local files.
-    fn sendable(&mut self, paths: Vec<PathBuf>) -> Result<Vec<PathBuf>, Task<Message>> {
-        if self.running().is_none() {
-            return Err(Task::none());
+    /// The files among dropped `paths`: an error if there are none, with
+    /// why if the user should hear it. Folders can't be sent, and some
+    /// drops aren't local files.
+    fn sendable(&mut self, paths: &[PathBuf]) -> Result<Vec<PathBuf>, Option<&'static str>> {
+        if self.running().is_none() || paths.is_empty() {
+            return Err(None);
         }
         let files: Vec<_> = paths
             .iter()
@@ -56,10 +104,7 @@ impl App {
             .cloned()
             .collect();
         if files.is_empty() {
-            if paths.is_empty() {
-                return Err(Task::none());
-            }
-            return Err(self.toast("Only files can be sent, not folders.".into(), None));
+            return Err(Some("Only files can be sent, not folders."));
         }
         Ok(files)
     }
@@ -149,7 +194,16 @@ mod tests {
     use super::*;
     use crate::{
         core::Core,
-        ui::{KeyCommand, desktop::DesktopEvent, features::browse, testing, tests::*},
+        ui::{
+            KeyCommand,
+            desktop::{
+                DesktopEvent,
+                tray::{self as trays, TrayItem},
+            },
+            features::browse,
+            testing,
+            tests::*,
+        },
     };
 
     /// An app over a core that runs share, with `photo.jpg` and `notes.txt` to send from a folder that
@@ -162,9 +216,13 @@ mod tests {
 
     impl Sharing {
         fn new() -> Self {
+            Self::on(&Fakes::default())
+        }
+
+        fn on(fakes: &Fakes) -> Self {
             let (core, _plugin, _commands) =
                 crate::core::testing::handle_with_plugin(crate::plugins::share::SharePlugin);
-            let app = running_on(core.clone());
+            let app = running_on_desktop(core.clone(), fakes);
             let files = tempfile::tempdir().unwrap();
             std::fs::write(files.path().join("photo.jpg"), "jpg").unwrap();
             std::fs::write(files.path().join("notes.txt"), "txt").unwrap();
@@ -350,8 +408,87 @@ mod tests {
         assert_eq!(sharing.app.route, Route::Device(peer));
     }
 
+    /// A tray that pops up menus, as macOS's does.
+    fn popping_tray() -> Fakes {
+        Fakes {
+            tray: Arc::new(FakeTray {
+                pops_up: true,
+                ..FakeTray::default()
+            }),
+            ..Fakes::default()
+        }
+    }
+
+    async fn drop_on_tray(sharing: &mut Sharing, paths: Vec<PathBuf>) {
+        settle(
+            &mut sharing.app,
+            Message::Desktop(DesktopEvent::TrayDropped(paths)),
+        )
+        .await;
+    }
+
     #[tokio::test(start_paused = true)]
-    async fn files_dropped_on_the_tray_open_the_window_and_ask_where_to_go() {
+    async fn files_dropped_on_the_tray_ask_where_to_go_in_a_menu_from_it() {
+        let fakes = popping_tray();
+        let mut sharing = Sharing::on(&fakes);
+        let peer = sharing.peer(testing::PEER_ID, true).await;
+        let _incapable = sharing.peer(OTHER_PEER, false).await;
+        sharing.window(window::Event::Closed).await;
+
+        let dropped = ["photo.jpg", "notes.txt", "album"].map(|name| sharing.file(name));
+        drop_on_tray(&mut sharing, dropped.to_vec()).await;
+        assert!(sharing.app.window.is_none(), "the window stays closed");
+        let menu = fakes.tray.popped_up.lock().unwrap().pop().unwrap();
+        assert_eq!(
+            trays::layout(&menu),
+            [
+                (0, Some("Send 2 files to:"), false),
+                (0, Some("Peer"), true)
+            ]
+        );
+        let TrayItem::Item {
+            command: Some(send),
+            ..
+        } = &menu[1]
+        else {
+            panic!("a command");
+        };
+        assert!(sharing.sent().is_empty());
+
+        settle(
+            &mut sharing.app,
+            Message::Desktop(DesktopEvent::TrayChose(send.clone())),
+        )
+        .await;
+        assert_eq!(
+            sharing.sent(),
+            [
+                (peer.clone(), "notes.txt".into()),
+                (peer, "photo.jpg".into())
+            ]
+        );
+        assert!(sharing.app.window.is_none());
+        assert!(sharing.app.tray_dropped.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_tray_menu_says_when_no_device_can_take_dropped_files() {
+        let fakes = popping_tray();
+        let mut sharing = Sharing::on(&fakes);
+        let photo = sharing.file("photo.jpg");
+        drop_on_tray(&mut sharing, vec![photo]).await;
+        let menu = fakes.tray.popped_up.lock().unwrap().pop().unwrap();
+        assert_eq!(
+            trays::layout(&menu),
+            [
+                (0, Some("Send 1 file to:"), false),
+                (0, Some("No paired device can receive files"), false)
+            ]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn without_a_menu_files_dropped_on_the_tray_ask_in_the_window() {
         let mut sharing = Sharing::new();
         let peer = sharing.peer(testing::PEER_ID, true).await;
         // Even from a device's page, which a drop on the window would use.
@@ -360,11 +497,7 @@ mod tests {
         assert!(sharing.app.window.is_none());
 
         let (photo, album) = (sharing.file("photo.jpg"), sharing.file("album"));
-        settle(
-            &mut sharing.app,
-            Message::Desktop(DesktopEvent::TrayDropped(vec![album, photo])),
-        )
-        .await;
+        drop_on_tray(&mut sharing, vec![album, photo]).await;
         assert!(sharing.app.window.is_some());
         assert!(shows(&sharing.app, "photo.jpg"));
         assert!(sharing.sent().is_empty());
@@ -378,19 +511,18 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_folder_dropped_on_the_tray_is_refused() {
-        let mut sharing = Sharing::new();
+        let fakes = popping_tray();
+        let mut sharing = Sharing::on(&fakes);
         let _peer = sharing.peer(testing::PEER_ID, true).await;
 
         let album = sharing.file("album");
-        settle(
-            &mut sharing.app,
-            Message::Desktop(DesktopEvent::TrayDropped(vec![album])),
-        )
-        .await;
-        assert!(sharing.app.choosing.is_none());
+        drop_on_tray(&mut sharing, vec![album]).await;
+        assert!(fakes.tray.popped_up.lock().unwrap().is_empty());
+        assert!(sharing.app.tray_dropped.is_none());
+        // A toast, as the window is focused; a notification otherwise.
         assert_eq!(
             sharing.app.toasts.items()[0].text,
-            "Only files can be sent, not folders."
+            "Couldn’t send: Only files can be sent, not folders."
         );
     }
 

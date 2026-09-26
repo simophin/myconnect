@@ -26,6 +26,8 @@ pub enum TrayCommand {
     ShowDevice(String),
     /// A feature's device action, run without showing the window.
     Action(Feature),
+    /// Send the files last dropped on the icon to this device.
+    SendDropped(String),
 }
 
 /// One entry of the tray menu.
@@ -88,6 +90,12 @@ pub trait Tray: Send + Sync + 'static {
 
     /// Replace the menu.
     fn set_menu(&self, menu: Vec<TrayItem>);
+
+    /// Pop up `menu` from the icon, once, in place of the tray's own menu.
+    /// False where a tray can't, so the caller asks some other way.
+    fn pop_up(&self, _menu: Vec<TrayItem>) -> bool {
+        false
+    }
 }
 
 /// No tray: nothing to show a menu in.
@@ -311,6 +319,24 @@ mod native {
                 }
             });
         }
+
+        /// Its items' commands join the tray menu's, until that is next
+        /// rebuilt; the menu is closed by then.
+        #[cfg(target_os = "macos")]
+        fn pop_up(&self, items: Vec<TrayItem>) -> bool {
+            let Some(status_item) = ICON_ITEM.with_borrow(|item| item.as_ref()?.ns_status_item())
+            else {
+                return false;
+            };
+            let menu = Menu::new();
+            {
+                let mut commands = self.commands.lock().unwrap_or_else(PoisonError::into_inner);
+                for item in &items {
+                    append(&menu, item, &mut commands);
+                }
+            }
+            super::drops::pop_up(&status_item, &menu)
+        }
     }
 
     #[cfg(test)]
@@ -332,7 +358,8 @@ mod native {
 /// Files dropped on the menu bar icon, on macOS. The status item's window
 /// takes the drag (no view in it is registered for files) and passes it to
 /// its delegate, a [`DropTarget`], which reports the files as
-/// [`DesktopEvent::TrayDropped`](super::DesktopEvent::TrayDropped).
+/// [`DesktopEvent::TrayDropped`](super::DesktopEvent::TrayDropped). The
+/// shell then asks where they go in a menu from the icon ([`pop_up`]).
 #[cfg(target_os = "macos")]
 mod drops {
     use std::{cell::RefCell, path::PathBuf};
@@ -343,11 +370,12 @@ mod drops {
         runtime::{AnyClass, AnyObject, NSObject, NSObjectProtocol, ProtocolObject},
     };
     use objc2_app_kit::{
-        NSDragOperation, NSDraggingDestination, NSDraggingInfo, NSPasteboard,
+        NSDragOperation, NSDraggingDestination, NSDraggingInfo, NSMenu, NSPasteboard,
         NSPasteboardTypeFileURL, NSPasteboardURLReadingFileURLsOnlyKey, NSStatusBarButton,
         NSStatusItem, NSWindowDelegate,
     };
     use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString, NSURL};
+    use tray_icon::menu::{ContextMenu, Menu};
 
     use super::{super::DesktopEvent, Events};
 
@@ -375,6 +403,28 @@ mod drops {
         window.registerForDraggedTypes(&NSArray::from_slice(&[file_url]));
         window.setDelegate(Some(ProtocolObject::from_ref(&*target)));
         TARGET.set(Some(target));
+    }
+
+    /// Open `menu` from `status_item`'s button, as `tray-icon` opens the
+    /// tray's own: set it as the item's menu, click, and take it off again.
+    /// Returns once the menu closes; a chosen item's `MenuEvent` has been
+    /// sent by then.
+    pub fn pop_up(status_item: &NSStatusItem, menu: &Menu) -> bool {
+        let Some(main_thread) = MainThreadMarker::new() else {
+            return false;
+        };
+        let Some(button) = status_item.button(main_thread) else {
+            return false;
+        };
+        // SAFETY: `muda` hands out its `NSMenu`, alive as long as `menu`.
+        let Some(ns_menu) = (unsafe { Retained::retain(menu.ns_menu().cast::<NSMenu>()) }) else {
+            return false;
+        };
+        status_item.setMenu(Some(&ns_menu));
+        // SAFETY: `performClick:` takes any sender, or none.
+        unsafe { button.performClick(None) };
+        status_item.setMenu(None);
+        true
     }
 
     pub struct Ivars {

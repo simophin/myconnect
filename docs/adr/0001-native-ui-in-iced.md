@@ -153,12 +153,16 @@ Decisions for steps 11 and 13:
   The X11 position at the drop is not used: it depends on the source's
   event order and exists nowhere else, so the same drop would behave
   differently by platform.
-- **Files dropped on the menu bar icon (macOS) always ask.** The window
-  opens on the chooser whatever page it shows, since the page wasn't the
-  drop's target. The status item's window is registered for file URLs
-  and its delegate takes the drag (`desktop::tray`, `drops`); the icon
-  highlights while files hover over it. Linux's StatusNotifierItem and
-  Windows' notification area icon take no drops.
+- **Files dropped on the menu bar icon (macOS) are sent from a menu.**
+  A menu pops up from the icon ("Send 2 files to:" and the devices that
+  would take them), without the window, which would distract from what
+  the user was doing (`Tray::pop_up`; it is set as the status item's menu
+  and clicked, as `tray-icon` opens its own). Where a tray can't pop one
+  up, the window opens on the chooser. The status item's window is
+  registered for file URLs and its delegate takes the drag
+  (`desktop::tray`, `drops`); the icon highlights while files hover over
+  it. Linux's StatusNotifierItem and Windows' notification area icon take
+  no drops.
 - **Folders are filtered by the shell**, since winit hands them over like
   files ("Only files can be sent, not folders.").
 - **Wayland: no drag and drop**, as the owner decided. Nothing to guard:

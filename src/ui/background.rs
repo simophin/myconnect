@@ -251,6 +251,7 @@ impl App {
             }
             TrayCommand::Quit => self.quit(),
             TrayCommand::Action(feature) => self.feature(feature, Origin::Tray),
+            TrayCommand::SendDropped(device_id) => self.send_tray_drop(device_id),
         }
     }
 

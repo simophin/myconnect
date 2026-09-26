@@ -142,10 +142,10 @@ right one. It type-checks for both (below). Still to do:
 - Files dropped on the menu bar icon (`drops` in `src/ui/desktop/tray.rs`)
   are untested on a Mac: only type-checked, with the app's side
   (`DesktopEvent::TrayDropped`, the chooser) covered by unit tests. Check
-  that the icon highlights while files hover, that the drop opens the
-  window on the chooser (also with the window closed and no Dock icon),
-  that a folder is refused, and that clicking the icon still opens the
-  menu.
+  that the icon highlights while files hover, that the drop pops up the
+  "Send N files to:" menu from the icon without opening the window, that
+  choosing a device sends them, that a folder is refused with a
+  notification, and that clicking the icon still opens the tray's menu.
 - macOS's menu-bar Quit and logout take the quit path. They go through
   `terminate:`, which exits after winit's `exiting`, so the daemon's
   shutdown after `program.run()` likely doesn't run.

@@ -301,6 +301,8 @@ struct App {
     drag: Drag,
     /// Dropped files waiting for the user to choose a device.
     choosing: Option<Vec<PathBuf>>,
+    /// Files dropped on the tray icon, while its menu asks where to.
+    tray_dropped: Option<Vec<PathBuf>>,
     /// The system starts the app at login ([`desktop::autostart`]).
     start_on_login: bool,
 }
