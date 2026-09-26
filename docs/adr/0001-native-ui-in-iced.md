@@ -73,8 +73,8 @@ fixes.
   checks.
 - **Configuration is flags and environment variables**, mirroring
   `ferry run`: `--data-dir`, `--download-dir`, `--device-name`,
-  `--discovery-loopback`, `--no-system-clipboard`, `--api-port`,
-  `--api-token`, each also read from `FERRY_<NAME>`. The API token
+  `--discovery-loopback`, `--discovery-port`, `--no-system-clipboard`,
+  `--api-port`, `--api-token`, each also read from `FERRY_<NAME>`. The API token
   defaults to a random one; the API address is logged at `info`.
 
 ### What happens to the Flutter UI's records

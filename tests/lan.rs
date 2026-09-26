@@ -672,7 +672,7 @@ async fn ports_held_on_the_wildcard_address_are_skipped() {
         local_peer.application,
         local_peer.commands,
         local_peer.identity,
-        local_peer.trust_store,
+        local_peer.store,
         CancellationToken::new(),
     )
     .await;
