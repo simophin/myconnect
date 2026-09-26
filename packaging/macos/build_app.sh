@@ -9,12 +9,11 @@
 # more than one, lipo joins each into a universal binary. The app is
 # Contents/MacOS/Ferry and the CLI Contents/MacOS/ferry-cli, which users
 # link onto their PATH. LICENSES is the THIRD_PARTY_LICENSES.html
-# cargo-about wrote (about.toml), which goes in Resources, where About
-# opens it. VERSION is MAJOR.MINOR.PATCH
-# (macOS accepts nothing else) and BUILD a number. Writes the DMG, and leaves
-# Ferry.app next to it. Needs macOS: lipo, iconutil, codesign and
-# hdiutil. Each of the app's languages gets a <lang>.lproj in Resources,
-# from its i18n/<lang>/ferry.ftl (packaging/i18n.sh).
+# cargo-about wrote (about.toml), which goes in Resources. VERSION is
+# MAJOR.MINOR.PATCH (macOS accepts nothing else) and BUILD a number. Writes
+# the DMG, and leaves Ferry.app next to it. Needs macOS: lipo, iconutil,
+# codesign and hdiutil. Each of the app's languages gets a <lang>.lproj in
+# Resources, from its i18n/<lang>/ferry.ftl (packaging/i18n.sh).
 #
 # The bundle is ad-hoc signed and not sandboxed (docs/adr/0001,
 # "Deliberate differences"): Gatekeeper blocks it until the user allows it in

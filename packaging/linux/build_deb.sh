@@ -7,7 +7,7 @@
 # CLI is cargo's ferry-cli, the command line, installed next to it as
 # /usr/bin/ferry-cli (docs/adr/0001, "Packaging"). LICENSES is the
 # THIRD_PARTY_LICENSES.html cargo-about wrote (about.toml), installed in
-# /usr/share/doc/ferry, where About opens it.
+# /usr/share/doc/ferry.
 # The menu entry, in each of the app's languages (packaging/i18n.sh), and
 # the icons go to /usr/share. Runs on Debian or
 # Ubuntu: it needs dpkg-deb, and dpkg-shlibdeps to work out the dependencies
