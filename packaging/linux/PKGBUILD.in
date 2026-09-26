@@ -21,6 +21,7 @@ optdepends=(
   'vulkan-icd-loader: GPU rendering'
   'libglvnd: GPU rendering through OpenGL'
   'xdg-desktop-portal: file pickers'
+  'noto-fonts-cjk: Chinese, Japanese and Korean text'
 )
 provides=(ferry)
 conflicts=(ferry)

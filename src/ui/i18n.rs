@@ -228,6 +228,42 @@ mod tests {
         }
     }
 
+    /// The packaging scripts (`packaging/i18n.sh`) copy `package-*`
+    /// messages as they are, a line each, so they must be plain text.
+    #[test]
+    fn package_messages_are_plain_text_on_one_line() {
+        use fluent_syntax::ast::PatternElement;
+
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("i18n");
+        let mut checked = 0;
+        for entry in fs::read_dir(&directory).expect("the i18n directory") {
+            let path = entry.expect("an i18n entry").path().join("ferry.ftl");
+            let source = fs::read_to_string(&path).expect("a locale's ferry.ftl");
+            let resource: Resource<&str> =
+                fluent_syntax::parser::parse(source.as_str()).expect("the .ftl parses");
+            for entry in resource.body {
+                let Entry::Message(message) = entry else {
+                    continue;
+                };
+                if !message.id.name.starts_with("package-") {
+                    continue;
+                }
+                let plain = match message.value.as_ref().map(|value| &value.elements[..]) {
+                    Some([PatternElement::TextElement { value }]) => !value.contains('\n'),
+                    _ => false,
+                };
+                assert!(
+                    plain && message.attributes.is_empty(),
+                    "{}: {} must be plain text on one line",
+                    path.display(),
+                    message.id.name
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 0);
+    }
+
     #[test]
     fn tests_see_en_us_without_isolation_marks() {
         assert_eq!(LOADER.current_languages(), [en_us()]);

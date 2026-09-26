@@ -130,6 +130,9 @@ shell-rename-helper = How this computer appears on your other devices
 shell-rename-confirm = Save
 # The title of the folder picker for the download folder.
 shell-download-dir-title = Save received files in
+# The comment of the entry that starts the app when the user logs in
+# (Linux; shown in the desktop's list of startup applications).
+shell-autostart-comment = Start Ferry in the tray
 
 ## The tray menu (src/ui/background.rs)
 
@@ -466,3 +469,22 @@ browse-error-invalid_path = That name or location can’t be used.
 browse-error-files_failed = The device’s files couldn’t be reached.
 browse-error-files_timed_out = The device took too long to answer.
 browse-error-files_host_key_mismatch = The device’s file server didn’t prove it is the paired device, so Ferry didn’t connect to it.
+
+## Outside the app: the menu entry, the installer and the system's own
+## texts about it (packaging/, through packaging/i18n.sh)
+##
+## Plain text on one line: no { }, as the packaging scripts copy it as it
+## is. Each is shown by the system in the user's language, so a language
+## gets them from its `.ftl` when it is packaged.
+
+# The Linux menu entry's generic name, under or instead of "Ferry".
+package-generic-name = Device Connection
+# The Linux menu entry's tooltip.
+package-comment = Pair with your devices and share files and the clipboard over the local network
+# Search words for the Linux menu entry: each ends with “;”, and English
+# ones may stay so that searching in English still finds the app.
+package-keywords = KDE Connect;phone;pair;clipboard;file transfer;
+# Why the app wants the local network, in macOS's permission prompt.
+package-local-network-usage = Ferry finds and connects to your devices on the local network.
+# The checkbox on the Windows installer's last page.
+package-start-app = Start Ferry

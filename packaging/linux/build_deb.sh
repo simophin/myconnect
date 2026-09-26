@@ -8,7 +8,8 @@
 # /usr/bin/ferry-cli (docs/adr/0001, "Packaging"). LICENSES is the
 # THIRD_PARTY_LICENSES.html cargo-about wrote (about.toml), installed in
 # /usr/share/doc/ferry, where About opens it.
-# The menu entry and icons go to /usr/share. Runs on Debian or
+# The menu entry, in each of the app's languages (packaging/i18n.sh), and
+# the icons go to /usr/share. Runs on Debian or
 # Ubuntu: it needs dpkg-deb, and dpkg-shlibdeps to work out the dependencies
 # from the ELF files. Build on the oldest release you want to support, since
 # the glibc it links against is the oldest one the package will install on.
@@ -44,7 +45,9 @@ mkdir -p "$root/usr/bin" "$root/usr/share/applications" \
   "$root/usr/share/icons" "$root/usr/share/doc/ferry" "$root/DEBIAN"
 install -m 755 -s "$app" "$root/usr/bin/ferry-gui"
 install -m 755 -s "$cli" "$root/usr/bin/ferry-cli"
-install -m 644 "$packaging/$app_id.desktop" "$root/usr/share/applications/"
+# Written whole first, so that set -e stops at a missing translation.
+"$packaging/../i18n.sh" desktop "$packaging/$app_id.desktop" >"$work/$app_id.desktop"
+install -m 644 "$work/$app_id.desktop" "$root/usr/share/applications/"
 cp -R "$assets/linux/hicolor" "$root/usr/share/icons/"
 install -m 644 "$licenses" "$root/usr/share/doc/ferry/THIRD_PARTY_LICENSES.html"
 chmod -R u=rwX,go=rX "$root/usr/share"
@@ -67,9 +70,11 @@ test -n "$depends"
 # keyboard, Wayland and X11 libraries, and the libxcb `display-info` lists
 # the monitors with. Without a GPU driver the app draws in software, so the
 # GPU's are only recommended. The app bundles its Latin font, but a system
-# font is needed for the monospace pairing code and for other scripts.
+# font is needed for the monospace pairing code and for other scripts:
+# Noto CJK for Chinese, Japanese and Korean (device and file names, and
+# the zh-CN translation), which DejaVu lacks.
 depends="$depends, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxrandr2, fontconfig, fonts-dejavu-core | fonts-freefont-ttf | fonts-liberation"
-recommends="libvulkan1, mesa-vulkan-drivers | vulkan-icd, libegl1, xdg-desktop-portal"
+recommends="libvulkan1, mesa-vulkan-drivers | vulkan-icd, libegl1, xdg-desktop-portal, fonts-noto-cjk"
 
 cat >"$root/DEBIAN/control" <<CONTROL
 Package: ferry

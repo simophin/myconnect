@@ -16,6 +16,8 @@ use std::{
 use sha2::{Digest, Sha256};
 
 use super::APP_ID;
+#[cfg(all(unix, not(target_os = "macos")))]
+use crate::ui::i18n::fl;
 
 /// Starts the app at login, or stops doing so. Calls touch files or the
 /// registry, so the shell changes it off the UI thread.
@@ -136,11 +138,15 @@ fn entry(_name: &str, program: &Path, args: &[OsString]) -> String {
         .chain(args.iter().map(OsString::as_os_str))
         .map(|arg| exec_arg(&arg.to_string_lossy()))
         .collect();
+    // A string value: `\` and line breaks are escaped.
+    let comment = fl!("shell-autostart-comment")
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n");
     format!(
         "[Desktop Entry]\n\
          Type=Application\n\
          Name=Ferry\n\
-         Comment=Start Ferry in the tray\n\
+         Comment={comment}\n\
          Exec={}\n\
          Icon={APP_ID}\n\
          Terminal=false\n\

@@ -4,11 +4,14 @@
 ;
 ;   makensis /DVERSION=1.2.3 /DFILE_VERSION=1.2.3.0 /DAPP=path\to\ferry-gui.exe
 ;            /DCLI=path\to\ferry-cli.exe /DLICENSES=path\to\THIRD_PARTY_LICENSES.html
-;            /DOUT=path\to\setup.exe installer.nsi
+;            /DLANGUAGES=path\to\languages.nsh /DOUT=path\to\setup.exe installer.nsi
 ;
 ; The app is installed as Ferry.exe and the CLI next to it as ferry-cli.exe
 ; (docs/adr/0001, "Packaging"). LICENSES is the notices cargo-about wrote
 ; (about.toml), installed next to Ferry.exe, where About opens it.
+; LANGUAGES is what `packaging/i18n.sh nsis` prints: the app's languages
+; and the installer's own strings in each. The installer speaks the
+; system's language if it is one of them, else English.
 
 Unicode true
 !include "MUI2.nsh"
@@ -33,14 +36,14 @@ VIAddVersionKey "LegalCopyright" "Copyright © 2026 Fanchao"
 !define MUI_ICON "..\..\assets\windows\app_icon.ico"
 !define MUI_UNICON "..\..\assets\windows\app_icon.ico"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\Ferry.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "Start Ferry"
+!define MUI_FINISHPAGE_RUN_TEXT "$(package_start_app)"
 
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
-!insertmacro MUI_LANGUAGE "English"
+!include /CHARSET=UTF8 "${LANGUAGES}"
 
 Section "Ferry"
   SetOutPath "$INSTDIR"

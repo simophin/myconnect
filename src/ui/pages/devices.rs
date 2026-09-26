@@ -434,5 +434,15 @@ mod tests {
         testing::snapshot("devices-empty", (440.0, 400.0), || page(&empty, signal));
         let failed = failed();
         testing::snapshot("devices-failed", (440.0, 400.0), || page(&failed, signal));
+        // Figtree has no CJK glyphs: these come from a system font, and
+        // show as boxes without one (a .deb recommends Noto CJK).
+        let cjk = testing::store(
+            "张伟的电脑",
+            vec![
+                testing::device("小米 14 Pro"),
+                testing::device("華為平板 MatePad"),
+            ],
+        );
+        testing::snapshot("devices-cjk", (440.0, 400.0), || page(&cjk, signal));
     }
 }

@@ -85,13 +85,15 @@ Split into four commits, one per step, each passing the checks.
       on screen, see Notes)
 
 ### 5. Platform integration
-- [ ] macOS: `CFBundleLocalizations` and a `<lang>.lproj` per shipped
+- [x] macOS: `CFBundleLocalizations` and a `<lang>.lproj` per shipped
       language in `packaging/macos`, so system dialogs follow the app;
-      notification action titles localised
-- [ ] Linux: `Name[xx]`/`Comment[xx]` in the `.desktop` file; the `.deb`
-      recommends a CJK font
-- [ ] Windows: installer languages in `installer.nsi`
-- [ ] Check CJK glyphs render (no boxes) in the app under Xvfb
+      notification action titles localised (there are none; see Notes)
+- [x] Linux: `Name[xx]`/`Comment[xx]` in the `.desktop` file; the `.deb`
+      recommends a CJK font (`GenericName`, `Comment`, `Keywords`; the
+      name stays "Ferry")
+- [x] Windows: installer languages in `installer.nsi`
+- [ ] Check CJK glyphs render (no boxes) in the app under Xvfb (seen in a
+      macOS snapshot only, see Notes)
 
 ### 6. First languages and workflow
 - [ ] `i18n/zh-CN/ferry.ftl` and `i18n/de/ferry.ftl`, complete
@@ -284,3 +286,38 @@ Anything a later phase must know, one line each, newest last.
   under Xvfb on Linux and look at the window, the tray menu and a
   notification. The en-XA path is covered by unit tests
   (`ui::i18n::tests::en_xa_is_loaded_only_when_asked_for_by_name`).
+- 5: what the system shows about the app outside it comes from `package-*`
+  messages (one plain line each; `ui::i18n::tests` checks), which
+  `packaging/i18n.sh` copies into the packages for every `i18n/<lang>/`:
+  the `.desktop` entry's `GenericName`/`Comment`/`Keywords` (and their
+  `[zh_CN]`-style variants; the checked-in English is overwritten from
+  en-US), macOS's `<lang>.lproj/InfoPlist.strings` (the local network
+  prompt) and `CFBundleLocalizations`, and an NSIS include
+  (`MUI_LANGUAGE` per language, `LangString package_start_app`) passed as
+  `/DLANGUAGES`. A language is shipped by having its directory; phase 6
+  must translate `package-*` too, and a language NSIS's table in
+  `i18n.sh` lacks stops the Windows build until it is added. zh-CN's
+  lproj is `zh-Hans`, en-US's is `en`.
+- 5: macOS notifications have no action buttons of ours (a click is the
+  default action), so only the system's own "Options"/"Close" show, and
+  those follow the bundle's localizations. winit 0.30's macOS app menu
+  ("Hide Ferry", "Quit Ferry", "Services"; `platform_impl/macos/menu.rs`)
+  is hard-coded English, so the `.lproj` doesn't reach it (2d's note was
+  wrong): localising it means setting our own `NSApp` main menu once the
+  window opens. Not done.
+- 5: the Linux autostart entry's comment is `shell-autostart-comment`,
+  written in the language of the moment it is turned on; phase 7's switch
+  could rewrite it while it is on.
+- 5: `devices-cjk` (a snapshot in `pages/devices.rs`) renders CJK device
+  names. On macOS they came out right (PingFang, by cosmic-text's
+  fallback). Under Xvfb on Linux it wasn't run (no Xvfb on macOS): run it
+  and the app there, with and without `fonts-noto-cjk`. cosmic-text picks
+  the CJK fallback by the system's locale (`sys-locale`), not the app's
+  language, so on an English system zh-CN text may get Japanese glyph
+  forms; check in phase 6.
+- 5 was checked on macOS, as 4 was: the same `tests/lan.rs` loopback
+  failure, `ui_e2e` doesn't run there; the Linux code was clippy-checked
+  for `x86_64-unknown-linux-musl`. `i18n.sh` was tried with made-up de
+  and zh-CN files (quotes, `$` and `\` in them; `plutil -lint` passes),
+  but `build_deb.sh` (with `check_deb.sh`'s `desktop-file-validate`) and
+  `makensis` weren't run here: the Build workflow runs both.
