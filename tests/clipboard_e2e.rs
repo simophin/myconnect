@@ -10,13 +10,14 @@ use std::{
 };
 
 use ferry::{
-    config::{FilesystemTrustStore, LocalIdentity, TrustStore},
+    config::LocalIdentity,
     core::{Core, DeviceReachability, LanCommand, LocalDeviceSnapshot, Plugin},
     plugins,
     plugins::clipboard::{
         ClipboardPlugin, ClipboardSnapshot, ClipboardSyncError, InMemoryClipboard,
     },
     protocol::DeviceType,
+    store::Store,
     transport::{
         lan::{LanConfig, LanService, LocalDeviceInfo, TCP_PORT_RANGE},
         tls::subject_public_key_info,
@@ -27,7 +28,7 @@ use tokio_util::sync::CancellationToken;
 
 struct Peer {
     identity: Arc<LocalIdentity>,
-    trust_store: Arc<dyn TrustStore + Send + Sync>,
+    store: Store,
     application: Core,
     clipboard: Arc<ClipboardPlugin>,
     commands: mpsc::Receiver<LanCommand>,
@@ -36,9 +37,8 @@ struct Peer {
 
 fn peer(name: &str) -> Peer {
     let directory = tempfile::tempdir().unwrap();
-    let identity = Arc::new(LocalIdentity::load_or_create(directory.path()).unwrap());
-    let trust_store: Arc<dyn TrustStore + Send + Sync> =
-        Arc::new(FilesystemTrustStore::new(directory.path()));
+    let store = Store::open(directory.path()).unwrap();
+    let identity = Arc::new(LocalIdentity::load_or_create(&store).unwrap());
     let public_key_der = subject_public_key_info(identity.certificate_der()).unwrap();
     let clipboard = Arc::new(ClipboardPlugin::new(InMemoryClipboard::shared()));
     let (application, commands) = Core::new(
@@ -48,17 +48,18 @@ fn peer(name: &str) -> Peer {
         },
         8,
         public_key_der,
-        trust_store.clone(),
+        store.clone(),
         builtin_with(clipboard.clone()),
         32,
         128,
         identity.clone(),
-        ferry::core::TransferConfig::new(directory.path().join("downloads")),
+        ferry::core::TransferConfig::new(directory.path().join("downloads"))
+            .with_payload_bind_ip(Ipv4Addr::LOCALHOST),
     )
     .unwrap();
     Peer {
         identity,
-        trust_store,
+        store,
         application,
         clipboard,
         commands,
@@ -210,7 +211,7 @@ async fn discovery_pairing_and_clipboard_sync_are_bidirectional() {
         a.application.clone(),
         a.commands,
         a.identity.clone(),
-        a.trust_store.clone(),
+        a.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -221,7 +222,7 @@ async fn discovery_pairing_and_clipboard_sync_are_bidirectional() {
         b.application.clone(),
         b.commands,
         b.identity.clone(),
-        b.trust_store.clone(),
+        b.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -272,7 +273,7 @@ async fn remote_clipboard_update_is_not_echoed_back_to_its_source() {
         a.application.clone(),
         a.commands,
         a.identity.clone(),
-        a.trust_store.clone(),
+        a.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -283,7 +284,7 @@ async fn remote_clipboard_update_is_not_echoed_back_to_its_source() {
         b.application.clone(),
         b.commands,
         b.identity.clone(),
-        b.trust_store.clone(),
+        b.store.clone(),
         CancellationToken::new(),
     )
     .await

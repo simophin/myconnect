@@ -12,6 +12,7 @@ says which of them still apply.
 | # | Decision | Status |
 | --- | --- | --- |
 | [0001](0001-native-ui-in-iced.md) | Build the desktop UI in Rust with iced, in the daemon's process | Accepted |
+| [0002](0002-store-the-daemons-data-in-sqlite.md) | Store the daemon's data in SQLite | Accepted |
 
 Template for new records:
 

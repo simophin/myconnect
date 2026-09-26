@@ -38,17 +38,12 @@ pub async fn bind_payload_listener(
     bind_ip: Ipv4Addr,
     ports: RangeInclusive<u16>,
 ) -> Result<(TcpListener, u16), PayloadError> {
-    for port in ports {
-        match TcpListener::bind((bind_ip, port)).await {
-            Ok(listener) => {
-                let port = listener.local_addr().map_err(PayloadError::Socket)?.port();
-                return Ok((listener, port));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
-            Err(error) => return Err(PayloadError::Socket(error)),
-        }
-    }
-    Err(PayloadError::NoPort)
+    let listener = super::lan::bind_listener(bind_ip, ports)
+        .await
+        .map_err(PayloadError::Socket)?
+        .ok_or(PayloadError::NoPort)?;
+    let port = listener.local_addr().map_err(PayloadError::Socket)?.port();
+    Ok((listener, port))
 }
 
 /// Accept exactly one connection on a payload listener and upgrade it to

@@ -1,0 +1,40 @@
+# cargo-about: the notices for the third-party code in Ferry, which the
+# packages ship as THIRD_PARTY_LICENSES.html (about.hbs) and About opens.
+#
+#   cargo about generate --locked --fail about.hbs > THIRD_PARTY_LICENSES.html
+#
+# Only these licenses are accepted: a dependency under any other (a GPL, say)
+# fails the build until someone decides it's fine and adds it here. For a
+# crate offered under several, the first one listed here is used.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "BSL-1.0",
+    "0BSD",
+    "CC0-1.0",
+    "Unlicense",
+    # File-level copyleft: fine unmodified, with its source a link away.
+    "MPL-2.0",
+]
+
+# The platforms the packages are built for.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+
+# Ferry's own crates (publish = false) aren't third-party code.
+private = { ignore = true }
+
+# Only what's in the binaries.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

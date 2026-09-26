@@ -9,13 +9,14 @@ use std::{
 };
 
 use ferry::{
-    config::{FilesystemTrustStore, LocalIdentity, TrustStore},
+    config::LocalIdentity,
     core::{
         Core, DeviceReachability, EventData, LanCommand, LocalDeviceSnapshot, PairingDirection,
         PairingStatus,
     },
     plugins::clipboard::InMemoryClipboard,
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
+    store::Store,
     transport::{
         lan::{LanConfig, LanService, LocalDeviceInfo, TCP_PORT_RANGE},
         tls::{self, PeerPin, TlsMaterial, subject_public_key_info},
@@ -28,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 
 struct Peer {
     identity: Arc<LocalIdentity>,
-    trust_store: Arc<dyn TrustStore + Send + Sync>,
+    store: Store,
     application: Core,
     commands: mpsc::Receiver<LanCommand>,
     _directory: tempfile::TempDir,
@@ -36,9 +37,8 @@ struct Peer {
 
 fn peer(name: &str) -> Peer {
     let directory = tempfile::tempdir().unwrap();
-    let identity = Arc::new(LocalIdentity::load_or_create(directory.path()).unwrap());
-    let trust_store: Arc<dyn TrustStore + Send + Sync> =
-        Arc::new(FilesystemTrustStore::new(directory.path()));
+    let store = Store::open(directory.path()).unwrap();
+    let identity = Arc::new(LocalIdentity::load_or_create(&store).unwrap());
     let public_key_der = subject_public_key_info(identity.certificate_der()).unwrap();
     let (application, commands) = Core::new(
         LocalDeviceSnapshot {
@@ -47,17 +47,18 @@ fn peer(name: &str) -> Peer {
         },
         8,
         public_key_der,
-        trust_store.clone(),
+        store.clone(),
         ferry::plugins::builtin(InMemoryClipboard::shared()),
         32,
         128,
         identity.clone(),
-        ferry::core::TransferConfig::new(directory.path().join("downloads")),
+        ferry::core::TransferConfig::new(directory.path().join("downloads"))
+            .with_payload_bind_ip(Ipv4Addr::LOCALHOST),
     )
     .unwrap();
     Peer {
         identity,
-        trust_store,
+        store,
         application,
         commands,
         _directory: directory,
@@ -137,7 +138,7 @@ async fn valid_peer_pairs_reconnects_with_pinned_trust_and_unpairs() {
         a.application.clone(),
         a.commands,
         a.identity.clone(),
-        a.trust_store.clone(),
+        a.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -148,7 +149,7 @@ async fn valid_peer_pairs_reconnects_with_pinned_trust_and_unpairs() {
         b.application.clone(),
         b.commands,
         b.identity.clone(),
-        b.trust_store.clone(),
+        b.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -182,20 +183,20 @@ async fn valid_peer_pairs_reconnects_with_pinned_trust_and_unpairs() {
     wait_for_paired(&a.application, &b_id, true).await;
     wait_for_paired(&b.application, &a_id, true).await;
 
-    assert!(a.trust_store.get(&b_id).unwrap().is_some());
-    assert!(b.trust_store.get(&a_id).unwrap().is_some());
+    assert!(a.store.device(&b_id).unwrap().is_some());
+    assert!(b.store.device(&a_id).unwrap().is_some());
 
     let a_identity = a.identity.clone();
-    let a_trust_store = a.trust_store.clone();
+    let a_store = a.store.clone();
     let b_identity = b.identity.clone();
-    let b_trust_store = b.trust_store.clone();
+    let b_store = b.store.clone();
 
     // Restart both sides; they must reconnect using pinned trust.
     a_service.shutdown().await.unwrap();
     b_service.shutdown().await.unwrap();
 
-    let a2 = peer_reusing(a_identity, a_trust_store);
-    let b2 = peer_reusing(b_identity, b_trust_store);
+    let a2 = peer_reusing(a_identity, a_store);
+    let b2 = peer_reusing(b_identity, b_store);
     let a2_udp = free_udp_addr();
     let b2_udp = free_udp_addr();
     let a2_service = LanService::start(
@@ -204,7 +205,7 @@ async fn valid_peer_pairs_reconnects_with_pinned_trust_and_unpairs() {
         a2.application.clone(),
         a2.commands,
         a2.identity.clone(),
-        a2.trust_store.clone(),
+        a2.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -215,7 +216,7 @@ async fn valid_peer_pairs_reconnects_with_pinned_trust_and_unpairs() {
         b2.application.clone(),
         b2.commands,
         b2.identity.clone(),
-        b2.trust_store.clone(),
+        b2.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -234,7 +235,7 @@ async fn valid_peer_pairs_reconnects_with_pinned_trust_and_unpairs() {
     // trust in A too, before the connection is closed.
     let mut b2_events = b2.application.subscribe();
     a2.application.forget_device(&b_id).unwrap();
-    assert!(a2.trust_store.get(&b_id).unwrap().is_none());
+    assert!(a2.store.device(&b_id).unwrap().is_none());
     timeout(Duration::from_secs(3), async {
         loop {
             if let EventData::DeviceUpdated(device) = b2_events.recv().await.unwrap().event
@@ -248,18 +249,15 @@ async fn valid_peer_pairs_reconnects_with_pinned_trust_and_unpairs() {
     .await
     .unwrap();
     wait_for_paired(&b2.application, &a_id, false).await;
-    assert!(b2.trust_store.get(&a_id).unwrap().is_none());
+    assert!(b2.store.device(&a_id).unwrap().is_none());
 
     a2_service.shutdown().await.unwrap();
     b2_service.shutdown().await.unwrap();
 }
 
-/// Build a fresh `Peer` that reuses an existing identity and trust store
+/// Build a fresh `Peer` that reuses an existing identity and store
 /// (simulating the daemon restarting with the same persisted state).
-fn peer_reusing(
-    identity: Arc<LocalIdentity>,
-    trust_store: Arc<dyn TrustStore + Send + Sync>,
-) -> Peer {
+fn peer_reusing(identity: Arc<LocalIdentity>, store: Store) -> Peer {
     let directory = tempfile::tempdir().unwrap();
     let public_key_der = subject_public_key_info(identity.certificate_der()).unwrap();
     let (application, commands) = Core::new(
@@ -269,17 +267,18 @@ fn peer_reusing(
         },
         8,
         public_key_der,
-        trust_store.clone(),
+        store.clone(),
         ferry::plugins::builtin(InMemoryClipboard::shared()),
         32,
         128,
         identity.clone(),
-        ferry::core::TransferConfig::new(directory.path().join("downloads")),
+        ferry::core::TransferConfig::new(directory.path().join("downloads"))
+            .with_payload_bind_ip(Ipv4Addr::LOCALHOST),
     )
     .unwrap();
     Peer {
         identity,
-        trust_store,
+        store,
         application,
         commands,
         _directory: directory,
@@ -357,7 +356,7 @@ struct Victim {
     application: Core,
     device_id: String,
     _identity: Arc<LocalIdentity>,
-    _trust_store: Arc<dyn TrustStore + Send + Sync>,
+    _store: Store,
     _directory: tempfile::TempDir,
 }
 
@@ -366,7 +365,7 @@ async fn victim() -> (Victim, LanService, SocketAddr) {
     let id = victim.identity.device_id().to_owned();
     let application = victim.application.clone();
     let identity = victim.identity.clone();
-    let trust_store = victim.trust_store.clone();
+    let store = victim.store.clone();
     let service = LanService::start(
         LanConfig::default()
             .with_discovery_bind(free_udp_addr())
@@ -381,7 +380,7 @@ async fn victim() -> (Victim, LanService, SocketAddr) {
         application.clone(),
         victim.commands,
         identity.clone(),
-        trust_store.clone(),
+        store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -392,7 +391,7 @@ async fn victim() -> (Victim, LanService, SocketAddr) {
             application,
             device_id: id,
             _identity: identity,
-            _trust_store: trust_store,
+            _store: store,
             _directory: victim._directory,
         },
         service,
