@@ -198,7 +198,8 @@ impl NotificationsUi {
                 id,
                 title,
             } => shell::prompt(Prompt {
-                title: format!("Reply to {title}"),
+                title: "Reply".into(),
+                body: Some(format!("To “{title}”")),
                 label: "Message".into(),
                 initial: String::new(),
                 selection: None,
@@ -582,7 +583,8 @@ mod tests {
         let [ui::Message::Prompt(prompt)] = &outcomes[..] else {
             panic!("unexpected outcomes: {outcomes:?}");
         };
-        assert_eq!(prompt.title, "Reply to Ana");
+        assert_eq!(prompt.title, "Reply");
+        assert_eq!(prompt.body.as_deref(), Some("To “Ana”"));
         assert!((prompt.validate)(" ").is_some());
         let Feature::Notifications(send) = (prompt.then)("Yes!".into()) else {
             panic!("a notifications message");

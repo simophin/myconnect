@@ -22,7 +22,9 @@ use crate::ui::{
 /// field, if any; `then` gets the text once it is valid.
 #[derive(Clone)]
 pub(crate) struct Prompt {
+    /// Short and fixed; what it is about goes in `body`.
     pub title: String,
+    pub body: Option<String>,
     pub label: String,
     pub initial: String,
     /// The characters of `initial` selected when the dialog opens (a
@@ -165,6 +167,7 @@ impl App {
     pub(super) fn prompt(&mut self, prompt: Prompt) -> Task<Message> {
         let Prompt {
             title,
+            body,
             label,
             initial,
             selection,
@@ -174,7 +177,7 @@ impl App {
             origin,
         } = prompt;
         let show = self.show_window_for(origin);
-        let open = self.dialogs.open(Dialog::prompt(
+        let mut dialog = Dialog::prompt(
             title,
             Field {
                 value: initial,
@@ -187,7 +190,11 @@ impl App {
             Submit::Close(Arc::new(move |text| {
                 Message::Feature(then(text), Origin::Window)
             })),
-        ));
+        );
+        if let Some(body) = body {
+            dialog = dialog.with_body(body);
+        }
+        let open = self.dialogs.open(dialog);
         Task::batch([show, open])
     }
 

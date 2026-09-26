@@ -301,6 +301,8 @@ struct App {
     drag: Drag,
     /// Dropped files waiting for the user to choose a device.
     choosing: Option<Vec<PathBuf>>,
+    /// Files dropped on the tray icon, while its menu asks where to.
+    tray_dropped: Option<Vec<PathBuf>>,
     /// The system starts the app at login ([`desktop::autostart`]).
     start_on_login: bool,
 }
@@ -454,9 +456,11 @@ impl App {
             },
             Message::Unpair { device_id, name } => self.dialogs.open(
                 Dialog::confirm(
-                    format!("Unpair {name}?"),
-                    "The device will need to be paired again before it can exchange \
-                     anything with this computer.",
+                    "Unpair device?",
+                    format!(
+                        "{name} will need to be paired again before it can exchange \
+                         anything with this computer."
+                    ),
                     "Unpair",
                     Submit::Close(Arc::new(move |_| Message::Forget {
                         device_id: device_id.clone(),

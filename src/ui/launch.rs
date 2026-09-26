@@ -209,6 +209,7 @@ impl App {
             answer_error: None,
             drag: Drag::default(),
             choosing: None,
+            tray_dropped: None,
             start_on_login: desktop_login_enabled,
         };
         // Hidden if it was quit from the tray or started at login, unless

@@ -37,7 +37,8 @@ pub fn view<'a, M: Clone + 'a>(
             "{} wants to pair with this computer. Accept only if it shows the same code:",
             pairing.device_name
         ))
-        .size(14),
+        .size(14)
+        .wrapping(text::Wrapping::WordOrGlyph),
     ]
     .spacing(12);
     if let Some(code) = &pairing.verification_code {

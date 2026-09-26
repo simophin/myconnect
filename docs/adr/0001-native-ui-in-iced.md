@@ -117,7 +117,7 @@ first needs one adds it to the `gui` feature.
 | Tray (Linux) | `ksni` 0.3 (step 13) | A StatusNotifierItem over D-Bus in pure Rust, with no libappindicator or GTK. Spawned with `assume_sni_available(true)`, so a tray host that starts, stops or restarts later is followed. Its `async-io` feature, not the default `tokio`, for the same reason as `zbus`. |
 | Monitor list | `display-info` (step 13) | iced exposes only the size of the window's current monitor; the `window.json` fits-on-screen check needs every monitor's bounds. |
 | Tray (macOS, Windows) | `tray-icon` 0.25 (step 13b) | The Tauri team's tray crate, with `muda` menus (used through its `tray_icon::menu` re-export, so the versions match). Default features off: they are Linux's (GTK, libappindicator). |
-| Dock icon (macOS) | `objc2` 0.6, `objc2-app-kit` 0.3 | Already in the tree through `tray-icon`. Switches the activation policy, so the app has a Dock icon only while its window is open. |
+| Dock icon, drops on the menu bar icon (macOS) | `objc2` 0.6, `objc2-app-kit` 0.3, `objc2-foundation` 0.3 | Already in the tree through `tray-icon`. Switches the activation policy, so the app has a Dock icon only while its window is open. Registers the status item's window for file drops, with a delegate that reads the dropped file URLs (`tray-icon` has no drop support). |
 | Login item (Windows) | `windows-registry` 0.6 | The `Run` value for starting on login. From windows-rs, whose `windows-link`, `windows-result` and `windows-strings` are already in the tree. On Linux and macOS the entry is a small file the app writes itself (a `.desktop` file, a LaunchAgent plist), so those need no crate. |
 | Windows exe resources | `winresource` (step 15, build dependency of `gui` on Windows only) | Embeds the icon Explorer and the taskbar show, and the name Task Manager lists, in `Ferry.exe`. |
 | Packaging | Shell scripts in `packaging/`, NSIS on Windows (step 15) | See "Packaging" below. |
@@ -153,6 +153,16 @@ Decisions for steps 11 and 13:
   The X11 position at the drop is not used: it depends on the source's
   event order and exists nowhere else, so the same drop would behave
   differently by platform.
+- **Files dropped on the menu bar icon (macOS) are sent from a menu.**
+  A menu pops up from the icon ("Send 2 files to:" and the devices that
+  would take them), without the window, which would distract from what
+  the user was doing (`Tray::pop_up`; it is set as the status item's menu
+  and clicked, as `tray-icon` opens its own). Where a tray can't pop one
+  up, the window opens on the chooser. The status item's window is
+  registered for file URLs and its delegate takes the drag
+  (`desktop::tray`, `drops`); the icon highlights while files hover over
+  it. Linux's StatusNotifierItem and Windows' notification area icon take
+  no drops.
 - **Folders are filtered by the shell**, since winit hands them over like
   files ("Only files can be sent, not folders.").
 - **Wayland: no drag and drop**, as the owner decided. Nothing to guard:

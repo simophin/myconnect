@@ -156,7 +156,7 @@ fn unpairs_and_the_peer_forgets_the_app_too() {
 
     app.click(&test.peer.name);
     app.click("Unpair");
-    app.wait_for(&format!("Unpair {}?", test.peer.name));
+    app.wait_for("Unpair device?");
     // The dialog's button, drawn over the page's.
     app.click_last("Unpair");
 

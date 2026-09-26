@@ -33,6 +33,9 @@ pub enum DesktopEvent {
     TrayClicked,
     /// A tray menu item was chosen.
     TrayChose(TrayCommand),
+    /// Files were dropped on the tray icon (macOS only).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    TrayDropped(Vec<std::path::PathBuf>),
     /// A tray host started, or went away.
     TrayAvailable(bool),
     /// A click on one of the app's notifications.

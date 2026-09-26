@@ -139,6 +139,13 @@ right one. It type-checks for both (below). Still to do:
   from outside `/tmp` (macOS refuses those), e.g. under `target/`. Check
   that a click brings the window (and its Dock icon) back while the app
   is in the menu bar only.
+- Files dropped on the menu bar icon (`drops` in `src/ui/desktop/tray.rs`)
+  are untested on a Mac: only type-checked, with the app's side
+  (`DesktopEvent::TrayDropped`, the chooser) covered by unit tests. Check
+  that the icon highlights while files hover, that the drop pops up the
+  "Send N files to:" menu from the icon without opening the window, that
+  choosing a device sends them, that a folder is refused with a
+  notification, and that clicking the icon still opens the tray's menu.
 - macOS's menu-bar Quit and logout take the quit path. They go through
   `terminate:`, which exits after winit's `exiting`, so the daemon's
   shutdown after `program.run()` likely doesn't run.
@@ -266,6 +273,10 @@ The UI's traps. Those about driving the app under Xvfb are in
   real app. Snapshots render one frame and don't show it.
 - **macOS loopback.** `--discovery-loopback` can't find peers on macOS
   (no `127.255.255.255`). Use `--demo` there, and do peer tests on Linux.
+- **Dialog titles are fixed text.** A name someone chose (a file, a
+  device, a notification's sender) can be any length, so it goes in the
+  body, which wraps anywhere (`Wrapping::WordOrGlyph`): "Unpair device?"
+  with "Pixel 8a will need…" under it, not "Unpair Pixel 8a?".
 - **iced is pinned** (`iced = "0.14"`, `iced_fonts = "0.3"`). Upgrading it
   is its own change, never mixed into a feature.
 

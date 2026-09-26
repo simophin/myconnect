@@ -27,7 +27,8 @@ next.
 ### Desktop app
 
 The app lists your paired devices with their battery, pairs with a code
-both sides confirm, sends files (from a picker or dropped on the window),
+both sides confirm, sends files (from a picker, dropped on the window, or on macOS dropped on
+the menu bar icon),
 pings and rings devices, shares the clipboard, browses a phone's files,
 shows a phone's notifications (reply, dismiss, press their buttons), and
 keeps running in the tray. It follows the system's light or dark
