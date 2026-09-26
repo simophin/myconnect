@@ -73,12 +73,12 @@ fixes.
   checks.
 - **Configuration is flags and environment variables**, mirroring
   `ferry-cli run`: `--data-dir`, `--download-dir`, `--device-name`,
-  `--discovery-loopback`, `--no-system-clipboard`, `--api-port`,
-  `--api-token`, each also read from `FERRY_<NAME>`. The HTTP API is off
-  unless Settings → Command line access turns it on (ARCHITECTURE §9);
-  `--api-port` turns it on for one run. Its token is mandatory, made when
-  it is first turned on and kept in the store (`core.api`); `--api-token` overrides
-  it for one run.
+  `--discovery-loopback`, `--discovery-port`, `--no-system-clipboard`,
+  `--api-port`, `--api-token`, each also read from `FERRY_<NAME>`. The
+  HTTP API is off unless Settings → Command line access turns it on
+  (ARCHITECTURE §9); `--api-port` turns it on for one run. Its token is
+  mandatory, made when it is first turned on and kept in the store
+  (`core.api`); `--api-token` overrides it for one run.
 
 ### What happens to the Flutter UI's records
 

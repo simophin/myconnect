@@ -83,15 +83,18 @@ environment variables for a script run elsewhere.
 
 #### Example Commands
 
-- `ferry-cli run [--data-dir <dir>] [--download-dir <dir>] [--device-name <name>] [--discovery-loopback]` -
+- `ferry-cli run [--data-dir <dir>] [--download-dir <dir>] [--device-name <name>] [--discovery-loopback [--discovery-port <port>]]` -
   Run the authenticated local daemon in the foreground. `--discovery-loopback`
   keeps discovery and connections on loopback instead of the real network —
   useful for running multiple local instances against each other for testing
   (a physical switch never reflects a broadcast frame back to the port it
   came from, so two instances on one machine otherwise can't discover each
   other over a real NIC). Discovery binds `127.255.255.255:1716` and the
-  control and payload ports bind `127.0.0.1`, so real devices can neither
-  discover nor connect to the instance.
+  control and payload ports bind `127.0.0.1`, so remote devices can neither
+  discover nor connect to the instance. On Linux, a Ferry or KDE Connect on
+  the same machine that isn't on loopback still hears it on port 1716;
+  `--discovery-port` moves loopback discovery to another port (the same
+  one for every instance that should meet).
 - `ferry-cli devices [--watch]` - List devices and optionally follow changes.
 - `ferry-cli scan [--address <ip>] [--timeout <seconds>] [--watch]` -
   Broadcast a discovery request and list unpaired devices that answer.

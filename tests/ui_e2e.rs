@@ -1,8 +1,9 @@
 //! End-to-end flows through the desktop UI: the whole iced program, with
 //! its daemon embedded as in the app, run headless in `iced_test`'s
 //! emulator against a second daemon in this process (or the fake phone).
-//! Both discover over loopback only and keep their state in temporary
-//! directories.
+//! Both discover over loopback only, on a UDP port of their own rather
+//! than 1716 (so a Ferry or KDE Connect on this machine doesn't see them),
+//! and keep their state in temporary directories.
 //!
 //! The emulator runs the program as the real event loop would, tasks and
 //! subscriptions included, so the UI sees the core only through its sync
@@ -31,7 +32,7 @@ use ferry::{
     core::{Core, DeviceReachability, EventData, PairingStatus, TransferDirection, TransferStatus},
     daemon::{ApiMode, RunRequest, RunningService},
     plugins::{self, clipboard::ClipboardSettings, ping::ReceivedPing, share},
-    transport::lan::{DISCOVERY_PORT, LOOPBACK_BROADCAST},
+    transport::lan::LOOPBACK_BROADCAST,
     ui::{
         self, Desktop, Service, Started, UiOptions,
         desktop::{
@@ -301,7 +302,7 @@ fn browses_the_fake_phone() {
         reply: BrowseReply::Serve(vec![("/storage/emulated/0".into(), "All files".into())]),
         wrong_host_key: false,
         desktop_id: Some(app.id()),
-        discovery_bind: SocketAddr::from((LOOPBACK_BROADCAST, DISCOVERY_PORT)),
+        discovery_bind: SocketAddr::from((LOOPBACK_BROADCAST, test.discovery_port)),
     }));
 
     // Opening Add device announces the app; the phone hears it and dials.
@@ -344,7 +345,7 @@ fn shows_and_dismisses_the_fake_phones_notifications() {
         reply: BrowseReply::Refuse("no".into()),
         wrong_host_key: false,
         desktop_id: Some(app.id()),
-        discovery_bind: SocketAddr::from((LOOPBACK_BROADCAST, DISCOVERY_PORT)),
+        discovery_bind: SocketAddr::from((LOOPBACK_BROADCAST, test.discovery_port)),
     }));
     app.click("Add device");
     app.click_in_row("Pair", PHONE_NAME);
@@ -397,6 +398,12 @@ struct Test {
     _enter: tokio::runtime::EnterGuard<'static>,
     runtime: tokio::runtime::Runtime,
     peer: Peer,
+    /// The UDP port this scenario's instances discover each other on. Not
+    /// 1716: on Linux a Ferry or KDE Connect on this machine that isn't on
+    /// loopback binds `0.0.0.0:1716`, which hears broadcasts to
+    /// `127.255.255.255:1716`, so it would list the test's devices and dial
+    /// them.
+    discovery_port: u16,
     notifier: Arc<RecordingNotifier>,
     picker: Arc<FakePicker>,
     directory: tempfile::TempDir,
@@ -421,7 +428,8 @@ impl Test {
             .enable_all()
             .build()
             .expect("a runtime");
-        let peer = runtime.block_on(Peer::start());
+        let discovery_port = free_udp_port();
+        let peer = runtime.block_on(Peer::start(discovery_port));
         // Leaked so the guard can live next to the runtime: one handle per
         // test.
         let handle: &'static tokio::runtime::Handle = Box::leak(Box::new(runtime.handle().clone()));
@@ -429,6 +437,7 @@ impl Test {
             _enter: handle.enter(),
             runtime,
             peer,
+            discovery_port,
             notifier: Arc::default(),
             picker: Arc::default(),
             directory: tempfile::tempdir().expect("a temporary directory"),
@@ -452,6 +461,7 @@ impl Test {
             download_dir: Some(self.downloads()),
             device_name: Some(APP_NAME.into()),
             discovery_loopback: true,
+            discovery_port: self.discovery_port,
             system_clipboard: false,
         };
         let core: Arc<Mutex<Option<Core>>> = Arc::default();
@@ -806,7 +816,7 @@ struct Peer {
 }
 
 impl Peer {
-    async fn start() -> Self {
+    async fn start(discovery_port: u16) -> Self {
         let directory = tempfile::tempdir().expect("a temporary directory");
         let name = format!(
             "CLI Peer {}",
@@ -822,6 +832,7 @@ impl Peer {
             download_dir: Some(directory.path().join("downloads")),
             device_name: Some(name.clone()),
             discovery_loopback: true,
+            discovery_port,
             system_clipboard: false,
         })
         .await
@@ -850,6 +861,13 @@ impl Peer {
     fn transfers(&self) -> Vec<ferry::core::TransferSnapshot> {
         self.core().transfers().list()
     }
+}
+
+/// A UDP port nothing on this machine is using now, for one scenario's
+/// discovery.
+fn free_udp_port() -> u16 {
+    let socket = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("a free UDP port");
+    socket.local_addr().expect("a bound address").port()
 }
 
 /// A file of made-up bytes, larger than one payload chunk.

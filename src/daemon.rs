@@ -6,7 +6,7 @@ mod api_switch;
 
 use std::{net::Ipv4Addr, path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -31,7 +31,7 @@ use crate::{
 };
 
 /// Options for starting the Ferry service.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunRequest {
     /// How the HTTP API is served: for the whole run, or as the app's
     /// stored choice.
@@ -55,10 +55,32 @@ pub struct RunRequest {
     /// for running multiple local instances against each other without a
     /// second machine; devices on the LAN can't see or reach this one.
     pub discovery_loopback: bool,
+    /// UDP port loopback discovery listens and announces on, 1716 by
+    /// default. Only a loopback run may change it: devices on the LAN
+    /// listen on 1716 alone. On Linux, an instance that isn't on loopback
+    /// (a real Ferry or KDE Connect) binds `0.0.0.0:1716`, which also
+    /// receives broadcasts to `127.255.255.255:1716`, so a loopback instance
+    /// on 1716 is seen and dialled by it. Another port keeps a test's or
+    /// agent's instances apart from it, and from other runs'.
+    pub discovery_port: u16,
     /// Sync the desktop clipboard rather than an in-memory one. Falls back to
     /// the in-memory clipboard, with a warning, when the session has no
     /// usable clipboard (e.g. no display server).
     pub system_clipboard: bool,
+}
+
+impl Default for RunRequest {
+    fn default() -> Self {
+        Self {
+            api: ApiMode::default(),
+            download_dir: None,
+            data_dir: None,
+            device_name: None,
+            discovery_loopback: false,
+            discovery_port: DISCOVERY_PORT,
+            system_clipboard: false,
+        }
+    }
 }
 
 /// A started daemon: LAN transport, core, and control API.
@@ -85,6 +107,12 @@ impl RunningService {
         request: RunRequest,
         plugins: impl FnOnce(Arc<dyn ClipboardService + Send + Sync>) -> Vec<Arc<dyn Plugin>>,
     ) -> Result<Self> {
+        if !request.discovery_loopback && request.discovery_port != DISCOVERY_PORT {
+            bail!(
+                "discovery port {} needs loopback discovery: devices on the network listen on {DISCOVERY_PORT}",
+                request.discovery_port
+            );
+        }
         let config_dir = request
             .data_dir
             .clone()
@@ -144,7 +172,7 @@ impl RunningService {
         let shutdown = CancellationToken::new();
         let capabilities = core.capabilities();
         let lan_config = if request.discovery_loopback {
-            LanConfig::loopback(DISCOVERY_PORT)
+            LanConfig::loopback(request.discovery_port)
         } else {
             LanConfig::default()
         };
@@ -237,6 +265,18 @@ fn default_download_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn only_loopback_discovery_takes_another_port() {
+        let error = RunningService::start(RunRequest {
+            discovery_port: 25123,
+            ..RunRequest::default()
+        })
+        .await
+        .err()
+        .expect("a LAN run on another port is refused");
+        assert!(error.to_string().contains("needs loopback discovery"));
+    }
 
     #[test]
     fn device_names_from_host_names_fit_the_identity_schema() {

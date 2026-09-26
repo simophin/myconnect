@@ -24,6 +24,7 @@ use ferry::{
         notifications::{Notification, NotificationPosted, NotificationRemoved},
         ping::ReceivedPing,
     },
+    transport::lan::DISCOVERY_PORT,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -87,6 +88,12 @@ enum Command {
         /// devices on the LAN can neither discover nor reach this one.
         #[arg(long)]
         discovery_loopback: bool,
+        /// UDP port loopback discovery uses instead of 1716. On Linux a
+        /// Ferry or KDE Connect on this machine that isn't on loopback hears
+        /// loopback announcements on 1716 and connects; another port keeps
+        /// this instance apart from it. Instances meet only on the same port.
+        #[arg(long, value_name = "PORT", requires = "discovery_loopback")]
+        discovery_port: Option<u16>,
         /// Sync the desktop clipboard instead of an in-memory one, which
         /// only `ferry-cli clipboard` can read and write.
         #[arg(long)]
@@ -249,6 +256,7 @@ impl Cli {
             download_dir,
             device_name,
             discovery_loopback,
+            discovery_port,
             system_clipboard,
         } = command
         {
@@ -268,6 +276,7 @@ impl Cli {
                 data_dir,
                 device_name,
                 discovery_loopback,
+                discovery_port: discovery_port.unwrap_or(DISCOVERY_PORT),
                 system_clipboard,
             };
             return ferry::daemon::run_service(request).await;
@@ -868,6 +877,13 @@ mod tests {
             vec!["ferry-cli", "--data-dir", "/tmp/ferry", "devices"],
             vec!["ferry-cli", "run", "--device-name", "My Desktop"],
             vec!["ferry-cli", "run", "--discovery-loopback"],
+            vec![
+                "ferry-cli",
+                "run",
+                "--discovery-loopback",
+                "--discovery-port",
+                "25123",
+            ],
             vec!["ferry-cli", "run", "--system-clipboard"],
             vec![
                 "ferry-cli",
@@ -935,6 +951,11 @@ mod tests {
             Cli::try_parse_from(&arguments)
                 .unwrap_or_else(|error| panic!("failed to parse {arguments:?}: {error}"));
         }
+    }
+
+    #[test]
+    fn a_discovery_port_needs_loopback_discovery() {
+        assert!(Cli::try_parse_from(["ferry", "run", "--discovery-port", "25123"]).is_err());
     }
 
     #[test]

@@ -6,8 +6,9 @@
 //! ```
 //!
 //! It listens for loopback discovery announcements on UDP
-//! 127.255.255.255:1716 (shared with other local instances, and off the
-//! LAN), dials only the desktop with `DESKTOP_ID`, accepts its
+//! 127.255.255.255:1716, or on the port in `FERRY_DISCOVERY_PORT` when the
+//! desktop was given `--discovery-port` (shared with other local instances
+//! on that port, and off the LAN), dials only the desktop with `DESKTOP_ID`, accepts its
 //! pairing request, and serves `STORAGE_DIR` as the phone's storage: its
 //! `internal` folder as "Internal storage" and its `sdcard` folder as
 //! "SD card". Start the desktop with loopback discovery so its
@@ -32,6 +33,10 @@ async fn main() {
             std::process::exit(2);
         }
     };
+    let discovery_port = match std::env::var("FERRY_DISCOVERY_PORT") {
+        Ok(port) => port.parse().expect("FERRY_DISCOVERY_PORT is a port number"),
+        Err(_) => DISCOVERY_PORT,
+    };
     let storage = PathBuf::from(storage);
     for root in ["internal", "sdcard"] {
         std::fs::create_dir_all(storage.join(root)).expect("storage folders can be created");
@@ -47,7 +52,7 @@ async fn main() {
         ]),
         wrong_host_key: false,
         desktop_id: Some(desktop_id.clone()),
-        discovery_bind: SocketAddr::from((LOOPBACK_BROADCAST, DISCOVERY_PORT)),
+        discovery_bind: SocketAddr::from((LOOPBACK_BROADCAST, discovery_port)),
     })
     .await;
     println!("Fake phone {} waiting for {desktop_id}", phone.device_id);
