@@ -54,6 +54,10 @@ struct Args {
     /// Token the CLI must present; a random one by default.
     #[arg(long, env = API_TOKEN_ENV, value_name = "TOKEN", hide_env_values = true)]
     api_token: Option<String>,
+    /// Start in the tray without opening the window, as when started on
+    /// login. The window opens anyway if there is no tray.
+    #[arg(long)]
+    background: bool,
     /// Add made-up paired devices that change over time, to see the UI
     /// without real ones.
     #[arg(long)]
@@ -119,6 +123,7 @@ fn main() -> Result<()> {
             demo: args.demo,
             version: env!("MYCONNECT_APP_VERSION").into(),
             data_dir,
+            background: args.background,
         },
         start,
     );

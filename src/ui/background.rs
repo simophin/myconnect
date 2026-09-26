@@ -609,6 +609,28 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn started_on_login_it_stays_in_the_tray_unless_there_is_none() {
+        let fakes = Fakes {
+            background: true,
+            ..Fakes::default()
+        };
+        assert!(
+            app_on(tokio::runtime::Handle::current(), &fakes)
+                .window
+                .is_none()
+        );
+        let no_tray = Fakes {
+            no_tray: true,
+            ..fakes
+        };
+        assert!(
+            app_on(tokio::runtime::Handle::current(), &no_tray)
+                .window
+                .is_some()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn the_window_placement_is_saved_once_it_stays_put() {
         let dir = tempfile::tempdir().unwrap();
         let fakes = Fakes {

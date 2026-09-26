@@ -1,6 +1,6 @@
 //! The Settings page: the daemon's settings, which are where every user
-//! preference lives, each saved as soon as it changes. Features add their
-//! own sections (clipboard: "Sync clipboard") through
+//! preference lives, each saved as soon as it changes, and starting on
+//! login, which the system keeps. Features add their own sections (clipboard: "Sync clipboard") through
 //! [`settings_sections`](crate::ui::features::Features::settings_sections).
 
 use iced::{
@@ -27,21 +27,30 @@ pub struct Actions<M> {
     /// Pick the folder received files are saved in.
     pub choose_download_dir: M,
     pub set_close_to_tray: fn(bool) -> M,
+    pub set_start_on_login: fn(bool) -> M,
 }
 
 /// The settings `store` holds, with the features' `sections` of them
-/// after the download folder. `version` is the app's.
+/// after the download folder. `version` is the app's, and
+/// `start_on_login` whether the system starts it at login.
 pub fn view<'a, M: Clone + 'a>(
     store: &'a Store,
     sections: impl FnOnce(&'a SettingsSnapshot) -> Vec<Element<'a, M>>,
     version: &'a str,
+    start_on_login: bool,
     actions: Actions<M>,
 ) -> Element<'a, M> {
     let header = widgets::page_header("Settings", Some(actions.back.clone()), vec![]);
     let body = match store.settings() {
         Load::Loading => widgets::loading("Loading settings…"),
         Load::Failed(error) => widgets::error_view(error.as_str(), Some(actions.retry)),
-        Load::Loaded(settings) => list(settings, sections(settings), version, actions),
+        Load::Loaded(settings) => list(
+            settings,
+            sections(settings),
+            version,
+            start_on_login,
+            actions,
+        ),
     };
     widgets::page(header, body)
 }
@@ -50,6 +59,7 @@ fn list<'a, M: Clone + 'a>(
     settings: &'a SettingsSnapshot,
     sections: Vec<Element<'a, M>>,
     version: &'a str,
+    start_on_login: bool,
     actions: Actions<M>,
 ) -> Element<'a, M> {
     let edit = || Some(lucide::pencil().size(16).style(text::secondary).into());
@@ -81,6 +91,13 @@ fn list<'a, M: Clone + 'a>(
             settings.close_to_tray,
             actions.set_close_to_tray,
         ))
+        .push(widgets::switch_setting(
+            lucide::power,
+            "Start when you log in",
+            "Open in the tray, ready for your devices",
+            start_on_login,
+            actions.set_start_on_login,
+        ))
         .push(widgets::setting(
             lucide::info,
             "Version",
@@ -105,6 +122,7 @@ mod tests {
         Rename,
         Choose,
         CloseToTray(bool),
+        StartOnLogin(bool),
         Section(bool),
     }
 
@@ -115,6 +133,7 @@ mod tests {
             rename: Message::Rename,
             choose_download_dir: Message::Choose,
             set_close_to_tray: Message::CloseToTray,
+            set_start_on_login: Message::StartOnLogin,
         }
     }
 
@@ -138,7 +157,7 @@ mod tests {
         S: iced_test::selector::Selector + Send,
         S::Output: iced_test::selector::Bounded + Clone + Send + Sync + 'static,
     {
-        let mut ui = Simulator::new(view(store, sections, "1.2.3 (dev)", actions()));
+        let mut ui = Simulator::new(view(store, sections, "1.2.3 (dev)", false, actions()));
         ui.click(target).unwrap();
         ui.into_messages().collect()
     }
@@ -146,7 +165,7 @@ mod tests {
     #[test]
     fn every_setting_is_shown_with_its_value() {
         let store = store();
-        let mut ui = Simulator::new(view(&store, sections, "1.2.3 (dev)", actions()));
+        let mut ui = Simulator::new(view(&store, sections, "1.2.3 (dev)", false, actions()));
         for shown in [
             "Device name",
             "Desktop",
@@ -154,6 +173,7 @@ mod tests {
             "/home/me/Downloads",
             "Sync clipboard",
             "Keep running when the window is closed",
+            "Start when you log in",
             "Version",
             "1.2.3 (dev)",
         ] {
@@ -171,6 +191,10 @@ mod tests {
             clicked(&store, "Keep running when the window is closed"),
             [Message::CloseToTray(false)]
         );
+        assert_eq!(
+            clicked(&store, "Start when you log in"),
+            [Message::StartOnLogin(true)]
+        );
         assert_eq!(clicked(&store, "Sync clipboard"), [Message::Section(false)]);
         assert_eq!(
             clicked(&store, iced::widget::Id::from("Back")),
@@ -181,7 +205,7 @@ mod tests {
     #[test]
     fn loading_and_failure_have_their_own_views() {
         let loading = Store::default();
-        let mut ui = Simulator::new(view(&loading, sections, "", actions()));
+        let mut ui = Simulator::new(view(&loading, sections, "", false, actions()));
         assert!(ui.find("Loading settings…").is_ok());
 
         let mut failed = Store::default();
@@ -198,7 +222,13 @@ mod tests {
     fn snapshot_settings() {
         let store = store();
         testing::snapshot("settings", (440.0, 620.0), || {
-            view(&store, sections, "0.1.0 (v1.1.0-19-geeba428)", actions())
+            view(
+                &store,
+                sections,
+                "0.1.0 (v1.1.0-19-geeba428)",
+                false,
+                actions(),
+            )
         });
     }
 }
