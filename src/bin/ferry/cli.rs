@@ -78,6 +78,12 @@ enum Command {
         /// devices on the LAN can neither discover nor reach this one.
         #[arg(long)]
         discovery_loopback: bool,
+        /// UDP port loopback discovery uses instead of 1716. On Linux a
+        /// Ferry or KDE Connect on this machine that isn't on loopback hears
+        /// loopback announcements on 1716 and connects; another port keeps
+        /// this instance apart from it. Instances meet only on the same port.
+        #[arg(long, value_name = "PORT", requires = "discovery_loopback")]
+        discovery_port: Option<u16>,
         /// Sync the desktop clipboard instead of an in-memory one, which
         /// only `ferry clipboard` can read and write.
         #[arg(long)]
@@ -240,6 +246,7 @@ impl Cli {
             data_dir,
             device_name,
             discovery_loopback,
+            discovery_port,
             system_clipboard,
         } = command
         {
@@ -252,6 +259,9 @@ impl Cli {
                 system_clipboard,
                 ..RunRequest::default()
             };
+            if let Some(port) = discovery_port {
+                request.discovery_port = port;
+            }
             if let Some(host) = api_host {
                 request.api_host = host
                     .parse::<IpAddr>()
@@ -837,6 +847,13 @@ mod tests {
             vec!["ferry", "run", "--data-dir", "/tmp/ferry"],
             vec!["ferry", "run", "--device-name", "My Desktop"],
             vec!["ferry", "run", "--discovery-loopback"],
+            vec![
+                "ferry",
+                "run",
+                "--discovery-loopback",
+                "--discovery-port",
+                "25123",
+            ],
             vec!["ferry", "run", "--system-clipboard"],
             vec![
                 "ferry",
@@ -891,6 +908,11 @@ mod tests {
             Cli::try_parse_from(&arguments)
                 .unwrap_or_else(|error| panic!("failed to parse {arguments:?}: {error}"));
         }
+    }
+
+    #[test]
+    fn a_discovery_port_needs_loopback_discovery() {
+        assert!(Cli::try_parse_from(["ferry", "run", "--discovery-port", "25123"]).is_err());
     }
 
     #[test]

@@ -20,6 +20,7 @@ use ferry::{
     config::ApiToken,
     daemon::{RunRequest, RunningService},
     plugins,
+    transport::lan::DISCOVERY_PORT,
     ui::{self, UiOptions},
 };
 
@@ -40,6 +41,16 @@ struct Args {
     /// Keep discovery and connections on loopback, off the LAN.
     #[arg(long, env = "FERRY_DISCOVERY_LOOPBACK", value_parser = BoolishValueParser::new())]
     discovery_loopback: bool,
+    /// UDP port loopback discovery uses instead of 1716, to keep this
+    /// instance apart from a Ferry or KDE Connect on this machine that
+    /// isn't on loopback (on Linux it hears loopback announcements on 1716).
+    #[arg(
+        long,
+        env = "FERRY_DISCOVERY_PORT",
+        value_name = "PORT",
+        requires = "discovery_loopback"
+    )]
+    discovery_port: Option<u16>,
     /// Sync an in-memory clipboard instead of the desktop's.
     #[arg(long, env = "FERRY_NO_SYSTEM_CLIPBOARD", value_parser = BoolishValueParser::new())]
     no_system_clipboard: bool,
@@ -84,6 +95,7 @@ fn main() -> Result<()> {
         download_dir: args.download_dir,
         device_name: args.device_name,
         discovery_loopback: args.discovery_loopback,
+        discovery_port: args.discovery_port.unwrap_or(DISCOVERY_PORT),
         system_clipboard: !args.no_system_clipboard,
         api_host: IpAddr::V4(Ipv4Addr::LOCALHOST),
         api_port: args.api_port,

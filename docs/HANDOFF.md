@@ -284,18 +284,20 @@ The UI's traps. Those about driving the app under Xvfb are in
 
 Isolate every run as [`../CLAUDE.md`](../CLAUDE.md) describes: fresh
 temporary data and download dirs, a free port, loopback discovery, and a
-private display and D-Bus session.
+private display and D-Bus session. `$udp` is a free UDP port (CLAUDE.md,
+"Network"), the same for the app and its peers, so the owner's own Ferry
+or KDE Connect doesn't see them.
 
 ```sh
 dir=$(mktemp -d -p "$scratchpad")
 # peer
-cargo run -- --api-port "$port" run --discovery-loopback \
+cargo run -- --api-port "$port" run --discovery-loopback --discovery-port "$udp" \
   --data-dir "$dir/peer" --download-dir "$dir/peer-downloads" \
   --device-name "CLI Peer"
 # app (separate identity, loopback only), on a private display and bus
 env -u WAYLAND_DISPLAY ICED_BACKEND=tiny-skia \
   dbus-run-session -- xvfb-run --auto-servernum \
-  cargo run -p ferry-gui -- --discovery-loopback \
+  cargo run -p ferry-gui -- --discovery-loopback --discovery-port "$udp" \
     --data-dir "$dir/app" --download-dir "$dir/app-downloads" \
     --device-name "UI Desktop" --api-port "$app_port"
 ```
@@ -306,7 +308,7 @@ with the peer, `send` to it, list its transfers. `--demo` fills the app
 with made-up paired devices, for looking at the UI without a peer.
 
 To try file browsing without a phone, run
-`cargo run --example fake_phone -- <DATA_DIR> <STORAGE_DIR> <DESKTOP_ID> [NAME]`
+`FERRY_DISCOVERY_PORT="$udp" cargo run --example fake_phone -- <DATA_DIR> <STORAGE_DIR> <DESKTOP_ID> [NAME]`
 as the peer instead. It dials the desktop once, on the first
 announcement it hears, so restart it (same data dir) after the desktop
 restarts. It trusts the desktop's key only after a pairing request in the
