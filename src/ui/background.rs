@@ -64,27 +64,28 @@ pub(crate) fn tray_menu(running: Option<(&Store, &Features)>) -> Vec<TrayItem> {
     menu
 }
 
-/// A device's submenu, "{name} · {status}", holding the features' actions
-/// meant for the tray, then Show details.
+/// A device's submenu, under its name: its statuses (its battery), shown
+/// disabled, then the features' actions meant for the tray, then Show
+/// details.
 fn device_menu(device: &DeviceSnapshot, features: &Features) -> TrayItem {
-    let status = features.device_statuses(device).into_iter().next();
-    let label = match status {
-        Some(status) => fl!(
-            "tray-device-status",
-            name = device.device_name.as_str(),
-            status = status.label
-        ),
-        None => device.device_name.clone(),
-    };
     let mut items: Vec<_> = features
-        .device_actions(device)
+        .device_statuses(device)
         .into_iter()
-        .filter(|action| action.visible_in_tray)
-        .map(|action| {
-            let command = action.enabled.then(|| TrayCommand::Action(action.message));
-            TrayItem::item(action.label, command)
-        })
+        .map(|status| TrayItem::item(status.label, None))
         .collect();
+    if !items.is_empty() {
+        items.push(TrayItem::Separator);
+    }
+    items.extend(
+        features
+            .device_actions(device)
+            .into_iter()
+            .filter(|action| action.visible_in_tray)
+            .map(|action| {
+                let command = action.enabled.then(|| TrayCommand::Action(action.message));
+                TrayItem::item(action.label, command)
+            }),
+    );
     items.extend([
         TrayItem::Separator,
         TrayItem::item(
@@ -92,7 +93,10 @@ fn device_menu(device: &DeviceSnapshot, features: &Features) -> TrayItem {
             Some(TrayCommand::ShowDevice(device.device_id.clone())),
         ),
     ]);
-    TrayItem::Submenu { label, items }
+    TrayItem::Submenu {
+        label: device.device_name.clone(),
+        items,
+    }
 }
 
 /// The desktop notifications the shell shows, and which pairing request
@@ -813,7 +817,7 @@ mod tests {
             [
                 "Open Ferry",
                 "-",
-                "Peer · 82%",
+                "Peer",
                 "-",
                 "Settings",
                 "About Ferry",
@@ -821,9 +825,10 @@ mod tests {
                 "Quit"
             ]
         );
-        assert!(tray_enabled(&fakes, &["Peer · 82%", "Ping"]));
-        assert!(tray_enabled(&fakes, &["Peer · 82%", "Ring"]));
-        assert!(tray_enabled(&fakes, &["Peer · 82%", "Show details"]));
+        assert!(!tray_enabled(&fakes, &["Peer", "82%"]));
+        assert!(tray_enabled(&fakes, &["Peer", "Ping"]));
+        assert!(tray_enabled(&fakes, &["Peer", "Ring"]));
+        assert!(tray_enabled(&fakes, &["Peer", "Show details"]));
     }
 
     #[tokio::test(start_paused = true)]

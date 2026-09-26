@@ -93,7 +93,6 @@ shell-autostart-comment = 在系统托盘中启动 Ferry
 tray-open = 打开 Ferry
 tray-no-paired-devices = 没有已配对的设备
 tray-no-devices-connected = 没有已连接的设备
-tray-device-status = { $name } · { $status }
 tray-show-details = 显示详情
 tray-settings = 设置
 tray-about = 关于 Ferry
