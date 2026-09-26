@@ -213,7 +213,7 @@ mod tests {
             devices: Ok(Vec::new()),
             pairings: Ok(Vec::new()),
             transfers: Vec::new(),
-            settings: Err("MyConnect isn’t running.".into()),
+            settings: Err("Ferry isn’t running.".into()),
         });
         assert_eq!(clicked(&failed, "Retry"), [Message::Retry]);
     }

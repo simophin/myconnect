@@ -4,7 +4,7 @@
 #   pkgbuild.sh TAG AMD64_DEB ARM64_DEB > PKGBUILD
 #
 # TAG is the release's tag (the .debs are downloaded from it); the .debs are
-# the release's packages, named myconnect_<version>_<arch>.deb.
+# the release's packages, named ferry_<version>_<arch>.deb.
 set -eu
 
 if [ $# -ne 3 ]; then
@@ -15,9 +15,9 @@ tag=$1
 amd64=$2
 arm64=$3
 
-debver=$(basename "$amd64" | sed -n 's/^myconnect_\(.*\)_amd64\.deb$/\1/p')
-if [ -z "$debver" ] || [ "$(basename "$arm64")" != "myconnect_${debver}_arm64.deb" ]; then
-  echo "pkgbuild.sh: expected myconnect_<version>_amd64.deb and _arm64.deb of the same version" >&2
+debver=$(basename "$amd64" | sed -n 's/^ferry_\(.*\)_amd64\.deb$/\1/p')
+if [ -z "$debver" ] || [ "$(basename "$arm64")" != "ferry_${debver}_arm64.deb" ]; then
+  echo "pkgbuild.sh: expected ferry_<version>_amd64.deb and _arm64.deb of the same version" >&2
   exit 1
 fi
 # pkgver can't contain "-", ":" or "/"; release versions are MAJOR.MINOR.PATCH.

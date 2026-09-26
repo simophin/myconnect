@@ -2,7 +2,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use myconnect::{
+use ferry::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     core::{
         Core, CoreError, CoreEvent, EventData, LanCommand, LocalDeviceSnapshot, PairingDirection,
@@ -44,7 +44,7 @@ fn harness() -> Harness {
         8,
         local_public_key,
         trust_store.clone(),
-        myconnect::plugins::builtin(InMemoryClipboard::shared()),
+        ferry::plugins::builtin(InMemoryClipboard::shared()),
         8,
         32,
         local_identity,

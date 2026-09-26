@@ -108,7 +108,7 @@ mod macos {
         mac_usernotifications::check_bundle()?;
         // Asks the user the first time; after that, it answers at once.
         if !mac_usernotifications::request_auth().await? {
-            tracing::info!("notifications are turned off for MyConnect in System Settings");
+            tracing::info!("notifications are turned off for Ferry in System Settings");
         }
         // The center's id for each notification showing, by the shell's.
         let mut showing: HashMap<u32, String> = HashMap::new();
@@ -233,7 +233,7 @@ mod dbus {
                             .call::<_, _, u32>(
                                 "Notify",
                                 &(
-                                    "MyConnect",
+                                    "Ferry",
                                     0_u32,
                                     "",
                                     title.as_str(),

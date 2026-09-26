@@ -24,7 +24,7 @@ use std::{
     time::Duration,
 };
 
-use myconnect::{
+use ferry::{
     config::LocalIdentity,
     plugins::{
         battery::PACKET_TYPE as BATTERY_PACKET_TYPE,

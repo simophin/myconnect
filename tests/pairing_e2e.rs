@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use myconnect::{
+use ferry::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     core::{
         Core, DeviceReachability, EventData, LanCommand, LocalDeviceSnapshot, PairingDirection,
@@ -48,11 +48,11 @@ fn peer(name: &str) -> Peer {
         8,
         public_key_der,
         trust_store.clone(),
-        myconnect::plugins::builtin(InMemoryClipboard::shared()),
+        ferry::plugins::builtin(InMemoryClipboard::shared()),
         32,
         128,
         identity.clone(),
-        myconnect::core::TransferConfig::new(directory.path().join("downloads")),
+        ferry::core::TransferConfig::new(directory.path().join("downloads")),
     )
     .unwrap();
     Peer {
@@ -270,11 +270,11 @@ fn peer_reusing(
         8,
         public_key_der,
         trust_store.clone(),
-        myconnect::plugins::builtin(InMemoryClipboard::shared()),
+        ferry::plugins::builtin(InMemoryClipboard::shared()),
         32,
         128,
         identity.clone(),
-        myconnect::core::TransferConfig::new(directory.path().join("downloads")),
+        ferry::core::TransferConfig::new(directory.path().join("downloads")),
     )
     .unwrap();
     Peer {

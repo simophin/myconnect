@@ -56,7 +56,7 @@ for points in 16 32 128 256 512; do
 done
 
 # Windows: one .ico holding every size Explorer and the taskbar ask for,
-# embedded in myConnect.exe (gui/build.rs) and used by the installer.
+# embedded in Ferry.exe (gui/build.rs) and used by the installer.
 # ImageMagick stores the 256 px image as PNG and the rest as bitmaps.
 mkdir -p windows
 ico_parts=()
@@ -69,7 +69,7 @@ magick "${ico_parts[@]}" windows/app_icon.ico
 # Linux: a hicolor icon theme, named after the application ID, which the
 # .deb installs to /usr/share/icons for the window and the menu entry.
 hicolor=linux/hicolor
-app_id=org.myconnect.MyConnect
+app_id=dev.fanchao.Ferry
 for size in 16 24 32 48 64 128 256 512; do
   mkdir -p "$hicolor/${size}x$size/apps"
   render "$(svg_for "$size")" "$size" "$tmp/linux.png"

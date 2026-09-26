@@ -1,6 +1,6 @@
-//! The MyConnect desktop app: the composition root for the daemon and its
+//! The Ferry desktop app: the composition root for the daemon and its
 //! UI in one process. It reads the flags and runs the UI
-//! (`myconnect::ui`) with a way to start the daemon with every plugin; the
+//! (`ferry::ui`) with a way to start the daemon with every plugin; the
 //! UI starts it (again on Retry) and shuts it down on exit.
 
 // No console window behind the app on Windows, except in debug builds,
@@ -15,7 +15,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::{Parser, builder::BoolishValueParser};
-use myconnect::{
+use ferry::{
     client::API_TOKEN_ENV,
     config::ApiToken,
     daemon::{RunRequest, RunningService},
@@ -23,33 +23,28 @@ use myconnect::{
     ui::{self, UiOptions},
 };
 
-/// The MyConnect desktop app. Each flag can also be set through the
+/// The Ferry desktop app. Each flag can also be set through the
 /// environment variable named after it.
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Args {
     /// Directory holding identity, trust and settings.
-    #[arg(long, env = "MYCONNECT_DATA_DIR", value_name = "DIRECTORY")]
+    #[arg(long, env = "FERRY_DATA_DIR", value_name = "DIRECTORY")]
     data_dir: Option<PathBuf>,
     /// Directory received files are saved to, for this run only.
-    #[arg(long, env = "MYCONNECT_DOWNLOAD_DIR", value_name = "DIRECTORY")]
+    #[arg(long, env = "FERRY_DOWNLOAD_DIR", value_name = "DIRECTORY")]
     download_dir: Option<PathBuf>,
     /// Name this device advertises, for this run only.
-    #[arg(long, env = "MYCONNECT_DEVICE_NAME", value_name = "NAME")]
+    #[arg(long, env = "FERRY_DEVICE_NAME", value_name = "NAME")]
     device_name: Option<String>,
     /// Keep discovery and connections on loopback, off the LAN.
-    #[arg(long, env = "MYCONNECT_DISCOVERY_LOOPBACK", value_parser = BoolishValueParser::new())]
+    #[arg(long, env = "FERRY_DISCOVERY_LOOPBACK", value_parser = BoolishValueParser::new())]
     discovery_loopback: bool,
     /// Sync an in-memory clipboard instead of the desktop's.
-    #[arg(long, env = "MYCONNECT_NO_SYSTEM_CLIPBOARD", value_parser = BoolishValueParser::new())]
+    #[arg(long, env = "FERRY_NO_SYSTEM_CLIPBOARD", value_parser = BoolishValueParser::new())]
     no_system_clipboard: bool,
     /// Port of the HTTP API the CLI uses; 0 picks a free one.
-    #[arg(
-        long,
-        env = "MYCONNECT_API_PORT",
-        value_name = "PORT",
-        default_value_t = 0
-    )]
+    #[arg(long, env = "FERRY_API_PORT", value_name = "PORT", default_value_t = 0)]
     api_port: u16,
     /// Token the CLI must present; a random one by default.
     #[arg(long, env = API_TOKEN_ENV, value_name = "TOKEN", hide_env_values = true)]
@@ -75,7 +70,7 @@ fn main() -> Result<()> {
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .thread_name("myconnect")
+        .thread_name("ferry")
         .build()
         .context("could not start async runtime")?;
     let api_token = match args.api_token {
@@ -121,7 +116,7 @@ fn main() -> Result<()> {
         UiOptions {
             runtime: runtime.handle().clone(),
             demo: args.demo,
-            version: env!("MYCONNECT_APP_VERSION").into(),
+            version: env!("FERRY_APP_VERSION").into(),
             data_dir,
             background: args.background,
         },

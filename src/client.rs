@@ -1,4 +1,4 @@
-//! Client for the local MyConnect control API.
+//! Client for the local Ferry control API.
 
 use std::{env, future::Future, net::Ipv4Addr, path::Path, pin::Pin, time::Duration};
 
@@ -28,8 +28,8 @@ use crate::{
     },
 };
 
-pub const API_URL_ENV: &str = "MYCONNECT_API_URL";
-pub const API_TOKEN_ENV: &str = "MYCONNECT_API_TOKEN";
+pub const API_URL_ENV: &str = "FERRY_API_URL";
+pub const API_TOKEN_ENV: &str = "FERRY_API_TOKEN";
 
 pub type EventStream = Pin<Box<dyn Stream<Item = Result<CoreEvent, ClientError>> + Send + 'static>>;
 pub type ByteStream =
@@ -56,7 +56,7 @@ impl ApiClient {
 
     /// Like [`ApiClient::from_environment`], but explicit values (e.g. from
     /// `--api-host`/`--api-port`/`--api-token` flags) take precedence over the
-    /// `MYCONNECT_API_URL` and `MYCONNECT_API_TOKEN` environment variables.
+    /// `FERRY_API_URL` and `FERRY_API_TOKEN` environment variables.
     /// Without a token from either source, requests are sent unauthenticated.
     pub fn from_environment_with(
         base_url_override: Option<String>,
@@ -796,7 +796,7 @@ struct Problem {
 
 #[derive(Debug, Error)]
 pub enum ClientError {
-    #[error("the MyConnect daemon is unavailable; start it with `myconnect run`")]
+    #[error("the Ferry daemon is unavailable; start it with `ferry run`")]
     DaemonUnavailable,
     #[error("the daemon requires a valid API token; pass --api-token or set {API_TOKEN_ENV}")]
     Unauthorized,

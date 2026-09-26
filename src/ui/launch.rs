@@ -78,7 +78,7 @@ pub fn run(options: UiOptions, start: impl Fn() -> StartFuture + 'static) -> Res
     if let Some(data_dir) = &data_dir
         && let Instance::Running = instance::claim(data_dir, events.clone())
     {
-        tracing::info!("MyConnect is already running; showing its window");
+        tracing::info!("Ferry is already running; showing its window");
         return Ok(());
     }
     // Before the daemon starts, so the tray works even if it doesn't.
@@ -124,7 +124,7 @@ pub fn program(
         }
     };
     let program = iced::daemon(boot, App::update, App::view)
-        .title("MyConnect")
+        .title("Ferry")
         .subscription(App::subscription)
         .font(iced_fonts::LUCIDE_FONT_BYTES);
     (program, service)

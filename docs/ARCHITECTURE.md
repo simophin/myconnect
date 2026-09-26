@@ -1,4 +1,4 @@
-# MyConnect architecture
+# Ferry architecture
 
 This document describes the system as implemented today: module boundaries,
 data flow, the HTTP API surface, and the state machines that govern pairing
@@ -13,12 +13,12 @@ behavior.
 
 ## 1. Shape of the system
 
-MyConnect is a Cargo workspace: the `myconnect` package (one library,
+Ferry is a Cargo workspace: the `ferry` package (one library,
 `src/lib.rs`, plus a CLI binary that is a thin client of it), and the
-`myconnect-gui` package (`gui/`), the desktop app.
+`ferry-gui` package (`gui/`), the desktop app.
 
 ```text
-CLI (myconnect)       ─┬── local HTTP API (/api/v1) ──┐
+CLI (ferry)           ─┬── local HTTP API (/api/v1) ──┐
 Other automation      ─┘                              ├── core + plugins ── KDE Connect transport
 Desktop app (gui/)    ─── in-process: snapshots, events, typed calls ─┘
 ```
@@ -42,8 +42,8 @@ it is given. The set of plugins is fixed at compile time, listed in
 ABI. Boundaries are kept by module visibility and review, in one crate.
 
 ```text
-binary (src/bin/myconnect) → daemon, client
-gui (myconnect-gui) → daemon, ui, plugins::builtin_parts    [feature "gui"]
+binary (src/bin/ferry) → daemon, client
+gui (ferry-gui) → daemon, ui, plugins::builtin_parts    [feature "gui"]
 ui → core (snapshots, events), protocol (types only)         [feature "gui"]
 ui::features → ui (shell messages, widgets), plugins/* (typed APIs), core   [feature "gui"]
 daemon → core, plugins::builtin, api, transport (the composition root)
@@ -79,9 +79,9 @@ and `plugins` never import `ui`.
 | `daemon` | `src/daemon.rs` | The composition root: `RunningService` builds the core with `plugins::builtin()`, applies the stored settings, starts the plugins, the LAN transport (advertising the core's capabilities) and the API, and stops them in order. Used by the CLI's `run` and by the desktop app. `start_with` takes the plugin list from the caller (the desktop app, which keeps each plugin's UI half), and `core()` hands the running core to a frontend in the same process. |
 | `api` | `src/api.rs`, `src/api/upload.rs` | The Axum server: the core's routes (`/status`, `/discovery`, `/devices`, `/pairings`, `/transfers`, `/settings`, `/events`), every plugin's routes merged in, `ApiProblem` (the `application/problem+json` error every handler returns, with `From<CoreError>`), optional bearer-token auth, body-size limits, request deadline and SSE. Streaming routes (every plugin's `streaming_routes`) get the transfer-sized body limit and no request deadline; `upload` has the helpers they share (idle timeout, forwarding a multipart file part into a transfer until the part or the transfer ends, and the lingering close that drains an upload a handler answered before reading to its end). |
 | `client` | `src/client.rs` | Typed HTTP client used by the CLI (and any future frontend) to talk to `api`. |
-| `src/bin/myconnect` | `cli.rs`, `main.rs` | Argument parsing and daemon bootstrap only. |
+| `src/bin/ferry` | `cli.rs`, `main.rs` | Argument parsing and daemon bootstrap only. |
 | `ui` | `src/ui/{mod,launch,shell,background,drops,actions,context,route,store,sync,activity,demo,error,widgets,testing,tests}.rs`, `src/ui/pages/*.rs`, `src/ui/overlay/*.rs`, `src/ui/desktop/*.rs`, `src/ui/features/{mod,ping,findmyphone,battery,clipboard,share}.rs`, `src/ui/features/browse/{mod,view,preview,files,describe}.rs` | The desktop UI in iced, behind the `gui` feature ([`adr/0001`](adr/0001-native-ui-in-iced.md)). It runs in the daemon's process and reads the core directly (§9): `sync` subscribes to the event bus, then takes a snapshot into `store`, and takes a fresh one after a lag. `mod` holds `App`, the one app `Message`, `update`'s dispatch, `view` and `subscription`; `launch` the entry points (`run`, `UiOptions`, `Started`), booting and Retry; `route` the typed routes. Each feature's UI is a module under `features/`, and `features/mod.rs` is the one place that lists them: the `Feature` message enum, and `Features`, whose functions the shell calls to fill its slots (the device card's status chips, the device page's and the tray's actions, drop targets, the file browser's page, the settings page's sections) and to pass on route changes and core events, calling each feature by name in `builtin()` order. Features ask the shell for things through plain `Message`s built by `shell`'s helpers (toast, report, notify, navigate, pick files, confirm, prompt), carrying the `Origin` (window or tray) of the action that caused them; `shell` also holds the `App` side of those requests. The pages the core owns are shell code: devices, device, Add device, pairing (and the incoming pairing prompt, drawn over every page while a request waits), transfers, settings, and the startup and error screens; `actions` is what they ask of the core. `drops` routes dropped files and the recipient chooser. `background` is the window's life (show, close to the tray, quit, placement), the tray and notifications; `desktop` holds the platform glue behind small traits (the tray, notifications, dialogs with `rfd`, opening files with `opener`, the saved window placement, the single-instance socket, the login item), so tests swap in fakes. `demo` fills the core with made-up devices for `--demo`; `tests` is the shell's shared test harness. |
-| `myconnect-gui` | `gui/src/main.rs` | The desktop app's composition root: flags (each also an environment variable), starting the daemon through `RunningService::start_with` and `plugins::builtin_parts()`, running `ui::run`, and shutting the daemon down after. |
+| `ferry-gui` | `gui/src/main.rs` | The desktop app's composition root: flags (each also an environment variable), starting the daemon through `RunningService::start_with` and `plugins::builtin_parts()`, running `ui::run`, and shutting the daemon down after. |
 
 ### The `Plugin` trait
 
@@ -278,7 +278,7 @@ States: `queued → connecting → transferring → completed | cancelled | fail
 - Backends implement `ClipboardService`. `SystemClipboard` is the desktop
   clipboard (`arboard`; on Linux the Wayland data-control protocol where the
   compositor has it, else X11/XWayland), selected by `RunRequest::
-  system_clipboard` (`myconnect run --system-clipboard`; the app turns it
+  system_clipboard` (`ferry run --system-clipboard`; the app turns it
   on unless given `--no-system-clipboard`). `InMemoryClipboard` is the
   default, for tests and headless runs, and the fallback when the desktop
   clipboard can't be opened (logged as a warning).
@@ -292,7 +292,7 @@ States: `queued → connecting → transferring → completed | cancelled | fail
   and non-text content (images) are not reported, and copies made while
   sync is off are dropped.
 - Sending to one device on request (`POST /devices/{deviceId}/clipboard`,
-  `myconnect clipboard send`, "Send clipboard" in the app and tray) covers
+  `ferry clipboard send`, "Send clipboard" in the app and tray) covers
   what automatic sync can miss, e.g. text already on the clipboard at start
   or a peer that dropped an update. It reads the clipboard itself (falling
   back to the snapshot), sends a plain `kdeconnect.clipboard` even if the
@@ -305,7 +305,7 @@ User preferences live in the daemon, in `settings.json` in the data
 directory, never in a client. Core fields: `deviceName`, `downloadDir`,
 and `closeToTray` (owned by the UI; the daemon stores it without
 interpreting it). A field missing from the file uses its default: the host
-name (first label, trimmed to a valid KDE Connect name, else "MyConnect"),
+name (first label, trimmed to a valid KDE Connect name, else "Ferry"),
 the platform download directory, `true`.
 
 - **Starting on login** is the app's alone, not a daemon setting: the
@@ -318,8 +318,8 @@ the platform download directory, `true`.
   turning it off, under `StartupApproved`, counts as off). It runs the app with
   `--background`, which starts it in the tray (the window opens anyway
   without a tray), and the `--data-dir` it was given. The entry is named
-  `org.myconnect.MyConnect` for the default data dir and
-  `org.myconnect.MyConnect-<hash of the data dir>` otherwise, so an
+  `dev.fanchao.Ferry` for the default data dir and
+  `dev.fanchao.Ferry-<hash of the data dir>` otherwise, so an
   instance on another data dir never touches the default one's. While
   it's on, the app rewrites it at each start, in case the app moved.
 
@@ -333,7 +333,7 @@ the platform download directory, `true`.
   read. `GET /settings` always lists every section, defaults filled in.
   The old top-level `clipboardSyncEnabled` is not migrated: a file that
   still has it is read as if it didn't, and it is dropped on the next save.
-- **Precedence.** A start option (`myconnect run --device-name` /
+- **Precedence.** A start option (`ferry run --device-name` /
   `--download-dir`, or the app's flags of the same names)
   overrides the stored value for that run only and is not saved. Changing
   that setting through `PATCH /settings` saves it and drops the override
@@ -356,11 +356,11 @@ the platform download directory, `true`.
 ## 8. HTTP API (`/api/v1`)
 
 Authentication is optional. When the daemon is started with a token
-(`myconnect run --api-token`, `MYCONNECT_API_TOKEN`, or always in the desktop
+(`ferry run --api-token`, `FERRY_API_TOKEN`, or always in the desktop
 app, which picks a random one unless given `--api-token`), every request must carry `Authorization: Bearer <token>`
 and gets a `401` otherwise. Without a token — the CLI default — any local
 client may call the API. Tokens are never persisted; clients pass the same
-`--api-token`/`MYCONNECT_API_TOKEN`. The server binds `127.0.0.1` by default;
+`--api-token`/`FERRY_API_TOKEN`. The server binds `127.0.0.1` by default;
 CORS is disabled. Errors use `application/problem+json`. Requests must finish
 within 15 seconds (`408 request_timeout`), except the file uploads (the
 streaming routes) and the event stream.
@@ -461,7 +461,7 @@ Standard verification before any change is considered done:
 cargo fmt --all --check
 cargo test --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
-cargo build -p myconnect   # the CLI alone, without iced
+cargo build -p ferry   # the CLI alone, without iced
 git diff --check
 ```
 
@@ -490,7 +490,7 @@ Prioritized next work, with implementation notes for each item, is in
   data-control (e.g. GNOME) fall back to XWayland, which is untested.
 - Devices added by IP address are not remembered: after a restart, a
   device only reachable that way has to be added again (or has to reach
-  this one first). Adding by address has been checked between MyConnect
+  this one first). Adding by address has been checked between Ferry
   instances only, not against KDE Connect.
 - No Bluetooth transport, no multi-file/directory
   transfer, no durable event replay, no remote/LAN exposure of the control
@@ -499,7 +499,7 @@ Prioritized next work, with implementation notes for each item, is in
 ## 12. Browsing a device's files
 
 KDE Connect for Android shares its storage over SFTP; no other KDE Connect
-client serves files. MyConnect is a client only: the UI's reasoning is in
+client serves files. Ferry is a client only: the UI's reasoning is in
 [`archive/flutter-adr/0008`](archive/flutter-adr/0008-browse-device-files-in-the-app.md),
 which [`adr/0001`](adr/0001-native-ui-in-iced.md) carries over.
 

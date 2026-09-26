@@ -88,7 +88,7 @@ impl SystemClipboard {
         let worker = {
             let current = current.clone();
             thread::Builder::new()
-                .name("myconnect-clipboard".into())
+                .name("ferry-clipboard".into())
                 .spawn(move || {
                     // Opened here because the clipboard may not be `Send`.
                     let mut worker = match open() {

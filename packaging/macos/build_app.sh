@@ -1,12 +1,12 @@
 #!/bin/sh
-# Assemble MyConnect.app from the app's binaries and pack it into a DMG.
+# Assemble Ferry.app from the app's binaries and pack it into a DMG.
 #
 #   build_app.sh VERSION BUILD DMG BINARY...
 #
-# Each BINARY is cargo's myconnect-gui for one architecture; with more than
+# Each BINARY is cargo's ferry-gui for one architecture; with more than
 # one, lipo joins them into a universal binary. VERSION is MAJOR.MINOR.PATCH
 # (macOS accepts nothing else) and BUILD a number. Writes the DMG, and leaves
-# MyConnect.app next to it. Needs macOS: lipo, iconutil, codesign and
+# Ferry.app next to it. Needs macOS: lipo, iconutil, codesign and
 # hdiutil.
 #
 # The bundle is ad-hoc signed and not sandboxed (docs/adr/0001,
@@ -30,10 +30,10 @@ assets=$packaging/../../assets
 minimum=${MACOSX_DEPLOYMENT_TARGET:-12.0}
 
 mkdir -p "$out_dir"
-app=$out_dir/MyConnect.app
+app=$out_dir/Ferry.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-lipo -create -output "$app/Contents/MacOS/myConnect" "$@"
+lipo -create -output "$app/Contents/MacOS/Ferry" "$@"
 sed -e "s|@VERSION@|$version|" -e "s|@BUILD@|$build|" \
   -e "s|@MINIMUM_SYSTEM_VERSION@|$minimum|" \
   "$packaging/Info.plist.in" >"$app/Contents/Info.plist"
@@ -41,7 +41,7 @@ plutil -lint "$app/Contents/Info.plist"
 printf 'APPL????' >"$app/Contents/PkgInfo"
 iconutil -c icns -o "$app/Contents/Resources/AppIcon.icns" \
   "$assets/macos/AppIcon.iconset"
-codesign --force --sign - --identifier org.myconnect.MyConnect "$app"
+codesign --force --sign - --identifier dev.fanchao.Ferry "$app"
 codesign --verify --strict --verbose=2 "$app"
 
 staging=$(mktemp -d)
@@ -49,5 +49,5 @@ trap 'rm -rf "$staging"' EXIT
 cp -R "$app" "$staging/"
 ln -s /Applications "$staging/Applications"
 rm -f "$dmg"
-hdiutil create -volname MyConnect -srcfolder "$staging" -format UDZO "$dmg"
+hdiutil create -volname Ferry -srcfolder "$staging" -format UDZO "$dmg"
 echo "$dmg"

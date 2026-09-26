@@ -2,7 +2,7 @@
 
 Status: research (2026-09-24). Option B, the in-app browser, was then
 built; see `ui/docs/adr/0008` and ARCHITECTURE §12. Question: should
-MyConnect show another device's files through an OS mount (FUSE and
+Ferry show another device's files through an OS mount (FUSE and
 friends), or through a file browser inside the app?
 
 ## What the protocol gives us

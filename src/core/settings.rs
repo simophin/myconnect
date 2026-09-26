@@ -78,7 +78,7 @@ where
 
 /// Stored settings plus this run's start options.
 ///
-/// A start option (a flag of `myconnect run` or the app) overrides the stored
+/// A start option (a flag of `ferry run` or the app) overrides the stored
 /// value for the run it was given to, without being persisted. Changing a
 /// setting through [`Settings::update`] persists it and drops the override,
 /// since the user's latest choice should win.

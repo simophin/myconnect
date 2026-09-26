@@ -1,10 +1,10 @@
-## MyConnect - a Rust based KDE Connect alternative
+## Ferry - a KDE Connect client for macOS, Linux and Windows
 
-MyConnect is an open-source project written in Rust that aims to provide similar functionality to KDE Connect, allowing seamless integration and communication between your devices.
-
-### Long term goal
-
-Provides a desktop application for MacOS/Linux/Windows.
+Ferry is an open-source KDE Connect client written in Rust: it pairs with
+your phone and other devices on the local network, and shares files and the
+clipboard with them, speaking the KDE Connect protocol. It is a successor in
+spirit to [Soduto](https://soduto.com), with one native desktop app for
+macOS, Linux and Windows.
 
 ### Status
 
@@ -67,11 +67,11 @@ upload, rename, delete, create folders, and preview images.
 
 ### CLI interface
 
-The CLI interface is command based, allowing users to interact with MyConnect through terminal commands.
+The CLI interface is command based, allowing users to interact with Ferry through terminal commands.
 
 #### Example Commands
 
-- `myconnect run [--data-dir <dir>] [--download-dir <dir>] [--device-name <name>] [--discovery-loopback]` -
+- `ferry run [--data-dir <dir>] [--download-dir <dir>] [--device-name <name>] [--discovery-loopback]` -
   Run the authenticated local daemon in the foreground. `--discovery-loopback`
   keeps discovery and connections on loopback instead of the real network —
   useful for running multiple local instances against each other for testing
@@ -80,33 +80,33 @@ The CLI interface is command based, allowing users to interact with MyConnect th
   other over a real NIC). Discovery binds `127.255.255.255:1716` and the
   control and payload ports bind `127.0.0.1`, so real devices can neither
   discover nor connect to the instance.
-- `myconnect devices [--watch]` - List devices and optionally follow changes.
-- `myconnect scan [--address <ip>] [--timeout <seconds>] [--watch]` -
+- `ferry devices [--watch]` - List devices and optionally follow changes.
+- `ferry scan [--address <ip>] [--timeout <seconds>] [--watch]` -
   Broadcast a discovery request and list unpaired devices that answer.
   `--address` announces to that IPv4 address instead, for networks where
   broadcast doesn't reach the other device.
-- `myconnect pair <device-id>` - Start pairing with a discovered device.
-- `myconnect pair accept|reject <pairing-id>` - Resolve a pairing request.
-- `myconnect unpair <device-id>` - Remove trust and forget a device.
-- `myconnect ping <device-id> [message]` - Ping a paired device, optionally
+- `ferry pair <device-id>` - Start pairing with a discovered device.
+- `ferry pair accept|reject <pairing-id>` - Resolve a pairing request.
+- `ferry unpair <device-id>` - Remove trust and forget a device.
+- `ferry ping <device-id> [message]` - Ping a paired device, optionally
   with a message. Receiving pings is not supported yet.
-- `myconnect ring <device-id>` - Make a paired device ring so you can find it.
-- `myconnect send <device-id> <file> [--watch]` - Stream a file to a device.
-- `myconnect clipboard get|set <text>|watch|send <device-id>` - Control text synchronization, or send the clipboard to one device now.
+- `ferry ring <device-id>` - Make a paired device ring so you can find it.
+- `ferry send <device-id> <file> [--watch]` - Stream a file to a device.
+- `ferry clipboard get|set <text>|watch|send <device-id>` - Control text synchronization, or send the clipboard to one device now.
 
 Add `--json` for machine-readable output. `--api-host`/`--api-port` (global
 flags, default `127.0.0.1:24816`) set the address the control API listens on
 for `run` and the address every other command connects to. `--api-token`
-(global, or `MYCONNECT_API_TOKEN`; empty by default) makes `run` require that
+(global, or `FERRY_API_TOKEN`; empty by default) makes `run` require that
 bearer token from every API client, and makes every other command send it;
 with no token the API is unauthenticated. Prefer the environment variable
 over the flag so the token does not show up in process listings. For
-development, `MYCONNECT_API_URL` overrides the API URL (superseded by
+development, `FERRY_API_URL` overrides the API URL (superseded by
 `--api-host`/`--api-port` when either is given).
 
 ### Project structure
 
-MyConnect is a Cargo workspace: the main package with a shared library and a
+Ferry is a Cargo workspace: the main package with a shared library and a
 thin CLI entry point, plus the desktop app:
 
 ```text
@@ -122,17 +122,17 @@ src/
 ├── client.rs             # HTTP client used by the CLI
 ├── ui/                   # desktop UI in iced ("gui" feature)
 └── bin/
-    └── myconnect/        # CLI binary
+    └── ferry/            # CLI binary
         ├── cli.rs
         └── main.rs
-gui/                      # myconnect-gui: the desktop app (daemon + ui)
+gui/                      # ferry-gui: the desktop app (daemon + ui)
 packaging/                # .deb, Arch PKGBUILD, macOS app, Windows installer
 assets/                   # icon sources and the generated icons
 ```
 
 All UI code lives in `src/ui/`, each feature's UI in
 `src/ui/features/<name>.rs`, behind the `gui` cargo feature, so the CLI and
-daemon build without any GUI dependency (`cargo build -p myconnect`). See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for module
+daemon build without any GUI dependency (`cargo build -p ferry`). See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for module
 boundaries, data flow, the full HTTP API, and the pairing/transfer state
 machines.
 
@@ -144,12 +144,12 @@ cargo run -- devices
 cargo run -- send <device-id> <file> --watch
 ```
 
-Run the desktop app with `cargo run -p myconnect-gui` (`--help` lists its
-flags, which mirror `myconnect run`; `--demo` fills it with made-up
+Run the desktop app with `cargo run -p ferry-gui` (`--help` lists its
+flags, which mirror `ferry run`; `--demo` fills it with made-up
 devices).
 
 Use `RUST_LOG` to control log output, for example
-`RUST_LOG=myconnect=debug cargo run -- run`.
+`RUST_LOG=ferry=debug cargo run -- run`.
 
 All commands except `run` communicate with the daemon through its local HTTP
 API.

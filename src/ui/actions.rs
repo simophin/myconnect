@@ -54,7 +54,7 @@ impl App {
                 label: Some("IP address".into()),
                 hint: Some("192.168.1.20".into()),
                 helper: Some(
-                    "MyConnect or KDE Connect must be running on that device. It appears \
+                    "Ferry or KDE Connect must be running on that device. It appears \
                          in the list once it answers."
                         .into(),
                 ),
@@ -706,7 +706,7 @@ mod tests {
         click(&mut app, "Device name").await;
         let dialog = app.dialogs.current().expect("the name dialog");
         assert_eq!(dialog.title, "Device name");
-        assert_eq!(dialog.value(), "MyConnect");
+        assert_eq!(dialog.value(), "Ferry");
 
         settle(
             &mut app,
@@ -717,7 +717,7 @@ mod tests {
         let dialog = app.dialogs.current().expect("the dialog stays open");
         assert!(dialog.error().unwrap().contains("1 to 32 characters"));
         assert!(!dialog.is_busy());
-        assert_eq!(settings(&app).device_name, "MyConnect");
+        assert_eq!(settings(&app).device_name, "Ferry");
 
         settle(
             &mut app,

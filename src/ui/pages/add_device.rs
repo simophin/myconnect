@@ -66,7 +66,7 @@ pub fn view<'a, M: Clone + 'a>(
         Load::Loaded(candidates) => {
             let mut list = column![
                 text(
-                    "Open MyConnect or KDE Connect on the other device and make sure \
+                    "Open Ferry or KDE Connect on the other device and make sure \
                      both are on the same network."
                 )
                 .size(14)
@@ -265,7 +265,7 @@ mod tests {
         let store = candidates();
         let mut ui = Simulator::new(page(&store, false, None));
         for shown in [
-            "Open MyConnect or KDE Connect on the other device and make sure both are on the \
+            "Open Ferry or KDE Connect on the other device and make sure both are on the \
              same network.",
             "Pixel 8a",
             "Connected",
@@ -352,10 +352,10 @@ mod tests {
     fn failed() -> Store {
         let mut store = Store::default();
         store.apply_snapshot(Snapshot {
-            devices: Err("MyConnect is not responding.".into()),
+            devices: Err("Ferry is not responding.".into()),
             pairings: Ok(Vec::new()),
             transfers: Vec::new(),
-            settings: Err("MyConnect is not responding.".into()),
+            settings: Err("Ferry is not responding.".into()),
         });
         store
     }

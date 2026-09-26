@@ -5,12 +5,12 @@ use iced::Element;
 use crate::ui::widgets;
 
 pub fn starting<'a, M: 'a>() -> Element<'a, M> {
-    widgets::loading("Starting MyConnect…")
+    widgets::loading("Starting Ferry…")
 }
 
 /// The daemon didn't start: why, and Retry.
 pub fn failed<M: Clone + 'static>(error: &str, retry: M) -> Element<'_, M> {
-    widgets::error_view(format!("MyConnect could not start.\n{error}"), Some(retry))
+    widgets::error_view(format!("Ferry could not start.\n{error}"), Some(retry))
 }
 
 #[cfg(test)]

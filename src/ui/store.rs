@@ -439,17 +439,17 @@ mod tests {
     fn a_failed_snapshot_keeps_what_was_loaded() {
         let mut store = Store::default();
         store.apply_snapshot(Snapshot {
-            devices: Err("MyConnect is not responding.".into()),
+            devices: Err("Ferry is not responding.".into()),
             ..snapshot()
         });
         assert_eq!(
             store.paired_devices(),
-            Load::Failed("MyConnect is not responding.".into())
+            Load::Failed("Ferry is not responding.".into())
         );
 
         let mut store = devices_store();
         store.apply_snapshot(Snapshot {
-            devices: Err("MyConnect is not responding.".into()),
+            devices: Err("Ferry is not responding.".into()),
             ..snapshot()
         });
         assert_eq!(names(store.paired_devices()), ["desktop", "Tablet"]);

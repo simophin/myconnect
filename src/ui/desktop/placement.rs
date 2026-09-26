@@ -34,8 +34,7 @@ impl Default for Placement {
     }
 }
 
-/// The file's shape, the same as the Flutter app's, so an upgrade keeps the
-/// window where it was.
+/// The file's shape, the same as the Flutter app's.
 #[derive(Serialize, Deserialize)]
 struct Stored {
     visible: bool,
@@ -132,7 +131,7 @@ impl PlacementStore {
         Self { file }
     }
 
-    /// The file for this platform, where the Flutter app kept it, or in
+    /// The file for this platform's state directory, or in
     /// `data_dir` when one is given, so a test or second instance doesn't
     /// share the owner's window.
     pub fn for_data_dir(data_dir: Option<&Path>) -> Self {
@@ -180,7 +179,7 @@ impl PlacementStore {
     }
 }
 
-/// Where the Flutter app kept `window.json`: XDG's state directory on Linux
+/// Where `window.json` lives: XDG's state directory on Linux
 /// (meant for things like window layout), Application Support on macOS,
 /// and the local app data on Windows.
 fn default_dir() -> PathBuf {
@@ -192,13 +191,13 @@ fn default_dir() -> PathBuf {
                 .or_else(|| var("APPDATA"))
                 .unwrap_or_else(|| ".".into()),
         )
-        .join("MyConnect")
+        .join("Ferry")
     } else if cfg!(target_os = "macos") {
-        home().join("Library/Application Support/MyConnect")
+        home().join("Library/Application Support/Ferry")
     } else {
         var("XDG_STATE_HOME")
             .map_or_else(|| home().join(".local/state"), PathBuf::from)
-            .join("myconnect")
+            .join("ferry")
     }
 }
 

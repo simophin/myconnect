@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use myconnect::{
+use ferry::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     core::{Core, DeviceReachability, EventData, LanCommand, LocalDeviceSnapshot, SettingsPatch},
     plugins::clipboard::InMemoryClipboard,
@@ -48,11 +48,11 @@ fn peer(name: &str) -> Peer {
         8,
         public_key_der,
         trust_store.clone(),
-        myconnect::plugins::builtin(InMemoryClipboard::shared()),
+        ferry::plugins::builtin(InMemoryClipboard::shared()),
         32,
         128,
         identity.clone(),
-        myconnect::core::TransferConfig::new(directory.path().join("downloads")),
+        ferry::core::TransferConfig::new(directory.path().join("downloads")),
     )
     .unwrap();
     Peer {
@@ -380,7 +380,7 @@ async fn loopback_only_peers_bind_nothing_but_loopback_and_still_meet() {
 
 // The two tests below play the KDE Connect side of the handshake byte for
 // byte as KDE Connect Android's `LanLinkProvider` does, so they catch
-// handshake changes that would still let two MyConnect peers talk to each
+// handshake changes that would still let two Ferry peers talk to each
 // other but not to a real KDE Connect device.
 
 #[tokio::test]

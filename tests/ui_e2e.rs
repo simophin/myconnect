@@ -26,18 +26,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use iced::{
-    Point, Rectangle, Size, Task,
-    futures::{StreamExt, channel::mpsc, executor::block_on},
-    mouse, window,
-};
-use iced_test::{
-    Emulator, Instruction, Simulator,
-    emulator::{self, Mode},
-    instruction::{Interaction, Mouse, Target},
-    selector::Candidate,
-};
-use myconnect::{
+use ferry::{
     client::ApiClient,
     core::{Core, DeviceReachability, EventData, PairingStatus, TransferDirection, TransferStatus},
     daemon::{RunRequest, RunningService},
@@ -55,6 +44,17 @@ use myconnect::{
             window::Windows,
         },
     },
+};
+use iced::{
+    Point, Rectangle, Size, Task,
+    futures::{StreamExt, channel::mpsc, executor::block_on},
+    mouse, window,
+};
+use iced_test::{
+    Emulator, Instruction, Simulator,
+    emulator::{self, Mode},
+    instruction::{Interaction, Mouse, Target},
+    selector::Candidate,
 };
 use support::fake_phone::{BrowseReply, FakePhone, FakePhoneConfig, PHONE_NAME};
 
@@ -737,7 +737,7 @@ where
     }
 }
 
-/// The other end: a daemon as `myconnect run` starts it, with a name no
+/// The other end: a daemon as `ferry run` starts it, with a name no
 /// other instance on loopback has.
 struct Peer {
     service: RunningService,
@@ -779,11 +779,11 @@ impl Peer {
         self.service.core()
     }
 
-    fn device(&self, device_id: &str) -> Option<myconnect::core::DeviceSnapshot> {
+    fn device(&self, device_id: &str) -> Option<ferry::core::DeviceSnapshot> {
         self.core().device(device_id)
     }
 
-    fn transfers(&self) -> Vec<myconnect::core::TransferSnapshot> {
+    fn transfers(&self) -> Vec<ferry::core::TransferSnapshot> {
         self.core().transfers().list()
     }
 }

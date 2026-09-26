@@ -77,7 +77,7 @@ fn listen(name: &str, events: Events) -> std::io::Result<()> {
     Ok(())
 }
 
-/// `myconnect-<user>-<hash of the data dir>`: short enough for macOS's
+/// `ferry-<user>-<hash of the data dir>`: short enough for macOS's
 /// socket paths, and the user keeps users apart in Linux's shared abstract
 /// namespace. The directory is made absolute but not canonical: it may not
 /// exist yet on a first launch, and a second must get the same name.
@@ -85,7 +85,7 @@ fn name(data_dir: &Path) -> String {
     let absolute = std::path::absolute(data_dir).unwrap_or_else(|_| data_dir.to_owned());
     let hash = Sha256::digest(absolute.to_string_lossy().as_bytes());
     let hash: String = hash[..8].iter().map(|byte| format!("{byte:02x}")).collect();
-    format!("myconnect-{}-{hash}", user())
+    format!("ferry-{}-{hash}", user())
 }
 
 #[cfg(unix)]
@@ -132,6 +132,6 @@ mod tests {
         let a = name(Path::new("/tmp/a"));
         assert_eq!(a, name(Path::new("/tmp/a")));
         assert_ne!(a, name(Path::new("/tmp/b")));
-        assert!(a.starts_with("myconnect-") && a.len() < 50, "{a}");
+        assert!(a.starts_with("ferry-") && a.len() < 50, "{a}");
     }
 }

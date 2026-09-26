@@ -1,4 +1,4 @@
-//! Shared MyConnect application code.
+//! Shared Ferry application code.
 //!
 //! Binary targets should stay thin and call into this library so the CLI and
 //! the desktop app (the `gui` crate) share the same behavior.

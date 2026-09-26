@@ -31,7 +31,7 @@ jobs:
     outputs:
       # In file names.
       name: ${{ steps.version.outputs.name }}
-      # What Settings shows (MYCONNECT_VERSION; empty: the crate's version
+      # What Settings shows (FERRY_VERSION; empty: the crate's version
       # and git describe).
       app: ${{ steps.version.outputs.app }}
       # Numeric, for macOS's Info.plist and Windows's file version.
@@ -68,7 +68,7 @@ jobs:
     needs: version
     runs-on: macos-15
     env:
-      MYCONNECT_VERSION: ${{ needs.version.outputs.app }}
+      FERRY_VERSION: ${{ needs.version.outputs.app }}
       # Keep in step with packaging/macos/build_app.sh.
       MACOSX_DEPLOYMENT_TARGET: "12.0"
     steps:
@@ -83,24 +83,24 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: |
-          cargo build --release --locked -p myconnect-gui --target aarch64-apple-darwin
-          cargo build --release --locked -p myconnect-gui --target x86_64-apple-darwin
+          cargo build --release --locked -p ferry-gui --target aarch64-apple-darwin
+          cargo build --release --locked -p ferry-gui --target x86_64-apple-darwin
       - name: Package
         run: |
           packaging/macos/build_app.sh \
             "${{ needs.version.outputs.numeric }}" "${{ github.run_number }}" \
-            "dist/myconnect-${{ needs.version.outputs.name }}-macos-universal.dmg" \
-            target/aarch64-apple-darwin/release/myconnect-gui \
-            target/x86_64-apple-darwin/release/myconnect-gui
+            "dist/ferry-${{ needs.version.outputs.name }}-macos-universal.dmg" \
+            target/aarch64-apple-darwin/release/ferry-gui \
+            target/x86_64-apple-darwin/release/ferry-gui
       - name: Check the bundle
         run: |
-          app=dist/MyConnect.app
-          lipo "$app/Contents/MacOS/myConnect" -verify_arch arm64 x86_64
+          app=dist/Ferry.app
+          lipo "$app/Contents/MacOS/Ferry" -verify_arch arm64 x86_64
           codesign --verify --deep --strict --verbose=2 "$app"
           plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist"
           plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist"
           plutil -extract CFBundleVersion raw "$app/Contents/Info.plist"
-          "$app/Contents/MacOS/myConnect" --version
+          "$app/Contents/MacOS/Ferry" --version
           rm -rf "$app"
       - uses: actions/upload-artifact@v7
         with:
@@ -113,7 +113,7 @@ jobs:
     needs: version
     runs-on: windows-2025
     env:
-      MYCONNECT_VERSION: ${{ needs.version.outputs.app }}
+      FERRY_VERSION: ${{ needs.version.outputs.app }}
     defaults:
       run:
         shell: bash
@@ -127,8 +127,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # Two builds, as on Linux.
       - run: |
-          cargo build --release --locked -p myconnect-gui
-          cargo build --release --locked -p myconnect
+          cargo build --release --locked -p ferry-gui
+          cargo build --release --locked -p ferry
       # The runner image doesn't have NSIS any more.
       - name: Install NSIS
         run: |
@@ -142,22 +142,22 @@ jobs:
           makensis -V3 \
             "-DVERSION=${{ needs.version.outputs.name }}" \
             "-DFILE_VERSION=${{ needs.version.outputs.numeric }}.${{ github.run_number }}" \
-            "-DAPP=$root\\target\\release\\myconnect-gui.exe" \
-            "-DCLI=$root\\target\\release\\myconnect.exe" \
-            "-DOUT=$root\\dist\\myconnect-${{ needs.version.outputs.name }}-windows-x64-setup.exe" \
+            "-DAPP=$root\\target\\release\\ferry-gui.exe" \
+            "-DCLI=$root\\target\\release\\ferry.exe" \
+            "-DOUT=$root\\dist\\ferry-${{ needs.version.outputs.name }}-windows-x64-setup.exe" \
             packaging/windows/installer.nsi
       - name: Check the installer
         run: |
           ./dist/*-setup.exe //S
-          dir="$LOCALAPPDATA/Programs/MyConnect"
+          dir="$LOCALAPPDATA/Programs/Ferry"
           ls -R "$dir"
-          "$dir/cli/myconnect.exe" --version
-          reg query 'HKCU\Software\Classes\AppUserModelId\org.myconnect.MyConnect'
+          "$dir/cli/ferry.exe" --version
+          reg query 'HKCU\Software\Classes\AppUserModelId\dev.fanchao.Ferry'
           # _?= runs the uninstaller in place, so this waits for it; it
           # wants a Windows path.
           "$dir/uninstall.exe" //S "_?=$(cygpath -w "$dir")"
-          test ! -e "$dir/myConnect.exe"
-          if reg query 'HKCU\Software\Classes\AppUserModelId\org.myconnect.MyConnect'; then
+          test ! -e "$dir/Ferry.exe"
+          if reg query 'HKCU\Software\Classes\AppUserModelId\dev.fanchao.Ferry'; then
             echo "the uninstaller left the notification id registered"
             exit 1
           fi
@@ -182,7 +182,7 @@ jobs:
     # system. The result installs on Debian 12+ and Ubuntu 22.04+.
     container: debian:12
     env:
-      MYCONNECT_VERSION: ${{ needs.version.outputs.app }}
+      FERRY_VERSION: ${{ needs.version.outputs.app }}
     steps:
       - name: Install Linux build dependencies
         run: |
@@ -202,12 +202,12 @@ jobs:
       # Two builds: one with both packages would turn the gui feature on for
       # the CLI too, and put iced in it.
       - run: |
-          cargo build --release --locked -p myconnect-gui
-          cargo build --release --locked -p myconnect
+          cargo build --release --locked -p ferry-gui
+          cargo build --release --locked -p ferry
       - name: Package
         run: |
           packaging/linux/build_deb.sh \
-            target/release/myconnect-gui target/release/myconnect \
+            target/release/ferry-gui target/release/ferry \
             "${{ needs.version.outputs.deb }}" dist
           dpkg-deb --info dist/*.deb
           dpkg-deb --contents dist/*.deb
@@ -258,7 +258,7 @@ jobs:
         run: |
           mkdir dist
           packaging/linux/pkgbuild.sh "$TAG" \
-            "debs/myconnect_${DEB}_amd64.deb" "debs/myconnect_${DEB}_arm64.deb" \
+            "debs/ferry_${DEB}_amd64.deb" "debs/ferry_${DEB}_arm64.deb" \
             > dist/PKGBUILD
           cat dist/PKGBUILD
       - uses: actions/upload-artifact@v7

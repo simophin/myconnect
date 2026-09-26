@@ -5,17 +5,17 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>myConnect</string>
+	<string>Ferry</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>org.myconnect.MyConnect</string>
+	<string>dev.fanchao.Ferry</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>MyConnect</string>
+	<string>Ferry</string>
 	<key>CFBundleDisplayName</key>
-	<string>MyConnect</string>
+	<string>Ferry</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -32,8 +32,8 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>MyConnect finds and connects to your devices on the local network.</string>
+	<string>Ferry finds and connects to your devices on the local network.</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>Copyright © 2026 MyConnect</string>
+	<string>Copyright © 2026 Fanchao</string>
 </dict>
 </plist>

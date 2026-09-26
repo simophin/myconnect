@@ -17,8 +17,8 @@ pub fn describe_error(error: &CoreError) -> String {
 /// A sentence for the user about a failure with this code.
 pub fn describe_code(code: &str) -> String {
     let message = match code {
-        "daemon_unavailable" => "MyConnect is not responding.",
-        "unauthorized" => "MyConnect rejected this app’s access token.",
+        "daemon_unavailable" => "Ferry is not responding.",
+        "unauthorized" => "Ferry rejected this app’s access token.",
         "device_not_found" => "That device is no longer known.",
         "device_not_connected" => "The device is not connected right now.",
         "already_paired" => "The device is already paired.",
@@ -33,7 +33,7 @@ pub fn describe_code(code: &str) -> String {
         "transfer_too_large" | "payload_too_large" => "The file is too large to send.",
         "transfer_not_found" => "That transfer no longer exists.",
         "invalid_transfer_state" => "That transfer has already finished.",
-        "request_timeout" => "MyConnect took too long to respond.",
+        "request_timeout" => "Ferry took too long to respond.",
         "invalid_device_name" => {
             "Use 1 to 32 characters, without . , : ; ! ? ( ) [ ] < > or quotes."
         }
@@ -75,11 +75,8 @@ mod tests {
     #[test]
     fn codes_read_like_the_flutter_app() {
         for (code, message) in [
-            ("daemon_unavailable", "MyConnect is not responding."),
-            (
-                "unauthorized",
-                "MyConnect rejected this app’s access token.",
-            ),
+            ("daemon_unavailable", "Ferry is not responding."),
+            ("unauthorized", "Ferry rejected this app’s access token."),
             ("device_not_found", "That device is no longer known."),
             (
                 "device_not_connected",
@@ -112,7 +109,7 @@ mod tests {
                 "invalid_transfer_state",
                 "That transfer has already finished.",
             ),
-            ("request_timeout", "MyConnect took too long to respond."),
+            ("request_timeout", "Ferry took too long to respond."),
             (
                 "invalid_device_name",
                 "Use 1 to 32 characters, without . , : ; ! ? ( ) [ ] < > or quotes.",

@@ -824,7 +824,7 @@ mod tests {
     /// `capacity` events.
     fn transfers(download_dir: &Path, capacity: usize) -> Transfers {
         let settings = Settings::new(SettingsDefaults {
-            device_name: "MyConnect".into(),
+            device_name: "Ferry".into(),
             download_dir: download_dir.to_owned(),
         });
         Transfers::new(

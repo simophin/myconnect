@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use myconnect::{
+use ferry::{
     api::DEFAULT_API_PORT,
     client::{
         API_TOKEN_ENV, ApiClient, ClipboardWatchUpdate, DeviceWatchUpdate, TransferWatchUpdate,
@@ -60,7 +60,7 @@ pub struct Cli {
 
 #[derive(Debug, PartialEq, Eq, Subcommand)]
 enum Command {
-    /// Run the MyConnect daemon in the foreground.
+    /// Run the Ferry daemon in the foreground.
     Run {
         #[arg(long, value_name = "DIRECTORY")]
         download_dir: Option<PathBuf>,
@@ -77,7 +77,7 @@ enum Command {
         #[arg(long)]
         discovery_loopback: bool,
         /// Sync the desktop clipboard instead of an in-memory one, which
-        /// only `myconnect clipboard` can read and write.
+        /// only `ferry clipboard` can read and write.
         #[arg(long)]
         system_clipboard: bool,
     },
@@ -235,7 +235,7 @@ impl Cli {
             if let Some(port) = api_port {
                 request.api_port = port;
             }
-            return myconnect::daemon::run_service(request).await;
+            return ferry::daemon::run_service(request).await;
         }
 
         let base_url_override = (api_host.is_some() || api_port.is_some()).then(|| {
@@ -471,9 +471,7 @@ fn parse_pair_action(arguments: &[String]) -> Result<PairAction> {
                 Ok(PairAction::Reject(pairing_id))
             }
         }
-        _ => anyhow::bail!(
-            "usage: myconnect pair <device-id> | myconnect pair accept|reject <pairing-id>"
-        ),
+        _ => anyhow::bail!("usage: ferry pair <device-id> | ferry pair accept|reject <pairing-id>"),
     }
 }
 
@@ -714,72 +712,59 @@ mod tests {
     #[test]
     fn parses_every_command() {
         let cases = [
-            vec!["myconnect", "run", "--api-port", "25000"],
-            vec!["myconnect", "run", "--data-dir", "/tmp/myconnect"],
-            vec!["myconnect", "run", "--device-name", "My Desktop"],
-            vec!["myconnect", "run", "--discovery-loopback"],
-            vec!["myconnect", "run", "--system-clipboard"],
+            vec!["ferry", "run", "--api-port", "25000"],
+            vec!["ferry", "run", "--data-dir", "/tmp/ferry"],
+            vec!["ferry", "run", "--device-name", "My Desktop"],
+            vec!["ferry", "run", "--discovery-loopback"],
+            vec!["ferry", "run", "--system-clipboard"],
             vec![
-                "myconnect",
+                "ferry",
                 "--api-host",
                 "0.0.0.0",
                 "--api-port",
                 "25000",
                 "run",
             ],
-            vec!["myconnect", "--api-host", "192.168.1.5", "devices"],
-            vec!["myconnect", "--api-token", "secret", "run"],
-            vec!["myconnect", "--api-token", "secret", "devices"],
-            vec!["myconnect", "devices"],
-            vec!["myconnect", "devices", "--watch"],
-            vec!["myconnect", "scan"],
-            vec!["myconnect", "scan", "--timeout", "5"],
-            vec!["myconnect", "scan", "--watch"],
-            vec!["myconnect", "scan", "--address", "192.168.1.20"],
-            vec!["myconnect", "ping", "device-id"],
-            vec!["myconnect", "ping", "device-id", "hello"],
-            vec!["myconnect", "ring", "device-id"],
-            vec!["myconnect", "pair", "device-id"],
-            vec!["myconnect", "pair", "accept", ID],
-            vec!["myconnect", "pair", "reject", ID],
-            vec!["myconnect", "unpair", "device-id"],
-            vec!["myconnect", "send", "device-id", "photo.jpg"],
-            vec!["myconnect", "send", "device-id", "photo.jpg", "--watch"],
-            vec!["myconnect", "files", "device-id", "ls"],
+            vec!["ferry", "--api-host", "192.168.1.5", "devices"],
+            vec!["ferry", "--api-token", "secret", "run"],
+            vec!["ferry", "--api-token", "secret", "devices"],
+            vec!["ferry", "devices"],
+            vec!["ferry", "devices", "--watch"],
+            vec!["ferry", "scan"],
+            vec!["ferry", "scan", "--timeout", "5"],
+            vec!["ferry", "scan", "--watch"],
+            vec!["ferry", "scan", "--address", "192.168.1.20"],
+            vec!["ferry", "ping", "device-id"],
+            vec!["ferry", "ping", "device-id", "hello"],
+            vec!["ferry", "ring", "device-id"],
+            vec!["ferry", "pair", "device-id"],
+            vec!["ferry", "pair", "accept", ID],
+            vec!["ferry", "pair", "reject", ID],
+            vec!["ferry", "unpair", "device-id"],
+            vec!["ferry", "send", "device-id", "photo.jpg"],
+            vec!["ferry", "send", "device-id", "photo.jpg", "--watch"],
+            vec!["ferry", "files", "device-id", "ls"],
+            vec!["ferry", "files", "device-id", "ls", "/storage/emulated/0"],
+            vec!["ferry", "files", "device-id", "get", "/a/b.jpg", "--watch"],
+            vec!["ferry", "files", "device-id", "cat", "/a/b.txt"],
+            vec!["ferry", "files", "device-id", "put", "photo.jpg", "/a"],
+            vec!["ferry", "files", "device-id", "mkdir", "/a/new"],
+            vec!["ferry", "files", "device-id", "mv", "/a/x", "/a/y"],
+            vec!["ferry", "files", "device-id", "rm", "/a/x"],
+            vec!["ferry", "clipboard", "get"],
+            vec!["ferry", "clipboard", "set", "hello"],
+            vec!["ferry", "clipboard", "watch"],
+            vec!["ferry", "clipboard", "send", "device-id"],
+            vec!["ferry", "settings"],
             vec![
-                "myconnect",
-                "files",
-                "device-id",
-                "ls",
-                "/storage/emulated/0",
-            ],
-            vec![
-                "myconnect",
-                "files",
-                "device-id",
-                "get",
-                "/a/b.jpg",
-                "--watch",
-            ],
-            vec!["myconnect", "files", "device-id", "cat", "/a/b.txt"],
-            vec!["myconnect", "files", "device-id", "put", "photo.jpg", "/a"],
-            vec!["myconnect", "files", "device-id", "mkdir", "/a/new"],
-            vec!["myconnect", "files", "device-id", "mv", "/a/x", "/a/y"],
-            vec!["myconnect", "files", "device-id", "rm", "/a/x"],
-            vec!["myconnect", "clipboard", "get"],
-            vec!["myconnect", "clipboard", "set", "hello"],
-            vec!["myconnect", "clipboard", "watch"],
-            vec!["myconnect", "clipboard", "send", "device-id"],
-            vec!["myconnect", "settings"],
-            vec![
-                "myconnect",
+                "ferry",
                 "settings",
                 "--device-name",
                 "Desk",
                 "--clipboard-sync",
                 "false",
             ],
-            vec!["myconnect", "--json", "devices"],
+            vec!["ferry", "--json", "devices"],
         ];
         for arguments in cases {
             Cli::try_parse_from(&arguments)
@@ -789,8 +774,8 @@ mod tests {
 
     #[test]
     fn pairing_requires_exactly_one_action() {
-        assert!(Cli::try_parse_from(["myconnect", "pair"]).is_err());
-        assert!(Cli::try_parse_from(["myconnect", "pair", "device", "accept", ID]).is_err());
+        assert!(Cli::try_parse_from(["ferry", "pair"]).is_err());
+        assert!(Cli::try_parse_from(["ferry", "pair", "device", "accept", ID]).is_err());
         assert!(parse_pair_action(&["accept".into()]).is_err());
     }
 }

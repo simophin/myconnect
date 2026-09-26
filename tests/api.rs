@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use myconnect::{
+use ferry::{
     api::{ApiServer, ApiServerConfig},
     config::{ApiToken, FilesystemTrustStore, LocalIdentity},
     core::{
@@ -47,7 +47,7 @@ impl TestServer {
             8,
             b"test-local-pubkey".to_vec(),
             Arc::new(FilesystemTrustStore::new(directory.path())),
-            myconnect::plugins::builtin(InMemoryClipboard::shared()),
+            ferry::plugins::builtin(InMemoryClipboard::shared()),
             4,
             4,
             identity,
@@ -108,7 +108,7 @@ impl TestServer {
     fn connect_and_pair(
         &self,
         device_id: &str,
-    ) -> tokio::sync::mpsc::Receiver<myconnect::protocol::Packet> {
+    ) -> tokio::sync::mpsc::Receiver<ferry::protocol::Packet> {
         self.connect(device_id, true)
     }
 
@@ -116,7 +116,7 @@ impl TestServer {
         &self,
         device_id: &str,
         paired: bool,
-    ) -> tokio::sync::mpsc::Receiver<myconnect::protocol::Packet> {
+    ) -> tokio::sync::mpsc::Receiver<ferry::protocol::Packet> {
         let identity = IdentityBody {
             device_id: device_id.to_owned(),
             device_name: "Peer Phone".into(),
@@ -623,7 +623,7 @@ async fn sharing_a_file_streams_it_as_a_queryable_cancellable_transfer() {
     let device_id = "cccccccccccccccccccccccccccccccc";
     let _packets = server.connect_and_pair(device_id);
 
-    let boundary = "myconnect-test-boundary";
+    let boundary = "ferry-test-boundary";
     let file_bytes = b"hello from the transfer test";
     let mut multipart_body = Vec::new();
     multipart_body.extend_from_slice(
@@ -721,7 +721,7 @@ async fn sharing_a_file_streams_it_as_a_queryable_cancellable_transfer() {
 /// Upload a four-piece file, writing the pieces `gap` apart, or stop after
 /// the file part's headers if `stall` is set. Returns the response.
 async fn slow_upload(server: &TestServer, device_id: &str, gap: Duration, stall: bool) -> String {
-    let boundary = "myconnect-test-boundary";
+    let boundary = "ferry-test-boundary";
     let pieces = ["slow", " up", "lo", "ad"];
     let file_len: usize = pieces.iter().map(|piece| piece.len()).sum();
     let file_head = format!(
@@ -789,7 +789,7 @@ async fn streaming_routes_take_bodies_over_the_default_limit() {
     // upload may stall once the transfer's small buffer is full; what
     // matters is that the body reached the handler rather than being
     // refused up front.
-    let boundary = "myconnect-test-boundary";
+    let boundary = "ferry-test-boundary";
     let file_bytes = vec![7_u8; 256 * 1024];
     let mut multipart_body = format!(
         "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"big.bin\"\r\nContent-Length: {}\r\n\r\n",
@@ -831,7 +831,7 @@ async fn sharing_a_file_with_an_unpaired_device_is_rejected() {
     // `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb` is discovered but neither paired
     // nor connected in `TestServer::start`.
     let device_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    let boundary = "myconnect-test-boundary";
+    let boundary = "ferry-test-boundary";
     let file_bytes = b"should not be sent";
     let mut multipart_body = Vec::new();
     multipart_body.extend_from_slice(
@@ -976,7 +976,7 @@ async fn cancelling_an_upload_answers_its_request_at_once() {
 
     // Declare a large file but send only its first bytes, then wait, as a
     // client does while the device is slow to accept.
-    let boundary = "myconnect-test-boundary";
+    let boundary = "ferry-test-boundary";
     let file_len = 64 * 1024 * 1024;
     let file_head = format!(
         "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"big.bin\"\r\nContent-Length: {file_len}\r\n\r\n"
@@ -1037,7 +1037,7 @@ async fn a_client_still_sending_a_cancelled_upload_is_told_it_was_cancelled() {
         .set_len(1024 * 1024 * 1024)
         .unwrap();
     let client =
-        myconnect::client::ApiClient::new(&format!("http://{}", server.server.local_addr()), None)
+        ferry::client::ApiClient::new(&format!("http://{}", server.server.local_addr()), None)
             .unwrap();
     let upload = tokio::spawn(async move { client.send_file(device_id, &file).await });
 
@@ -1049,7 +1049,7 @@ async fn a_client_still_sending_a_cancelled_upload_is_told_it_was_cancelled() {
         .unwrap()
         .expect("the client gets the cancelled transfer, not an error");
     assert_eq!(transfer.id, transfer_id);
-    assert_eq!(transfer.status, myconnect::core::TransferStatus::Cancelled);
+    assert_eq!(transfer.status, ferry::core::TransferStatus::Cancelled);
 
     server.server.shutdown().await.unwrap();
     server
@@ -1060,7 +1060,7 @@ async fn a_client_still_sending_a_cancelled_upload_is_told_it_was_cancelled() {
 
 /// Upload a small file to `path` and return the response.
 async fn small_upload(server: &TestServer, path: &str) -> String {
-    let boundary = "myconnect-test-boundary";
+    let boundary = "ferry-test-boundary";
     let mut body = format!(
         "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"id.txt\"\r\nContent-Length: 2\r\n\r\nhi\r\n--{boundary}--\r\n"
     );
