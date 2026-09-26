@@ -1,0 +1,371 @@
+//! The shell's test harness: an app on a fake desktop, and ways to drive
+//! it. The other files' tests use it too.
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use iced_test::simulator::Simulator;
+
+use super::*;
+use crate::{
+    core::{Core, LanCommand, testing::handle},
+    plugins::{
+        browse::BrowsePlugin,
+        clipboard::{ClipboardPlugin, InMemoryClipboard},
+    },
+    ui::desktop::{
+        dialogs::{self as picking, Pick},
+        notify::Notifier,
+        open as opening,
+        placement::PlacementStore,
+        tray::Tray,
+        window::Windows,
+    },
+};
+
+/// The tray's menus, as the shell sent them.
+#[derive(Default)]
+pub(super) struct FakeTray {
+    pub(super) menu: Mutex<Vec<TrayItem>>,
+    pub(super) updates: AtomicUsize,
+}
+
+impl Tray for FakeTray {
+    fn set_menu(&self, menu: Vec<TrayItem>) {
+        *self.menu.lock().unwrap() = menu;
+        self.updates.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// The notifications showing, by id: their title and body.
+#[derive(Default)]
+pub(super) struct FakeNotifier {
+    pub(super) shown: Mutex<std::collections::BTreeMap<u32, (String, String)>>,
+}
+
+impl Notifier for FakeNotifier {
+    fn show(&self, id: u32, title: &str, body: &str) {
+        self.shown
+            .lock()
+            .unwrap()
+            .insert(id, (title.into(), body.into()));
+    }
+
+    fn withdraw(&self, id: u32) {
+        self.shown.lock().unwrap().remove(&id);
+    }
+}
+
+/// Windows that open and close at once, and are seen at one spot.
+pub(super) struct FakeWindows {
+    pub(super) opened: Mutex<Vec<window::Settings>>,
+    pub(super) raised: AtomicUsize,
+    pub(super) seen: Seen,
+}
+
+impl Default for FakeWindows {
+    fn default() -> Self {
+        Self {
+            opened: Mutex::default(),
+            raised: AtomicUsize::new(0),
+            seen: Seen {
+                position: Some(iced::Point::new(30.0, 40.0)),
+                size: iced::Size::new(500.0, 700.0),
+                maximized: false,
+                minimized: false,
+            },
+        }
+    }
+}
+
+impl Windows for FakeWindows {
+    fn open(&self, settings: window::Settings) -> (window::Id, Task<()>) {
+        self.opened.lock().unwrap().push(settings);
+        (window::Id::unique(), Task::none())
+    }
+
+    fn close(&self, _id: window::Id) -> Task<()> {
+        Task::none()
+    }
+
+    fn raise(&self, _id: window::Id) -> Task<()> {
+        self.raised.fetch_add(1, Ordering::SeqCst);
+        Task::none()
+    }
+
+    fn read(&self, _id: window::Id) -> Task<Seen> {
+        Task::done(self.seen)
+    }
+
+    fn screens(&self) -> Vec<iced::Rectangle> {
+        vec![iced::Rectangle::new(
+            iced::Point::ORIGIN,
+            iced::Size::new(1920.0, 1080.0),
+        )]
+    }
+}
+
+/// The desktop an app is given in tests, to look at afterwards.
+#[derive(Clone, Default)]
+pub(super) struct Fakes {
+    pub(super) tray: Arc<FakeTray>,
+    pub(super) notifier: Arc<FakeNotifier>,
+    pub(super) windows: Arc<FakeWindows>,
+    /// Where `window.json` goes, if the test keeps one.
+    pub(super) placements: Option<PlacementStore>,
+    /// No tray host shows the icon.
+    pub(super) no_tray: bool,
+}
+
+impl Fakes {
+    pub(super) fn desktop(&self) -> Desktop {
+        Desktop {
+            tray: self.tray.clone(),
+            tray_available: !self.no_tray,
+            notifier: self.notifier.clone(),
+            windows: self.windows.clone(),
+            placements: self.placements.clone(),
+            events: None,
+            opener: Arc::new(opening::System),
+            picker: Arc::new(picking::System),
+        }
+    }
+
+    /// The bodies of the notifications showing.
+    pub(super) fn notified(&self) -> Vec<String> {
+        self.notifier
+            .shown
+            .lock()
+            .unwrap()
+            .values()
+            .map(|(_, body)| body.clone())
+            .collect()
+    }
+
+    pub(super) fn menu(&self) -> Vec<TrayItem> {
+        self.tray.menu.lock().unwrap().clone()
+    }
+}
+
+/// An app whose daemon never starts: tests set the phase themselves.
+pub(super) fn app(runtime: tokio::runtime::Handle) -> App {
+    app_on(runtime, &Fakes::default())
+}
+
+pub(super) fn app_on(runtime: tokio::runtime::Handle, fakes: &Fakes) -> App {
+    let start: Rc<dyn Fn() -> StartFuture> = Rc::new(|| Box::pin(std::future::pending()));
+    App::boot(
+        UiOptions {
+            runtime,
+            demo: false,
+            version: "1.2.3 (test)".into(),
+            data_dir: None,
+        },
+        start,
+        Service::default(),
+        fakes.desktop(),
+    )
+    .0
+}
+
+/// The features, over clipboard and browse plugins of their own, which
+/// the test's core doesn't run.
+pub(super) fn features() -> Features {
+    Features::new(
+        Arc::new(ClipboardPlugin::new(InMemoryClipboard::shared())),
+        Arc::new(BrowsePlugin::default()),
+    )
+}
+
+/// An app over a test core.
+pub(super) fn running() -> App {
+    running_with_commands().0
+}
+
+/// An app over a test core, and what the core asks of the network.
+pub(super) fn running_with_commands() -> (App, tokio::sync::mpsc::Receiver<LanCommand>) {
+    let (core, commands) = handle();
+    (running_on(core), commands)
+}
+
+/// An app over `core`.
+pub(super) fn running_on(core: Core) -> App {
+    running_on_desktop(core, &Fakes::default())
+}
+
+/// An app over `core`, on `fakes`.
+pub(super) fn running_on_desktop(core: Core, fakes: &Fakes) -> App {
+    running_with(core, features(), fakes)
+}
+
+/// An app running `features` over `core`, on `fakes`.
+pub(super) fn running_with(core: Core, features: Features, fakes: &Fakes) -> App {
+    let runtime = tokio::runtime::Handle::current();
+    let mut app = app_on(runtime.clone(), fakes);
+    app.phase = Phase::Running(Box::new(Running {
+        ctx: UiContext::new(core, runtime),
+        features,
+    }));
+    app
+}
+
+pub(super) fn features_mut(app: &mut App) -> &mut Features {
+    let Phase::Running(running) = &mut app.phase else {
+        panic!("the app runs");
+    };
+    &mut running.features
+}
+
+pub(super) fn core(app: &App) -> Core {
+    let Phase::Running(running) = &app.phase else {
+        panic!("the app runs");
+    };
+    running.ctx.core().clone()
+}
+
+pub(super) fn store(app: &App) -> &store::Store {
+    let Phase::Running(running) = &app.phase else {
+        panic!("the app runs");
+    };
+    running.ctx.store()
+}
+
+/// Run `message` through `app` and return what it leads to, without
+/// running those.
+pub(super) async fn step(app: &mut App, message: Message) -> Vec<Message> {
+    testing::outputs(app.update(message)).await
+}
+
+/// Run `message` through `app`, then every message it leads to, except
+/// a toast's dismissal. Tests that toast run with time paused, so the
+/// dismissal's timer doesn't hold them up.
+pub(super) async fn settle(app: &mut App, message: Message) {
+    let mut queue = std::collections::VecDeque::from([message]);
+    while let Some(message) = queue.pop_front() {
+        if !matches!(message, Message::DismissToast(_)) {
+            queue.extend(testing::outputs(app.update(message)).await);
+        }
+    }
+}
+/// Click `target` (a text or widget id) in the window, and settle what
+/// that sends.
+pub(super) async fn click<S>(app: &mut App, target: S)
+where
+    S: iced_test::selector::Selector + Send + fmt::Debug + Clone,
+    S::Output: iced_test::selector::Bounded + Clone + Send + Sync + 'static,
+{
+    let mut ui = Simulator::new(app.view(app.window.unwrap()));
+    ui.click(target.clone())
+        .unwrap_or_else(|error| panic!("{target:?}: {error:?}"));
+    let clicked: Vec<_> = ui.into_messages().collect();
+    for message in clicked {
+        settle(app, message).await;
+    }
+}
+
+pub(super) fn shows(app: &App, text: &str) -> bool {
+    Simulator::new(app.view(app.window.unwrap()))
+        .find(text)
+        .is_ok()
+}
+
+pub(super) fn settings(app: &App) -> &SettingsSnapshot {
+    store(app).settings().loaded().expect("settings loaded")
+}
+/// Picks what it is told to, and records where it started (folders) or
+/// its title (files).
+#[derive(Default)]
+pub(super) struct FakePicker {
+    pub(super) answer: Option<PathBuf>,
+    pub(super) files: Option<Vec<PathBuf>>,
+    pub(super) asked: Mutex<Vec<PathBuf>>,
+}
+
+impl Pick for FakePicker {
+    fn pick_folder(&self, _title: &str, start: &std::path::Path) -> picking::Picked<PathBuf> {
+        self.asked.lock().unwrap().push(start.into());
+        let answer = self.answer.clone();
+        Box::pin(async move { answer })
+    }
+
+    fn pick_files(&self, title: &str) -> picking::Picked<Vec<PathBuf>> {
+        self.asked.lock().unwrap().push(title.into());
+        let files = self.files.clone();
+        Box::pin(async move { files })
+    }
+}
+
+pub(super) fn picker(answer: Option<PathBuf>) -> Arc<FakePicker> {
+    Arc::new(FakePicker {
+        answer,
+        ..FakePicker::default()
+    })
+}
+#[tokio::test]
+async fn back_goes_to_the_parent_page() {
+    let mut app = running();
+    app.route = Route::Browse {
+        device: "phone".into(),
+        folder: Some("/storage/emulated/0".into()),
+    };
+    let _ = app.update(Message::Back);
+    assert_eq!(app.route, Route::Device("phone".into()));
+    let _ = app.update(Message::Back);
+    let _ = app.update(Message::Back);
+    assert_eq!(app.route, Route::Devices);
+}
+#[tokio::test]
+async fn the_version_is_shown() {
+    let mut app = running();
+    settle(&mut app, Message::Reload).await;
+    settle(&mut app, Message::Navigate(Route::Settings, Origin::Window)).await;
+    assert!(shows(&app, "Version"));
+    assert!(shows(&app, "1.2.3 (test)"));
+}
+#[tokio::test]
+async fn a_browse_page_of_a_forgotten_device_says_so() {
+    let mut app = running();
+    app.route = Route::Browse {
+        device: "gone".into(),
+        folder: None,
+    };
+    assert!(shows(&app, "This device is no longer known."));
+}
+#[test]
+fn keys_map_to_commands() {
+    let press = |key: keyboard::Key, modifiers| {
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: keyboard::key::Physical::Unidentified(
+                keyboard::key::NativeCode::Unidentified,
+            ),
+            location: keyboard::Location::Standard,
+            modifiers,
+            text: None,
+            repeat: false,
+        })
+    };
+    let window = window::Id::unique();
+    let command = |event| key_command(event, event::Status::Captured, window);
+    assert_eq!(
+        command(press(
+            keyboard::Key::Named(key::Named::Escape),
+            keyboard::Modifiers::empty()
+        )),
+        Some(KeyCommand::Cancel)
+    );
+    assert_eq!(
+        command(press(
+            keyboard::Key::Character("w".into()),
+            keyboard::Modifiers::COMMAND
+        )),
+        Some(KeyCommand::CloseWindow)
+    );
+    assert_eq!(
+        command(press(
+            keyboard::Key::Character("q".into()),
+            keyboard::Modifiers::empty()
+        )),
+        None
+    );
+}
