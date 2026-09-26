@@ -1,4 +1,4 @@
-//! Pages the UI core owns. A feature's pages live in its plugin's `ui.rs`.
+//! Pages the shell owns. A feature's page lives in `ui/features/`.
 
 pub mod add_device;
 pub mod device;

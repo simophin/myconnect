@@ -1,17 +1,14 @@
-//! Find my phone's UI half: the *Ring* action.
+//! Find my phone's UI: the *Ring* action.
 
+use iced::Task;
 use iced_fonts::lucide;
 
-use crate::plugins::findmyphone::{REQUEST_PACKET_TYPE, ring_device};
+use super::{DeviceAction, Feature};
 use crate::{
     core::{DeviceReachability, DeviceSnapshot},
-    ui::{
-        error::describe_error,
-        plugin::{Command, DeviceAction, ShellRequest, UiContext, UiPlugin},
-    },
+    plugins::findmyphone::{REQUEST_PACKET_TYPE, ring_device},
+    ui::{self, Origin, context::UiContext, error::describe_error, shell},
 };
-
-pub struct FindMyPhoneUi;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -20,40 +17,33 @@ pub enum Message {
     Ring { device_id: String, name: String },
 }
 
-impl UiPlugin for FindMyPhoneUi {
-    type Message = Message;
+/// Listed for every device, enabled while it is connected and can ring.
+/// The tray lists it only for a device that says it can ring.
+pub fn device_actions(device: &DeviceSnapshot) -> Vec<DeviceAction> {
+    vec![DeviceAction {
+        id: "ring",
+        label: "Ring".into(),
+        icon: lucide::volume_two,
+        enabled: can_ring(device),
+        visible_in_tray: advertises_ring(device),
+        message: Feature::FindMyPhone(Message::Ring {
+            device_id: device.device_id.clone(),
+            name: device.device_name.clone(),
+        }),
+    }]
+}
 
-    fn id(&self) -> &'static str {
-        crate::plugins::findmyphone::ID
-    }
-
-    /// Listed for every device, enabled while it is connected and can ring.
-    /// The tray lists it only for a device that says it can ring.
-    fn device_actions(&self, device: &DeviceSnapshot) -> Vec<DeviceAction<Message>> {
-        vec![DeviceAction {
-            id: "ring",
-            label: "Ring".into(),
-            icon: lucide::volume_two,
-            enabled: can_ring(device),
-            visible_in_tray: advertises_ring(device),
-            message: Message::Ring {
-                device_id: device.device_id.clone(),
-                name: device.device_name.clone(),
-            },
-        }]
-    }
-
-    fn update(&mut self, ctx: &UiContext, message: Message) -> Command<Message> {
-        match message {
-            Message::Ring { device_id, name } => {
-                // Queues the packet; nothing here waits on the network.
-                Command::shell(match ring_device(&ctx.plugin_context(), &device_id) {
-                    Ok(()) => ShellRequest::done(format!("Asked {name} to ring.")),
-                    Err(error) => ShellRequest::failed(
-                        format!("Couldn’t ring {name}"),
-                        describe_error(&error),
-                    ),
-                })
+pub(crate) fn update(ctx: &UiContext, message: Message, origin: Origin) -> Task<ui::Message> {
+    match message {
+        Message::Ring { device_id, name } => {
+            // Queues the packet; nothing here waits on the network.
+            match ring_device(&ctx.plugin_context(), &device_id) {
+                Ok(()) => shell::done(origin, format!("Asked {name} to ring.")),
+                Err(error) => shell::failed(
+                    origin,
+                    format!("Couldn’t ring {name}"),
+                    describe_error(&error),
+                ),
             }
         }
     }
@@ -74,14 +64,10 @@ fn advertises_ring(device: &DeviceSnapshot) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        core::testing::handle,
-        plugins::ping,
-        ui::{plugin::Outcome, testing},
-    };
+    use crate::{core::testing::handle, plugins::ping, ui::testing};
 
-    fn ring_action(device: &DeviceSnapshot) -> DeviceAction<Message> {
-        let [action] = FindMyPhoneUi.device_actions(device).try_into().unwrap();
+    fn ring_action(device: &DeviceSnapshot) -> DeviceAction {
+        let [action] = device_actions(device).try_into().unwrap();
         action
     }
 
@@ -98,10 +84,13 @@ mod tests {
         assert!(!ring_action(&device).enabled);
     }
 
-    /// What ringing reports: its text, and the failure's title.
-    async fn report(ctx: &UiContext, message: Message) -> (String, Option<String>) {
-        let outcomes = testing::outputs(FindMyPhoneUi.update(ctx, message).into_task()).await;
-        let [Outcome::Shell(ShellRequest::Report { text, failure })] = &outcomes[..] else {
+    /// What ringing `device` reports: its text, and the failure's title.
+    async fn report(ctx: &UiContext, device: &DeviceSnapshot) -> (String, Option<String>) {
+        let Feature::FindMyPhone(message) = ring_action(device).message else {
+            panic!("a ring");
+        };
+        let outcomes = testing::outputs(update(ctx, message, Origin::Window)).await;
+        let [ui::Message::Report { text, failure, .. }] = &outcomes[..] else {
             panic!("unexpected outcomes: {outcomes:?}");
         };
         (text.clone(), failure.clone())
@@ -114,7 +103,7 @@ mod tests {
             testing::connect_peer(&core, testing::PEER_ID, &[REQUEST_PACKET_TYPE]);
         let ctx = UiContext::new(core, tokio::runtime::Handle::current());
         assert_eq!(
-            report(&ctx, ring_action(&device).message).await,
+            report(&ctx, &device).await,
             ("Asked Peer to ring.".into(), None)
         );
         assert_eq!(sent.try_recv().unwrap().packet_type, REQUEST_PACKET_TYPE);
@@ -126,7 +115,7 @@ mod tests {
         let (device, _sent) = testing::connect_peer(&core, testing::PEER_ID, &[ping::PACKET_TYPE]);
         let ctx = UiContext::new(core, tokio::runtime::Handle::current());
         assert_eq!(
-            report(&ctx, ring_action(&device).message).await,
+            report(&ctx, &device).await,
             (
                 "The device doesn’t support that.".into(),
                 Some("Couldn’t ring Peer".into())

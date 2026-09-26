@@ -1,21 +1,22 @@
-//! Share's UI half: the *Send files* action, and files dropped on a device
-//! that takes them.
+//! Share's UI: the *Send files* action, and files dropped on a device that
+//! takes them.
 
 use std::{path::PathBuf, sync::Arc};
 
+use iced::Task;
 use iced_fonts::lucide;
 
-use crate::plugins::share::{PACKET_TYPE, SendPathError, send_path};
+use super::{DeviceAction, DropTarget, Feature};
 use crate::{
     core::{DeviceReachability, DeviceSnapshot},
+    plugins::share::{PACKET_TYPE, SendPathError, send_path},
     ui::{
+        self, Origin,
+        context::UiContext,
         error::{describe_code, describe_error, describe_file_failures},
-        plugin::{Command, DeviceAction, DropTarget, ShellRequest, UiContext, UiPlugin},
-        route::Route,
+        shell,
     },
 };
-
-pub struct ShareUi;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -36,94 +37,90 @@ pub enum Message {
     },
 }
 
-impl UiPlugin for ShareUi {
-    type Message = Message;
+/// Listed for every device, enabled while it takes files.
+pub fn device_actions(device: &DeviceSnapshot) -> Vec<DeviceAction> {
+    vec![DeviceAction {
+        id: "send-files",
+        label: "Send files".into(),
+        icon: lucide::file_up,
+        enabled: accepts_files(device),
+        visible_in_tray: true,
+        message: Feature::Share(Message::Pick {
+            device_id: device.device_id.clone(),
+            name: device.device_name.clone(),
+        }),
+    }]
+}
 
-    fn id(&self) -> &'static str {
-        crate::plugins::share::ID
+/// Files dropped on a device that takes them are sent to it.
+pub fn drop_target(device: &DeviceSnapshot) -> Option<DropTarget> {
+    if !accepts_files(device) {
+        return None;
     }
-
-    /// Listed for every device, enabled while it takes files.
-    fn device_actions(&self, device: &DeviceSnapshot) -> Vec<DeviceAction<Message>> {
-        vec![DeviceAction {
-            id: "send-files",
-            label: "Send files".into(),
-            icon: lucide::file_up,
-            enabled: accepts_files(device),
-            visible_in_tray: true,
-            message: Message::Pick {
-                device_id: device.device_id.clone(),
-                name: device.device_name.clone(),
-            },
-        }]
-    }
-
-    /// Files dropped on a device that takes them are sent to it.
-    fn drop_target(&self, device: &DeviceSnapshot, _route: &Route) -> Option<DropTarget<Message>> {
-        if !accepts_files(device) {
-            return None;
-        }
-        let device_id = device.device_id.clone();
-        let name = device.device_name.clone();
-        Some(DropTarget {
-            label: format!("Drop to send to {name}"),
-            on_drop: Arc::new(move |paths| Message::Send {
+    let device_id = device.device_id.clone();
+    let name = device.device_name.clone();
+    Some(DropTarget {
+        label: format!("Drop to send to {name}"),
+        on_drop: Arc::new(move |paths| {
+            Feature::Share(Message::Send {
                 device_id: device_id.clone(),
                 name: name.clone(),
                 paths,
-            }),
-        })
-    }
+            })
+        }),
+    })
+}
 
-    fn update(&mut self, ctx: &UiContext, message: Message) -> Command<Message> {
-        match message {
-            Message::Pick { device_id, name } => Command::shell(ShellRequest::PickFiles {
-                title: format!("Send files to {name}"),
-                confirm_label: "Send".into(),
-                then: Arc::new(move |paths| Message::Send {
+pub(crate) fn update(ctx: &UiContext, message: Message, origin: Origin) -> Task<ui::Message> {
+    match message {
+        Message::Pick { device_id, name } => shell::pick_files(
+            origin,
+            format!("Send files to {name}"),
+            Arc::new(move |paths| {
+                Feature::Share(Message::Send {
                     device_id: device_id.clone(),
                     name: name.clone(),
                     paths,
-                }),
+                })
             }),
-            Message::Send {
-                device_id,
-                name,
-                paths,
-            } => {
-                let plugin_ctx = ctx.plugin_context();
-                // It may have gone while the user picked.
-                let connected = plugin_ctx
-                    .device(&device_id)
-                    .is_some_and(|device| device.reachability == DeviceReachability::Connected);
-                if !connected {
-                    return Command::shell(ShellRequest::failed(
-                        format!("Couldn’t send to {name}"),
-                        describe_code("device_not_connected"),
-                    ));
-                }
-                ctx.spawn(
-                    async move {
-                        let mut failures = Vec::new();
-                        for path in paths {
-                            if let Err(error) = send_path(&plugin_ctx, &device_id, &path).await {
-                                failures.push((path, describe(&error)));
-                            }
-                        }
-                        describe_file_failures("send", &failures)
-                    },
-                    move |failures| Message::Sent { name, failures },
-                )
+        ),
+        Message::Send {
+            device_id,
+            name,
+            paths,
+        } => {
+            let plugin_ctx = ctx.plugin_context();
+            // It may have gone while the user picked.
+            let connected = plugin_ctx
+                .device(&device_id)
+                .is_some_and(|device| device.reachability == DeviceReachability::Connected);
+            if !connected {
+                return shell::failed(
+                    origin,
+                    format!("Couldn’t send to {name}"),
+                    describe_code("device_not_connected"),
+                );
             }
-            Message::Sent {
-                name,
-                failures: Some(text),
-            } => Command::shell(ShellRequest::failed(
-                format!("Couldn’t send to {name}"),
-                text,
-            )),
-            Message::Sent { failures: None, .. } => Command::none(),
+            ctx.spawn(
+                async move {
+                    let mut failures = Vec::new();
+                    for path in paths {
+                        if let Err(error) = send_path(&plugin_ctx, &device_id, &path).await {
+                            failures.push((path, describe(&error)));
+                        }
+                    }
+                    describe_file_failures("send", &failures)
+                },
+                move |failures| {
+                    ui::Message::Feature(Feature::Share(Message::Sent { name, failures }), origin)
+                },
+            )
         }
+        Message::Sent {
+            name,
+            failures: Some(text),
+        } => shell::failed(origin, format!("Couldn’t send to {name}"), text),
+        Message::Sent { failures: None, .. } => Task::none(),
     }
 }
 
@@ -149,29 +146,37 @@ mod tests {
     use super::*;
     use crate::{
         core::testing::handle,
-        ui::{plugin::Outcome, testing},
+        ui::{shell::PickFiles, testing},
     };
 
-    fn send_action(device: &DeviceSnapshot) -> DeviceAction<Message> {
-        let [action] = ShareUi.device_actions(device).try_into().unwrap();
+    fn send_action(device: &DeviceSnapshot) -> DeviceAction {
+        let [action] = device_actions(device).try_into().unwrap();
         action
+    }
+
+    /// The share message `feature` holds.
+    fn share(feature: Feature) -> Message {
+        let Feature::Share(message) = feature else {
+            panic!("not a share message: {feature:?}");
+        };
+        message
     }
 
     #[test]
     fn sending_is_enabled_and_drops_taken_only_while_the_device_takes_files() {
         let mut device = testing::device("Pixel");
         assert!(!send_action(&device).enabled, "listed, but disabled");
-        assert!(ShareUi.drop_target(&device, &Route::Devices).is_none());
+        assert!(drop_target(&device).is_none());
 
         device.incoming_capabilities = vec![PACKET_TYPE.into()];
         assert!(send_action(&device).enabled);
-        let target = ShareUi.drop_target(&device, &Route::Devices).unwrap();
+        let target = drop_target(&device).unwrap();
         assert_eq!(target.label, "Drop to send to Pixel");
         let Message::Send {
             device_id,
             name,
             paths,
-        } = (target.on_drop)(vec!["/tmp/a.txt".into()])
+        } = share((target.on_drop)(vec!["/tmp/a.txt".into()]))
         else {
             panic!("a drop sends");
         };
@@ -183,7 +188,7 @@ mod tests {
 
         device.reachability = DeviceReachability::Discovered;
         assert!(!send_action(&device).enabled);
-        assert!(ShareUi.drop_target(&device, &Route::Devices).is_none());
+        assert!(drop_target(&device).is_none());
     }
 
     #[tokio::test]
@@ -193,29 +198,28 @@ mod tests {
         let mut device = testing::device("Pixel");
         device.incoming_capabilities = vec![PACKET_TYPE.into()];
 
-        let outcomes = testing::outputs(
-            ShareUi
-                .update(&ctx, send_action(&device).message)
-                .into_task(),
-        )
+        let outcomes = testing::outputs(update(
+            &ctx,
+            share(send_action(&device).message),
+            Origin::Tray,
+        ))
         .await;
         let [
-            Outcome::Shell(ShellRequest::PickFiles {
+            ui::Message::PickFiles(PickFiles {
                 title,
-                confirm_label,
                 then,
+                origin: Origin::Tray,
             }),
         ] = &outcomes[..]
         else {
             panic!("unexpected outcomes: {outcomes:?}");
         };
         assert_eq!(title, "Send files to Pixel");
-        assert_eq!(confirm_label, "Send");
         let Message::Send {
             device_id,
             name,
             paths,
-        } = then(vec!["/tmp/a.txt".into()])
+        } = share(then(vec!["/tmp/a.txt".into()]))
         else {
             panic!("the picked files are sent");
         };
@@ -226,6 +230,29 @@ mod tests {
         assert_eq!(paths, [PathBuf::from("/tmp/a.txt")]);
     }
 
+    /// What sending `paths` to `device` leads to: the failures' sentence.
+    async fn failures(ctx: &UiContext, device: &DeviceSnapshot, paths: Vec<PathBuf>) -> String {
+        let send = Message::Send {
+            device_id: device.device_id.clone(),
+            name: device.device_name.clone(),
+            paths,
+        };
+        let sent = testing::outputs(update(ctx, send, Origin::Window)).await;
+        let [
+            ui::Message::Feature(
+                Feature::Share(Message::Sent {
+                    failures: Some(text),
+                    ..
+                }),
+                Origin::Window,
+            ),
+        ] = &sent[..]
+        else {
+            panic!("unexpected outcomes: {sent:?}");
+        };
+        text.clone()
+    }
+
     #[tokio::test]
     async fn failed_sends_are_reported_once() {
         let (core, _commands) = handle();
@@ -234,66 +261,28 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let photo = folder.path().join("photo.jpg");
         std::fs::write(&photo, "jpg").unwrap();
-        let send = |paths: Vec<PathBuf>| Message::Send {
-            device_id: device.device_id.clone(),
-            name: device.device_name.clone(),
-            paths,
-        };
 
         // The peer doesn't take files.
-        let sent = testing::outputs(
-            ShareUi
-                .update(&ctx, send(vec![photo.clone(), folder.path().into()]))
-                .into_task(),
-        )
-        .await;
-        let [
-            Outcome::Plugin(Message::Sent {
-                failures: Some(text),
-                ..
-            }),
-        ] = &sent[..]
-        else {
-            panic!("unexpected outcomes: {sent:?}");
-        };
         assert_eq!(
-            text,
+            failures(&ctx, &device, vec![photo.clone(), folder.path().into()]).await,
             "Couldn’t send 2 files: The device doesn’t support that."
         );
-
-        let sent = testing::outputs(
-            ShareUi
-                .update(&ctx, send(vec![folder.path().join("gone.txt")]))
-                .into_task(),
-        )
-        .await;
-        let [
-            Outcome::Plugin(Message::Sent {
-                failures: Some(text),
-                ..
-            }),
-        ] = &sent[..]
-        else {
-            panic!("unexpected outcomes: {sent:?}");
-        };
+        let text = failures(&ctx, &device, vec![folder.path().join("gone.txt")]).await;
         assert_eq!(text, "Couldn’t send gone.txt: The file couldn’t be read.");
 
-        let report = testing::outputs(
-            ShareUi
-                .update(
-                    &ctx,
-                    Message::Sent {
-                        name: "Peer".into(),
-                        failures: Some(text.clone()),
-                    },
-                )
-                .into_task(),
-        )
+        let report = testing::outputs(update(
+            &ctx,
+            Message::Sent {
+                name: "Peer".into(),
+                failures: Some(text.clone()),
+            },
+            Origin::Window,
+        ))
         .await;
         assert!(matches!(
             &report[..],
-            [Outcome::Shell(ShellRequest::Report { text: said, failure: Some(title) })]
-                if said == text && title == "Couldn’t send to Peer"
+            [ui::Message::Report { text: said, failure: Some(title), .. }]
+                if *said == text && title == "Couldn’t send to Peer"
         ));
     }
 
@@ -306,12 +295,13 @@ mod tests {
             name: "Pixel".into(),
             paths: vec!["/tmp/a.txt".into()],
         };
-        let outcomes = testing::outputs(ShareUi.update(&ctx, send).into_task()).await;
+        let outcomes = testing::outputs(update(&ctx, send, Origin::Window)).await;
         let [
-            Outcome::Shell(ShellRequest::Report {
+            ui::Message::Report {
                 text,
                 failure: Some(title),
-            }),
+                ..
+            },
         ] = &outcomes[..]
         else {
             panic!("unexpected outcomes: {outcomes:?}");

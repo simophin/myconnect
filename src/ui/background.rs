@@ -16,7 +16,7 @@ use crate::{
             notify::Notifier,
             tray::{TrayCommand, TrayItem},
         },
-        plugin::ErasedUiPlugin,
+        features::Features,
         store::Store,
     },
 };
@@ -24,12 +24,12 @@ use crate::{
 /// The tray menu: Open, then each connected paired device with what can be
 /// done to it (left out while devices are unknown, e.g. the daemon didn't
 /// start), then Settings and Quit. The window lists the rest.
-pub fn tray_menu(running: Option<(&Store, &[Box<dyn ErasedUiPlugin>])>) -> Vec<TrayItem> {
+pub(crate) fn tray_menu(running: Option<(&Store, &Features)>) -> Vec<TrayItem> {
     let mut menu = vec![
         TrayItem::item("Open MyConnect", Some(TrayCommand::Open)),
         TrayItem::Separator,
     ];
-    if let Some((store, plugins)) = running
+    if let Some((store, features)) = running
         && let Some(paired) = store.paired_devices().into_loaded()
     {
         let connected: Vec<_> = paired
@@ -44,7 +44,7 @@ pub fn tray_menu(running: Option<(&Store, &[Box<dyn ErasedUiPlugin>])>) -> Vec<T
         menu.extend(
             connected
                 .into_iter()
-                .map(|device| device_menu(device, plugins)),
+                .map(|device| device_menu(device, features)),
         );
         menu.push(TrayItem::Separator);
     }
@@ -56,19 +56,17 @@ pub fn tray_menu(running: Option<(&Store, &[Box<dyn ErasedUiPlugin>])>) -> Vec<T
     menu
 }
 
-/// A device's submenu, "{name} · {status}", holding the plugins' actions
+/// A device's submenu, "{name} · {status}", holding the features' actions
 /// meant for the tray, then Show details.
-fn device_menu(device: &DeviceSnapshot, plugins: &[Box<dyn ErasedUiPlugin>]) -> TrayItem {
-    let status = plugins
-        .iter()
-        .find_map(|plugin| plugin.device_status(device));
+fn device_menu(device: &DeviceSnapshot, features: &Features) -> TrayItem {
+    let status = features.device_statuses(device).into_iter().next();
     let label = match status {
         Some(status) => format!("{} · {}", device.device_name, status.label),
         None => device.device_name.clone(),
     };
-    let mut items: Vec<_> = plugins
-        .iter()
-        .flat_map(|plugin| plugin.device_actions(device))
+    let mut items: Vec<_> = features
+        .device_actions(device)
+        .into_iter()
         .filter(|action| action.visible_in_tray)
         .map(|action| {
             let command = action.enabled.then(|| TrayCommand::Action(action.message));

@@ -1,31 +1,26 @@
-//! The clipboard feature's UI half: the *Send clipboard* action, and the
+//! The clipboard feature's UI: the *Send clipboard* action, and the
 //! "Sync clipboard" setting.
 
 use std::sync::Arc;
 
+use iced::{Element, Task};
 use iced_fonts::lucide;
 
-use crate::plugins::clipboard::{
-    ClipboardPlugin, ClipboardSettings, ClipboardSyncError, PACKET_TYPE,
-};
+use super::{DeviceAction, Feature};
 use crate::{
     core::{DeviceReachability, DeviceSnapshot, SettingsSnapshot},
+    plugins::clipboard::{ClipboardPlugin, ClipboardSettings, ClipboardSyncError, PACKET_TYPE},
     ui::{
+        self, Origin,
+        context::UiContext,
         error::{describe_code, describe_error as describe_core_error},
-        plugin::{Command, DeviceAction, ShellRequest, UiContext, UiPlugin},
-        widgets,
+        shell, widgets,
     },
 };
 
-/// The UI half, over the same plugin instance the core runs.
+/// The feature, over the same plugin instance the core runs.
 pub struct ClipboardUi {
     plugin: Arc<ClipboardPlugin>,
-}
-
-impl ClipboardUi {
-    pub fn new(plugin: Arc<ClipboardPlugin>) -> Self {
-        Self { plugin }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -46,37 +41,51 @@ pub enum Message {
     SyncSaved(Option<String>),
 }
 
-impl UiPlugin for ClipboardUi {
-    type Message = Message;
+/// Listed for a device that takes clipboard text at all, enabled while it
+/// is paired and connected.
+pub fn device_actions(device: &DeviceSnapshot) -> Vec<DeviceAction> {
+    let supported = device
+        .incoming_capabilities
+        .iter()
+        .any(|capability| capability == PACKET_TYPE);
+    if !supported {
+        return Vec::new();
+    }
+    vec![DeviceAction {
+        id: "send-clipboard",
+        label: "Send clipboard".into(),
+        icon: lucide::clipboard_paste,
+        enabled: device.paired && device.reachability == DeviceReachability::Connected,
+        visible_in_tray: true,
+        message: Feature::Clipboard(Message::Send {
+            device_id: device.device_id.clone(),
+            name: device.device_name.clone(),
+        }),
+    }]
+}
 
-    fn id(&self) -> &'static str {
-        crate::plugins::clipboard::ID
+/// The "Sync clipboard" switch.
+pub fn view_settings(settings: &SettingsSnapshot) -> Element<'_, Message> {
+    widgets::switch_setting(
+        lucide::clipboard_copy,
+        "Sync clipboard",
+        "Share copied text with paired devices",
+        ClipboardSettings::of(settings).sync_enabled,
+        Message::SetSync,
+    )
+}
+
+impl ClipboardUi {
+    pub fn new(plugin: Arc<ClipboardPlugin>) -> Self {
+        Self { plugin }
     }
 
-    /// Listed for a device that takes clipboard text at all, enabled while
-    /// it is paired and connected.
-    fn device_actions(&self, device: &DeviceSnapshot) -> Vec<DeviceAction<Message>> {
-        let supported = device
-            .incoming_capabilities
-            .iter()
-            .any(|capability| capability == PACKET_TYPE);
-        if !supported {
-            return Vec::new();
-        }
-        vec![DeviceAction {
-            id: "send-clipboard",
-            label: "Send clipboard".into(),
-            icon: lucide::clipboard_paste,
-            enabled: device.paired && device.reachability == DeviceReachability::Connected,
-            visible_in_tray: true,
-            message: Message::Send {
-                device_id: device.device_id.clone(),
-                name: device.device_name.clone(),
-            },
-        }]
-    }
-
-    fn update(&mut self, ctx: &UiContext, message: Message) -> Command<Message> {
+    pub(crate) fn update(
+        &mut self,
+        ctx: &UiContext,
+        message: Message,
+        origin: Origin,
+    ) -> Task<ui::Message> {
         match message {
             Message::Send { device_id, name } => {
                 let plugin = self.plugin.clone();
@@ -93,41 +102,38 @@ impl UiPlugin for ClipboardUi {
                             Ok(Err(error)) => Err(describe_error(&error)),
                             Err(_) => Err(describe_code("internal")),
                         };
-                        Message::Sent { name, result }
+                        to_app(Message::Sent { name, result }, origin)
                     },
                 )
             }
-            Message::Sent { name, result } => Command::shell(match result {
-                Ok(text) => ShellRequest::done(text),
-                Err(error) => {
-                    ShellRequest::failed(format!("Couldn’t send the clipboard to {name}"), error)
-                }
-            }),
+            Message::Sent { name, result } => match result {
+                Ok(text) => shell::done(origin, text),
+                Err(error) => shell::failed(
+                    origin,
+                    format!("Couldn’t send the clipboard to {name}"),
+                    error,
+                ),
+            },
             Message::SetSync(enabled) => {
                 let core = ctx.core().clone();
                 // Writes the settings file.
                 ctx.spawn(
                     async move { core.update_settings(ClipboardSettings::sync_enabled_patch(enabled)) },
-                    |result| Message::SyncSaved(result.err().map(|error| describe_core_error(&error))),
+                    move |result| {
+                        let error = result.err().map(|error| describe_core_error(&error));
+                        to_app(Message::SyncSaved(error), origin)
+                    },
                 )
             }
-            Message::SyncSaved(None) => Command::none(),
-            Message::SyncSaved(Some(error)) => Command::shell(ShellRequest::toast(error)),
+            Message::SyncSaved(None) => Task::none(),
+            Message::SyncSaved(Some(error)) => shell::toast(origin, error),
         }
     }
+}
 
-    fn view_settings<'a>(
-        &'a self,
-        settings: &'a SettingsSnapshot,
-    ) -> Option<iced::Element<'a, Message>> {
-        Some(widgets::switch_setting(
-            lucide::clipboard_copy,
-            "Sync clipboard",
-            "Share copied text with paired devices",
-            ClipboardSettings::of(settings).sync_enabled,
-            Message::SetSync,
-        ))
-    }
+/// `message` as the app's, from `origin`.
+fn to_app(message: Message, origin: Origin) -> ui::Message {
+    ui::Message::Feature(Feature::Clipboard(message), origin)
 }
 
 /// A sentence for the user about `error`.
@@ -135,7 +141,7 @@ pub fn describe_error(error: &ClipboardSyncError) -> String {
     describe(error.code())
 }
 
-/// Words this feature's codes and leaves the rest to the UI core.
+/// Words this feature's codes and leaves the rest to `ui::error`.
 fn describe(code: &str) -> String {
     match code {
         "clipboard_empty" => "There is no text on the clipboard to send.".into(),
@@ -155,7 +161,7 @@ mod tests {
             testing::{handle, handle_with_plugin},
         },
         plugins::clipboard::{ClipboardService, InMemoryClipboard},
-        ui::{plugin::Outcome, testing},
+        ui::testing,
     };
 
     fn ui(text: &str) -> ClipboardUi {
@@ -164,23 +170,30 @@ mod tests {
         ClipboardUi::new(Arc::new(ClipboardPlugin::new(clipboard)))
     }
 
-    fn actions(device: &DeviceSnapshot) -> Vec<DeviceAction<Message>> {
-        ui("").device_actions(device)
+    /// The clipboard's message in `message`, the app's.
+    fn clipboard_message(message: &ui::Message) -> Message {
+        let ui::Message::Feature(Feature::Clipboard(message), Origin::Window) = message else {
+            panic!("not a clipboard message: {message:?}");
+        };
+        message.clone()
     }
 
     #[test]
     fn send_is_listed_if_supported_and_enabled_if_paired_and_connected() {
         let mut device = testing::device("Pixel");
-        assert!(actions(&device).is_empty(), "not listed without support");
+        assert!(
+            device_actions(&device).is_empty(),
+            "not listed without support"
+        );
         device.incoming_capabilities = vec![PACKET_TYPE.into()];
         device.reachability = DeviceReachability::Unavailable;
-        let [action] = actions(&device).try_into().unwrap();
+        let [action] = device_actions(&device).try_into().unwrap();
         assert_eq!(action.label, "Send clipboard");
         assert!(!action.enabled, "listed, but disabled while unreachable");
         device.reachability = DeviceReachability::Connected;
-        assert!(actions(&device)[0].enabled);
+        assert!(device_actions(&device)[0].enabled);
         device.paired = false;
-        assert!(!actions(&device)[0].enabled);
+        assert!(!device_actions(&device)[0].enabled);
     }
 
     /// Choose the action on `device` and return what it reports: its text,
@@ -190,13 +203,13 @@ mod tests {
         ctx: &UiContext,
         device: &DeviceSnapshot,
     ) -> (String, Option<String>) {
-        let message = ui.device_actions(device).remove(0).message;
-        let mut outcomes = testing::outputs(ui.update(ctx, message).into_task()).await;
-        let Some(Outcome::Plugin(sent)) = outcomes.pop() else {
-            panic!("unexpected outcomes: {outcomes:?}");
+        let Feature::Clipboard(message) = device_actions(device).remove(0).message else {
+            panic!("a clipboard action");
         };
-        let outcomes = testing::outputs(ui.update(ctx, sent).into_task()).await;
-        let [Outcome::Shell(ShellRequest::Report { text, failure })] = &outcomes[..] else {
+        let mut outcomes = testing::outputs(ui.update(ctx, message, Origin::Window)).await;
+        let sent = clipboard_message(&outcomes.pop().expect("a message"));
+        let outcomes = testing::outputs(ui.update(ctx, sent, Origin::Window)).await;
+        let [ui::Message::Report { text, failure, .. }] = &outcomes[..] else {
             panic!("unexpected outcomes: {outcomes:?}");
         };
         (text.clone(), failure.clone())
@@ -235,18 +248,18 @@ mod tests {
             "on by default"
         );
 
-        let mut section = Simulator::new(ui.view_settings(&settings).unwrap());
+        let mut section = Simulator::new(view_settings(&settings));
         section.click("Sync clipboard").unwrap();
         let clicked: Vec<_> = section.into_messages().collect();
         let [Message::SetSync(false)] = &clicked[..] else {
             panic!("unexpected messages: {clicked:?}");
         };
 
-        let outcomes = testing::outputs(ui.update(&ctx, clicked[0].clone()).into_task()).await;
-        assert!(matches!(
-            outcomes[..],
-            [Outcome::Plugin(Message::SyncSaved(None))]
-        ));
+        let outcomes = testing::outputs(ui.update(&ctx, clicked[0].clone(), Origin::Window)).await;
+        let [saved] = &outcomes[..] else {
+            panic!("unexpected outcomes: {outcomes:?}");
+        };
+        assert!(matches!(clipboard_message(saved), Message::SyncSaved(None)));
         assert!(!ClipboardSettings::of(&core.settings().unwrap()).sync_enabled);
     }
 
@@ -257,12 +270,10 @@ mod tests {
         let ctx = UiContext::new(core, tokio::runtime::Handle::current());
         let mut ui = ui("");
         let mut outcomes =
-            testing::outputs(ui.update(&ctx, Message::SetSync(false)).into_task()).await;
-        let Some(Outcome::Plugin(saved)) = outcomes.pop() else {
-            panic!("unexpected outcomes: {outcomes:?}");
-        };
-        let outcomes = testing::outputs(ui.update(&ctx, saved).into_task()).await;
-        let [Outcome::Shell(ShellRequest::Toast { text, .. })] = &outcomes[..] else {
+            testing::outputs(ui.update(&ctx, Message::SetSync(false), Origin::Window)).await;
+        let saved = clipboard_message(&outcomes.pop().expect("a message"));
+        let outcomes = testing::outputs(ui.update(&ctx, saved, Origin::Window)).await;
+        let [ui::Message::Toast { text, .. }] = &outcomes[..] else {
             panic!("unexpected outcomes: {outcomes:?}");
         };
         assert_eq!(text, &describe_code("invalid_settings"));

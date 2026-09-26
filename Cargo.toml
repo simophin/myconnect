@@ -8,7 +8,7 @@ edition = "2024"
 default-run = "myconnect"
 
 [features]
-# The desktop UI: `src/ui/` and each plugin's `ui.rs`. Off by default so the
+# The desktop UI: `src/ui/`. Off by default so the
 # CLI and daemon build without iced; the `gui` crate turns it on.
 gui = [
     "dep:chrono",

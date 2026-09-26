@@ -1,4 +1,4 @@
-//! Widgets the pages share, the core's and the plugins': the page header,
+//! Widgets the pages share, the shell's and the features': the page header,
 //! cards, the error and empty views, the verification code, and how sizes
 //! read.
 
@@ -11,7 +11,9 @@ use iced::{
 };
 use iced_fonts::lucide;
 
-use crate::ui::plugin::Icon;
+/// A Lucide icon, as a function so it can be stored as data (the tray
+/// can't draw an [`Element`]).
+pub type Icon = fn() -> Text<'static>;
 
 /// A button in a page header: an icon with a tooltip, disabled without a
 /// message.
@@ -155,7 +157,7 @@ pub fn card_button(theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-/// A setting on the settings page, the core's or a plugin's: its icon,
+/// A setting on the settings page, the shell's or a feature's: its icon,
 /// name and current value (or what it does), and a widget at the end (a
 /// pencil, a switch). The whole card sends `on_press`, if given.
 pub fn setting<'a, M: Clone + 'a>(

@@ -5,23 +5,24 @@
 //! through typed Rust functions, never the HTTP API. The daemon still serves
 //! that API, so the CLI can drive and inspect the instance the UI shows.
 //!
-//! This module is the UI core. It never names a feature: each feature's UI
-//! half lives in `src/plugins/<name>/ui.rs` and plugs in through
-//! [`plugin::UiPlugin`]. See `docs/adr/0001-native-ui-in-iced.md`.
+//! This module is the shell: the window, the tray, the pages it owns, and
+//! what features share. Each feature's UI lives in [`features`], which the
+//! shell calls by name. See `docs/adr/0001-native-ui-in-iced.md`.
 //!
 //! [`Core`]: crate::core::Core
 //! [`Core::subscribe`]: crate::core::Core::subscribe
 
 pub mod activity;
 pub mod background;
+pub mod context;
 pub mod demo;
 pub mod desktop;
 pub mod error;
 pub mod features;
 pub mod overlay;
 pub mod pages;
-pub mod plugin;
 pub mod route;
+pub mod shell;
 pub mod store;
 pub mod sync;
 #[cfg(test)]
@@ -56,6 +57,7 @@ use crate::{
     daemon::RunningService,
     plugins::{browse::BrowsePlugin, clipboard::ClipboardPlugin},
 };
+use context::UiContext;
 use desktop::{
     DesktopEvent,
     dialogs::{self as picking, Pick},
@@ -66,6 +68,7 @@ use desktop::{
     tray::{self as trays, Tray, TrayCommand, TrayItem},
     window::{self as windowing, Windows},
 };
+use features::{DropTarget, Feature, Features};
 use overlay::{
     dialog::{self as dialogs, Dialog, DialogEvent, Dialogs, Field, Step, Submit},
     drop::{self as dropping, Drag, Dropped},
@@ -73,9 +76,6 @@ use overlay::{
     toast::{self, Toasts},
 };
 use pages::{add_device, device, devices, pairing, settings, startup, transfers};
-use plugin::{
-    Command, DropTarget, ErasedUiPlugin, Outcome, PluginMessage, ShellRequest, UiContext,
-};
 use route::Route;
 use store::Snapshot;
 
@@ -203,10 +203,10 @@ pub struct Desktop {
     pub picker: Arc<dyn Pick>,
 }
 
-/// Where a plugin's message came from, which decides how its outcome is
+/// Where a feature's message came from, which decides how its outcome is
 /// shown: in the window, or, from the tray, without showing the window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Origin {
+pub(crate) enum Origin {
     Window,
     Tray,
 }
@@ -217,7 +217,7 @@ const PLACEMENT_SAVE_DELAY: Duration = Duration::from_millis(500);
 
 /// A value that isn't `Clone` passed through a message, which must be: the
 /// first to [`take`](Handoff::take) it gets it.
-struct Handoff<T>(Arc<Mutex<Option<T>>>);
+pub(crate) struct Handoff<T>(Arc<Mutex<Option<T>>>);
 
 impl<T> Clone for Handoff<T> {
     fn clone(&self) -> Self {
@@ -242,7 +242,7 @@ impl<T> fmt::Debug for Handoff<T> {
 }
 
 #[derive(Debug, Clone)]
-enum Message {
+pub(crate) enum Message {
     /// The daemon started, or why it didn't.
     Started(Result<Handoff<Started>, String>),
     /// Start the daemon again after it failed.
@@ -251,13 +251,45 @@ enum Message {
     /// Read the core again after a snapshot failed. Events already queued
     /// are applied after it, as after the subscription's own snapshot.
     Reload,
-    /// A message for the plugin it names.
-    Plugin(PluginMessage),
-    /// A message for the plugin it names, from its action in the tray.
-    TrayPlugin(PluginMessage),
-    /// A plugin's request to the shell, and where the plugin's message
-    /// came from.
-    Shell(ShellRequest<PluginMessage>, Origin),
+    /// A feature's message, and where the action that caused it came from.
+    /// Its follow-up messages keep that origin.
+    Feature(Feature, Origin),
+    /// A short message at the bottom of the window, with an optional button
+    /// that goes somewhere. Not shown for an action from the tray.
+    Toast {
+        text: String,
+        action: Option<(String, Route)>,
+        origin: Origin,
+    },
+    /// How an action went. The window shows `text` as a toast. An action
+    /// chosen in the tray, with the window likely closed, reports only a
+    /// failure: a notification titled `failure` ("Couldn’t ping Pixel")
+    /// over `text`.
+    Report {
+        text: String,
+        failure: Option<String>,
+        origin: Origin,
+    },
+    /// A toast while the window is focused, a desktop notification
+    /// otherwise.
+    Notify {
+        title: String,
+        body: String,
+    },
+    /// Ask before doing something; `then` is sent on confirm. From the
+    /// tray, the window shows too.
+    Confirm {
+        title: String,
+        body: String,
+        confirm_label: String,
+        then: Feature,
+        origin: Origin,
+    },
+    /// Ask for a line of text. From the tray, the window shows too.
+    Prompt(Box<shell::Prompt>),
+    /// Pick files. From the tray, the files go back as the tray's, so a
+    /// failure to send them is reported the tray's way.
+    PickFiles(shell::PickFiles),
     /// Something the desktop reported: the tray, a notification, a second
     /// launch.
     Desktop(DesktopEvent),
@@ -270,8 +302,8 @@ enum Message {
     SavePlacement(u64),
     /// The window's placement, read to save it.
     PlacementSeen(Seen),
-    /// Go to a page.
-    Navigate(Route),
+    /// Go to a page; from the tray, show the window on it.
+    Navigate(Route, Origin),
     /// Go to the page this one was opened from.
     Back,
     /// Ask whether to unpair a device.
@@ -347,7 +379,7 @@ enum Message {
 
 /// Keyboard shortcuts the shell handles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum KeyCommand {
+pub(crate) enum KeyCommand {
     /// Escape: close the dialog.
     Cancel,
     /// Ctrl/Cmd+W.
@@ -408,8 +440,7 @@ enum Phase {
 /// The UI once the daemon runs.
 struct Running {
     ctx: UiContext,
-    /// Every feature's UI, in `plugins::builtin` order.
-    plugins: Vec<Box<dyn ErasedUiPlugin>>,
+    features: Features,
 }
 
 impl App {
@@ -481,7 +512,7 @@ impl App {
         ctx.set_window_focused(self.focused());
         self.phase = Phase::Running(Box::new(Running {
             ctx,
-            plugins: features::all(started.clipboard, started.browse),
+            features: Features::new(started.clipboard, started.browse),
         }));
         if self.options.demo
             && let Phase::Running(running) = &self.phase
@@ -543,12 +574,10 @@ impl App {
                         running.ctx.store_mut().apply_snapshot(*snapshot);
                         Task::none()
                     }
-                    // The store first, so plugins see the event applied.
+                    // The store first, so features see the event applied.
                     sync::Update::Event(event) => {
                         running.ctx.store_mut().apply_event(&event.event);
-                        Task::batch(running.plugins.iter_mut().map(|plugin| {
-                            shell_task(plugin.on_event(&running.ctx, &event), Origin::Window)
-                        }))
+                        running.features.on_event(&running.ctx, &event)
                     }
                 }
             }
@@ -559,9 +588,44 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Plugin(message) => self.plugin_update(message, Origin::Window),
-            Message::TrayPlugin(message) => self.plugin_update(message, Origin::Tray),
-            Message::Shell(request, origin) => self.handle(request, origin),
+            Message::Feature(feature, origin) => self.feature(feature, origin),
+            // From the tray, the window stays as it is unless the request
+            // needs it (a page, a dialog), and only failures are reported.
+            Message::Toast {
+                origin: Origin::Tray,
+                ..
+            } => Task::none(),
+            Message::Toast { text, action, .. } => self.toast(text, action),
+            Message::Report {
+                text,
+                failure,
+                origin: Origin::Tray,
+            } => match failure {
+                Some(title) => self.notify(&title, &text),
+                None => Task::none(),
+            },
+            Message::Report { text, .. } => self.toast(text, None),
+            Message::Notify { title, body } => self.notify(&title, &body),
+            Message::Confirm {
+                title,
+                body,
+                confirm_label,
+                then,
+                origin,
+            } => {
+                let show = self.show_window_for(origin);
+                let open = self.dialogs.open(Dialog::confirm(
+                    title,
+                    body,
+                    confirm_label,
+                    Submit::Close(Arc::new(move |_| {
+                        Message::Feature(then.clone(), Origin::Window)
+                    })),
+                ));
+                Task::batch([show, open])
+            }
+            Message::Prompt(prompt) => self.prompt(*prompt),
+            Message::PickFiles(pick) => self.pick_files(pick),
             Message::Desktop(event) => self.desktop_event(event),
             Message::Hide(seen) => self.hide(seen),
             Message::Exit(seen) => self.exit(seen),
@@ -581,7 +645,10 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Navigate(route) => self.go(route),
+            Message::Navigate(route, Origin::Window) => self.go(route),
+            Message::Navigate(route, Origin::Tray) => {
+                Task::batch([self.go(route), self.show_window()])
+            }
             Message::Back => match self.route.parent() {
                 Some(parent) => self.go(parent),
                 None => Task::none(),
@@ -748,7 +815,7 @@ impl App {
                 let Some(running) = self.running() else {
                     return Task::none();
                 };
-                demo::tick(running.ctx.core(), &running.plugins, tick);
+                demo::tick(running.ctx.core(), &running.features, tick);
                 self.after(demo::TICK, Message::DemoTick(tick + 1))
             }
             Message::WindowOpened => Task::none(),
@@ -798,7 +865,7 @@ impl App {
         }
     }
 
-    /// Show `route`, and tell every plugin. Opening Add device from
+    /// Show `route`, and tell the features. Opening Add device from
     /// elsewhere scans, as opening the Flutter page did; coming back to it
     /// from a pairing doesn't.
     fn go(&mut self, route: Route) -> Task<Message> {
@@ -806,9 +873,7 @@ impl App {
             && !matches!(self.route, Route::AddDevice | Route::Pairing(_));
         self.route = route;
         let told = match &mut self.phase {
-            Phase::Running(running) => Task::batch(running.plugins.iter_mut().map(|plugin| {
-                shell_task(plugin.on_route(&running.ctx, &self.route), Origin::Window)
-            })),
+            Phase::Running(running) => running.features.on_route(&running.ctx, &self.route),
             _ => Task::none(),
         };
         if entering_add_device {
@@ -939,7 +1004,7 @@ impl App {
     /// thread: it spawns a process or calls D-Bus.
     fn open(&self, path: PathBuf, reveal: bool) -> Task<Message> {
         let opener = self.desktop.opener.clone();
-        plugin::on_runtime(&self.options.runtime, async move {
+        context::on_runtime(&self.options.runtime, async move {
             let result = tokio::task::spawn_blocking({
                 let path = path.clone();
                 move || {
@@ -980,7 +1045,7 @@ impl App {
             "Save",
             Submit::Run(Arc::new(move |name| {
                 let core = core.clone();
-                plugin::on_runtime(&runtime, async move {
+                context::on_runtime(&runtime, async move {
                     core.update_settings(SettingsPatch {
                         device_name: Some(Some(name)),
                         ..SettingsPatch::default()
@@ -1025,14 +1090,14 @@ impl App {
         call: impl FnOnce() -> Result<T, CoreError> + Send + 'static,
         then: impl Fn(Result<T, String>) -> Message + Send + 'static,
     ) -> Task<Message> {
-        plugin::on_runtime(&self.options.runtime, async move {
+        context::on_runtime(&self.options.runtime, async move {
             call().map_err(|error| error::describe_error(&error))
         })
         .map(then)
     }
 
     /// Files were dropped on the window: send them where the page says, if
-    /// a plugin takes them there, or ask where. Folders are refused.
+    /// a feature takes them there, or ask where. Folders are refused.
     fn dropped(&mut self, paths: Vec<PathBuf>) -> Task<Message> {
         if self.running().is_none() {
             return Task::none();
@@ -1050,7 +1115,7 @@ impl App {
             return self.toast("Only files can be sent, not folders.".into(), None);
         }
         match self.drop_target_here() {
-            Some(target) => Task::done(Message::Plugin((target.on_drop)(files))),
+            Some(target) => Task::done(Message::Feature((target.on_drop)(files), Origin::Window)),
             None => {
                 self.choosing = Some(files);
                 Task::none()
@@ -1068,38 +1133,26 @@ impl App {
         let target = self.drop_target(&device_id, &route);
         let go = self.go(route);
         let then = match target {
-            Some(target) => Task::done(Message::Plugin((target.on_drop)(files))),
+            Some(target) => Task::done(Message::Feature((target.on_drop)(files), Origin::Window)),
             // It dropped out of the list as it was chosen.
             None => self.toast(error::describe_code("device_not_connected"), None),
         };
         Task::batch([go, then])
     }
 
-    /// Where a drop on the current page goes, if a plugin takes it.
-    fn drop_target_here(&self) -> Option<DropTarget<PluginMessage>> {
+    /// Where a drop on the current page goes, if a feature takes it.
+    fn drop_target_here(&self) -> Option<DropTarget> {
         self.drop_target(self.route.device()?, &self.route)
     }
 
     /// What files dropped on `device_id` while the window shows `route`
-    /// would do: the first plugin that takes them, starting with the one
-    /// whose page it is.
-    fn drop_target(&self, device_id: &str, route: &Route) -> Option<DropTarget<PluginMessage>> {
+    /// would do, if a feature takes them.
+    fn drop_target(&self, device_id: &str, route: &Route) -> Option<DropTarget> {
         let Phase::Running(running) = &self.phase else {
             return None;
         };
         let device = running.ctx.device(device_id)?;
-        let owner = match route {
-            Route::Plugin { plugin, .. } => Some(*plugin),
-            _ => None,
-        };
-        let (first, rest): (Vec<_>, Vec<_>) = running
-            .plugins
-            .iter()
-            .partition(|plugin| Some(plugin.id()) == owner);
-        first
-            .into_iter()
-            .chain(rest)
-            .find_map(|plugin| plugin.drop_target(device, route))
+        running.features.drop_target(device, route)
     }
 
     /// Whether an incoming pairing request is waiting for the user.
@@ -1117,7 +1170,7 @@ impl App {
         };
         let core = running.ctx.core().clone();
         self.unpairing = Some(device_id.clone());
-        plugin::on_runtime(&self.options.runtime, {
+        context::on_runtime(&self.options.runtime, {
             let device_id = device_id.clone();
             async move {
                 core.forget_device(&device_id)
@@ -1142,105 +1195,68 @@ impl App {
         }
     }
 
-    /// Hand `message` to the plugin it names. What it asks of the shell is
-    /// shown as `origin` suits.
-    fn plugin_update(&mut self, message: PluginMessage, origin: Origin) -> Task<Message> {
+    /// Hand `feature` to its feature. What it asks of the shell is shown
+    /// as `origin` suits.
+    fn feature(&mut self, feature: Feature, origin: Origin) -> Task<Message> {
         let Some(running) = self.running() else {
             return Task::none();
         };
-        let Some(plugin) = running
-            .plugins
-            .iter_mut()
-            .find(|plugin| plugin.id() == message.plugin())
-        else {
-            tracing::warn!(?message, "message for an unknown plugin");
-            return Task::none();
-        };
-        shell_task(plugin.update(&running.ctx, message), origin)
+        running.features.update(&running.ctx, feature, origin)
     }
 
-    /// Do what a plugin asked of the shell. From the tray, the window stays
-    /// as it is unless the request needs it (a page, a dialog), and only
-    /// failures are reported.
-    fn handle(&mut self, request: ShellRequest<PluginMessage>, origin: Origin) -> Task<Message> {
-        let from_tray = origin == Origin::Tray;
-        match request {
-            ShellRequest::Toast { .. } if from_tray => Task::none(),
-            ShellRequest::Toast { text, action } => self.toast(text, action),
-            ShellRequest::Report { text, failure } if from_tray => match failure {
-                Some(title) => self.notify(&title, &text),
-                None => Task::none(),
-            },
-            ShellRequest::Report { text, .. } => self.toast(text, None),
-            ShellRequest::Notify { title, body } => self.notify(&title, &body),
-            ShellRequest::Navigate(route) if from_tray => {
-                Task::batch([self.go(route), self.show_window()])
-            }
-            ShellRequest::Navigate(route) => self.go(route),
-            ShellRequest::ShowWindow => self.show_window(),
-            ShellRequest::Confirm {
-                title,
-                body,
-                confirm_label,
-                then,
-            } => {
-                let show = if from_tray {
-                    self.show_window()
-                } else {
-                    Task::none()
-                };
-                let open = self.dialogs.open(Dialog::confirm(
-                    title,
-                    body,
-                    confirm_label,
-                    Submit::Close(Arc::new(move |_| Message::Plugin(then.clone()))),
-                ));
-                Task::batch([show, open])
-            }
-            ShellRequest::Prompt {
-                title,
-                label,
-                initial,
-                selection,
-                confirm_label,
-                validate,
-                then,
-            } => {
-                let show = if from_tray {
-                    self.show_window()
-                } else {
-                    Task::none()
-                };
-                let open = self.dialogs.open(Dialog::prompt(
-                    title,
-                    Field {
-                        value: initial,
-                        label: Some(label),
-                        validate: Some(validate),
-                        selection,
-                        ..Field::default()
-                    },
-                    confirm_label,
-                    Submit::Close(Arc::new(move |text| Message::Plugin(then(text)))),
-                ));
-                Task::batch([show, open])
-            }
-            // rfd can't relabel the confirm button, so it is the platform's
-            // own word ("Open"). From the tray, the files go back as the
-            // tray's, so a failure to send them is reported the tray's way.
-            ShellRequest::PickFiles { title, then, .. } => {
-                Task::future(self.desktop.picker.pick_files(&title)).and_then(move |paths| {
-                    if paths.is_empty() {
-                        return Task::none();
-                    }
-                    let message = then(paths);
-                    Task::done(match origin {
-                        Origin::Window => Message::Plugin(message),
-                        Origin::Tray => Message::TrayPlugin(message),
-                    })
-                })
-            }
+    /// Show the window for a request from the tray that needs it (a
+    /// dialog); from the window, nothing.
+    fn show_window_for(&mut self, origin: Origin) -> Task<Message> {
+        match origin {
+            Origin::Window => Task::none(),
+            Origin::Tray => self.show_window(),
         }
+    }
+
+    fn prompt(&mut self, prompt: shell::Prompt) -> Task<Message> {
+        let shell::Prompt {
+            title,
+            label,
+            initial,
+            selection,
+            confirm_label,
+            validate,
+            then,
+            origin,
+        } = prompt;
+        let show = self.show_window_for(origin);
+        let open = self.dialogs.open(Dialog::prompt(
+            title,
+            Field {
+                value: initial,
+                label: Some(label),
+                validate: Some(validate),
+                selection,
+                ..Field::default()
+            },
+            confirm_label,
+            Submit::Close(Arc::new(move |text| {
+                Message::Feature(then(text), Origin::Window)
+            })),
+        ));
+        Task::batch([show, open])
+    }
+
+    /// rfd can't relabel the confirm button, so it is the platform's own
+    /// word ("Open"). The files go back as coming from where the picker
+    /// was asked for.
+    fn pick_files(&self, pick: shell::PickFiles) -> Task<Message> {
+        let shell::PickFiles {
+            title,
+            then,
+            origin,
+        } = pick;
+        Task::future(self.desktop.picker.pick_files(&title)).and_then(move |paths| {
+            if paths.is_empty() {
+                return Task::none();
+            }
+            Task::done(Message::Feature(then(paths), origin))
+        })
     }
 
     /// Tell the user something: in a toast over a focused window,
@@ -1282,7 +1298,7 @@ impl App {
     /// Send the tray the menu for now, if it looks different.
     fn update_tray(&mut self) {
         let running = match &self.phase {
-            Phase::Running(running) => Some((running.ctx.store(), &running.plugins[..])),
+            Phase::Running(running) => Some((running.ctx.store(), &running.features)),
             _ => None,
         };
         let menu = background::tray_menu(running);
@@ -1318,7 +1334,7 @@ impl App {
                 Task::batch([self.go(Route::Device(device_id)), self.show_window()])
             }
             TrayCommand::Quit => self.quit(),
-            TrayCommand::Action(message) => self.plugin_update(message, Origin::Tray),
+            TrayCommand::Action(feature) => self.feature(feature, Origin::Tray),
         }
     }
 
@@ -1450,7 +1466,7 @@ impl App {
     /// executor has no timer.
     fn after(&self, delay: Duration, message: Message) -> Task<Message> {
         // `sleep` needs the runtime when it is made, not only when polled.
-        plugin::on_runtime(&self.options.runtime, async move {
+        context::on_runtime(&self.options.runtime, async move {
             tokio::time::sleep(delay).await;
         })
         .map(move |()| message.clone())
@@ -1494,7 +1510,7 @@ impl App {
         )
     }
 
-    /// The chooser for dropped files, listing the paired devices a plugin
+    /// The chooser for dropped files, listing the paired devices a feature
     /// would send them to now. It follows devices as they come and go.
     fn chooser(&self) -> Option<Element<'_, Message>> {
         let files = self.choosing.as_ref()?;
@@ -1556,26 +1572,37 @@ impl App {
 
     /// The page for the current route.
     fn page<'a>(&'a self, running: &'a Running) -> Element<'a, Message> {
+        let navigate = |route: Route| Message::Navigate(route, Origin::Window);
         match &self.route {
             Route::Devices => devices::view(
                 running.ctx.store(),
-                &running.plugins,
-                Message::Navigate,
+                &|device| running.features.device_statuses(device),
+                navigate,
                 Message::Reload,
             ),
-            Route::Plugin {
-                plugin,
-                device,
-                page,
-            } => self.plugin_page(running, plugin, device, page),
+            Route::Browse { device, folder } => match running.ctx.device(device) {
+                Some(device) => running.features.browse_page(device, folder.clone()),
+                None => widgets::page(
+                    widgets::page_header("", Some(Message::Back), vec![]),
+                    widgets::empty_state(
+                        lucide::circle_alert,
+                        "This device is no longer known.",
+                        None,
+                        None,
+                    ),
+                ),
+            },
             Route::Device(id) => device::view(
                 running.ctx.store(),
-                &running.plugins,
+                &device::DeviceFeatures {
+                    statuses: &|device| running.features.device_statuses(device),
+                    actions: &|device| running.features.device_actions(device),
+                },
                 id,
                 self.unpairing.as_deref() == Some(id.as_str()),
                 &device::Actions {
-                    navigate: Message::Navigate,
-                    plugin: Message::Plugin,
+                    navigate,
+                    feature: |feature| Message::Feature(feature, Origin::Window),
                     unpair: |device| Message::Unpair {
                         device_id: device.device_id.clone(),
                         name: device.device_name.clone(),
@@ -1600,7 +1627,7 @@ impl App {
                 *id,
                 self.starting.is_some() || self.cancelling == Some(*id),
                 pairing::Actions {
-                    navigate: Message::Navigate,
+                    navigate,
                     cancel: Message::CancelPairing,
                     retry: Message::Pair,
                 },
@@ -1613,7 +1640,7 @@ impl App {
             ),
             Route::Settings => settings::view(
                 running.ctx.store(),
-                &running.plugins,
+                |settings| running.features.settings_sections(settings),
                 &self.options.version,
                 settings::Actions {
                     back: Message::Back,
@@ -1621,49 +1648,9 @@ impl App {
                     rename: Message::Rename,
                     choose_download_dir: Message::ChooseDownloadDir,
                     set_close_to_tray: Message::SetCloseToTray,
-                    plugin: Message::Plugin,
                 },
             ),
         }
-    }
-
-    fn plugin_page<'a>(
-        &'a self,
-        running: &'a Running,
-        id: &str,
-        device: &str,
-        page: &str,
-    ) -> Element<'a, Message> {
-        let Some(device) = running.ctx.device(device) else {
-            return widgets::page(
-                widgets::page_header("", Some(Message::Back), vec![]),
-                widgets::empty_state(
-                    lucide::circle_alert,
-                    "This device is no longer known.",
-                    None,
-                    None,
-                ),
-            );
-        };
-        running
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id() == id)
-            .and_then(|plugin| plugin.view_page(&running.ctx, device, page))
-            .map_or_else(
-                || {
-                    widgets::page(
-                        widgets::page_header("", Some(Message::Back), vec![]),
-                        widgets::empty_state(
-                            lucide::circle_alert,
-                            "This page no longer exists.",
-                            None,
-                            None,
-                        ),
-                    )
-                },
-                |page| page.map(Message::Plugin),
-            )
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -1676,12 +1663,7 @@ impl App {
         }
         if let Phase::Running(running) = &self.phase {
             subscriptions.push(sync::watch(running.ctx.core()).map(Message::Sync));
-            subscriptions.extend(
-                running
-                    .plugins
-                    .iter()
-                    .map(|plugin| plugin.subscription().map(Message::Plugin)),
-            );
+            subscriptions.push(running.features.subscription());
         }
         Subscription::batch(subscriptions)
     }
@@ -1718,33 +1700,18 @@ fn announce_to(core: &Core, address: &str) -> Result<(), String> {
         .map_err(|error| error::describe_error(&error))
 }
 
-/// A plugin's command, as the shell's task. Its messages go back to the
-/// plugin as coming from `origin` too.
-fn shell_task(command: Command<PluginMessage>, origin: Origin) -> Task<Message> {
-    command
-        .into_task()
-        .map(move |outcome| match (outcome, origin) {
-            (Outcome::Plugin(message), Origin::Window) => Message::Plugin(message),
-            (Outcome::Plugin(message), Origin::Tray) => Message::TrayPlugin(message),
-            (Outcome::Shell(request), origin) => Message::Shell(request, origin),
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use iced::widget;
-    use iced_fonts::lucide;
     use iced_test::simulator::Simulator;
 
     use super::*;
     use crate::{
-        core::{
-            DeviceSnapshot, LanCommand, PairingDirection, PairingStatus, TransferDirection,
-            testing::handle,
-        },
-        ui::plugin::{DeviceAction, UiPlugin},
+        core::{LanCommand, PairingDirection, PairingStatus, TransferDirection, testing::handle},
+        plugins::clipboard::InMemoryClipboard,
+        ui::features::{browse, ping},
     };
 
     /// The tray's menus, as the shell sent them.
@@ -1892,34 +1859,52 @@ mod tests {
         .0
     }
 
-    /// An app running `plugins` over a test core.
-    fn running(plugins: Vec<Box<dyn ErasedUiPlugin>>) -> App {
-        running_with_commands(plugins).0
+    /// The features, over clipboard and browse plugins of their own, which
+    /// the test's core doesn't run.
+    fn features() -> Features {
+        Features::new(
+            Arc::new(ClipboardPlugin::new(InMemoryClipboard::shared())),
+            Arc::new(BrowsePlugin::default()),
+        )
     }
 
-    /// An app running `plugins` over a test core, and what the core asks of
-    /// the network.
-    fn running_with_commands(
-        plugins: Vec<Box<dyn ErasedUiPlugin>>,
-    ) -> (App, tokio::sync::mpsc::Receiver<LanCommand>) {
+    /// An app over a test core.
+    fn running() -> App {
+        running_with_commands().0
+    }
+
+    /// An app over a test core, and what the core asks of the network.
+    fn running_with_commands() -> (App, tokio::sync::mpsc::Receiver<LanCommand>) {
         let (core, commands) = handle();
-        (running_on(core, plugins), commands)
+        (running_on(core), commands)
     }
 
-    /// An app running `plugins` over `core`.
-    fn running_on(core: Core, plugins: Vec<Box<dyn ErasedUiPlugin>>) -> App {
-        running_on_desktop(core, plugins, &Fakes::default())
+    /// An app over `core`.
+    fn running_on(core: Core) -> App {
+        running_on_desktop(core, &Fakes::default())
     }
 
-    /// An app running `plugins` over `core`, on `fakes`.
-    fn running_on_desktop(core: Core, plugins: Vec<Box<dyn ErasedUiPlugin>>, fakes: &Fakes) -> App {
+    /// An app over `core`, on `fakes`.
+    fn running_on_desktop(core: Core, fakes: &Fakes) -> App {
+        running_with(core, features(), fakes)
+    }
+
+    /// An app running `features` over `core`, on `fakes`.
+    fn running_with(core: Core, features: Features, fakes: &Fakes) -> App {
         let runtime = tokio::runtime::Handle::current();
         let mut app = app_on(runtime.clone(), fakes);
         app.phase = Phase::Running(Box::new(Running {
             ctx: UiContext::new(core, runtime),
-            plugins,
+            features,
         }));
         app
+    }
+
+    fn features_mut(app: &mut App) -> &mut Features {
+        let Phase::Running(running) = &mut app.phase else {
+            panic!("the app runs");
+        };
+        &mut running.features
     }
 
     fn core(app: &App) -> Core {
@@ -1942,70 +1927,6 @@ mod tests {
         testing::outputs(app.update(message)).await
     }
 
-    /// Asks the shell for a toast and to open its page, and to confirm.
-    struct Opener {
-        confirmed: Arc<AtomicUsize>,
-    }
-
-    #[derive(Debug, Clone)]
-    enum OpenerMessage {
-        Open(String),
-        Delete,
-        Deleted,
-    }
-
-    impl UiPlugin for Opener {
-        type Message = OpenerMessage;
-
-        fn id(&self) -> &'static str {
-            "opener"
-        }
-
-        fn device_actions(&self, device: &DeviceSnapshot) -> Vec<DeviceAction<OpenerMessage>> {
-            vec![DeviceAction {
-                id: "open",
-                label: "Open".into(),
-                icon: lucide::folder_open,
-                enabled: true,
-                visible_in_tray: true,
-                message: OpenerMessage::Open(device.device_id.clone()),
-            }]
-        }
-
-        fn update(&mut self, _ctx: &UiContext, message: OpenerMessage) -> Command<OpenerMessage> {
-            match message {
-                OpenerMessage::Open(device) => Command::batch([
-                    Command::shell(ShellRequest::toast("Opening")),
-                    Command::shell(ShellRequest::Navigate(Route::Plugin {
-                        plugin: "opener",
-                        device,
-                        page: "files".into(),
-                    })),
-                ]),
-                OpenerMessage::Delete => Command::shell(ShellRequest::Confirm {
-                    title: "Delete it?".into(),
-                    body: "This can’t be undone.".into(),
-                    confirm_label: "Delete".into(),
-                    then: OpenerMessage::Deleted,
-                }),
-                OpenerMessage::Deleted => {
-                    self.confirmed.fetch_add(1, Ordering::SeqCst);
-                    Command::none()
-                }
-            }
-        }
-    }
-
-    fn opener() -> (Box<dyn ErasedUiPlugin>, Arc<AtomicUsize>) {
-        let confirmed = Arc::new(AtomicUsize::new(0));
-        (
-            Box::new(Opener {
-                confirmed: confirmed.clone(),
-            }),
-            confirmed,
-        )
-    }
-
     /// Run `message` through `app`, then every message it leads to, except
     /// a toast's dismissal. Tests that toast run with time paused, so the
     /// dismissal's timer doesn't hold them up.
@@ -2019,35 +1940,41 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_plugin_can_toast_and_navigate() {
-        let (plugin, _) = opener();
-        let mut app = running(vec![plugin]);
-        let Phase::Running(running) = &app.phase else {
-            unreachable!()
-        };
-        let action = running.plugins[0]
-            .device_actions(&testing::device("Phone"))
-            .remove(0);
-
-        settle(&mut app, Message::Plugin(action.message)).await;
+    async fn a_feature_can_toast_and_navigate() {
+        let mut app = running();
+        settle(
+            &mut app,
+            Message::Toast {
+                text: "Opening".into(),
+                action: None,
+                origin: Origin::Window,
+            },
+        )
+        .await;
+        let browse = Feature::Browse(browse::Message::Browse {
+            device_id: "phone".into(),
+        });
+        settle(&mut app, Message::Feature(browse, Origin::Window)).await;
 
         assert_eq!(app.toasts.items().len(), 1);
         assert_eq!(app.toasts.items()[0].text, "Opening");
-        assert!(matches!(
-            &app.route,
-            Route::Plugin { plugin: "opener", page, .. } if page == "files"
-        ));
+        assert_eq!(
+            app.route,
+            Route::Browse {
+                device: "phone".into(),
+                folder: None
+            }
+        );
         let _ = app.update(Message::DismissToast(app.toasts.items()[0].id));
         assert!(app.toasts.is_empty());
     }
 
     #[tokio::test]
     async fn back_goes_to_the_parent_page() {
-        let mut app = running(Vec::new());
-        app.route = Route::Plugin {
-            plugin: "opener",
+        let mut app = running();
+        app.route = Route::Browse {
             device: "phone".into(),
-            page: "files".into(),
+            folder: Some("/storage/emulated/0".into()),
         };
         let _ = app.update(Message::Back);
         assert_eq!(app.route, Route::Device("phone".into()));
@@ -2058,7 +1985,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_toast_button_goes_to_its_page_and_dismisses_it() {
-        let mut app = running(Vec::new());
+        let mut app = running();
         let _ = app.toast(
             "Downloading holiday.jpg".into(),
             Some(("Transfers".into(), Route::Transfers)),
@@ -2070,26 +1997,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_plugin_confirm_sends_its_message_only_when_confirmed() {
-        let (plugin, confirmed) = opener();
-        let mut app = running(vec![plugin]);
-        let delete = || Message::Plugin(PluginMessage::new("opener", OpenerMessage::Delete));
+    async fn a_feature_confirm_sends_its_message_only_when_confirmed() {
+        let (core, _commands) = handle();
+        let (peer, mut sent) = testing::connect_peer(
+            &core,
+            testing::PEER_ID,
+            &[crate::plugins::ping::PACKET_TYPE],
+        );
+        let mut app = running_on(core);
+        let confirm = || Message::Confirm {
+            title: "Ping it?".into(),
+            body: "It will hear you.".into(),
+            confirm_label: "Ping".into(),
+            then: Feature::Ping(ping::Message::Ping {
+                device_id: peer.device_id.clone(),
+                name: peer.device_name.clone(),
+            }),
+            origin: Origin::Window,
+        };
 
-        settle(&mut app, delete()).await;
-        assert_eq!(app.dialogs.current().unwrap().title, "Delete it?");
+        settle(&mut app, confirm()).await;
+        assert_eq!(app.dialogs.current().unwrap().title, "Ping it?");
         settle(&mut app, Message::Key(KeyCommand::Cancel)).await;
         assert!(app.dialogs.current().is_none());
-        assert_eq!(confirmed.load(Ordering::SeqCst), 0);
+        assert!(sent.try_recv().is_err(), "not sent");
 
-        settle(&mut app, delete()).await;
+        settle(&mut app, confirm()).await;
         settle(&mut app, Message::Dialog(DialogEvent::Submit)).await;
         assert!(app.dialogs.current().is_none());
-        assert_eq!(confirmed.load(Ordering::SeqCst), 1);
+        assert!(sent.try_recv().is_ok(), "sent");
     }
 
     #[tokio::test(start_paused = true)]
     async fn unpairing_asks_then_forgets_the_device_and_goes_home() {
-        let mut app = running(Vec::new());
+        let mut app = running();
         let Phase::Running(running) = &app.phase else {
             unreachable!()
         };
@@ -2125,7 +2066,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_failed_unpair_says_why_and_stays() {
-        let mut app = running(Vec::new());
+        let mut app = running();
         app.route = Route::Device("gone".into());
         settle(
             &mut app,
@@ -2144,8 +2085,12 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn opening_add_device_scans_and_searches_for_a_while() {
-        let (mut app, mut commands) = running_with_commands(Vec::new());
-        let ended = step(&mut app, Message::Navigate(Route::AddDevice)).await;
+        let (mut app, mut commands) = running_with_commands();
+        let ended = step(
+            &mut app,
+            Message::Navigate(Route::AddDevice, Origin::Window),
+        )
+        .await;
         assert_eq!(app.route, Route::AddDevice);
         assert_eq!(commands.try_recv().unwrap(), LanCommand::AnnounceDiscovery);
         assert!(app.searching);
@@ -2174,7 +2119,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn add_by_ip_says_why_an_address_is_refused_then_announces_to_it() {
-        let (mut app, mut commands) = running_with_commands(Vec::new());
+        let (mut app, mut commands) = running_with_commands();
         app.route = Route::AddDevice;
         settle(&mut app, Message::AddByAddress).await;
         assert_eq!(app.dialogs.current().unwrap().title, "Add by IP address");
@@ -2220,7 +2165,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn pairing_opens_the_request_and_cancelling_returns_to_add_device() {
-        let mut app = running(Vec::new());
+        let mut app = running();
         let core = core(&app);
         let (peer, mut sent) = testing::connect_unpaired_peer(&core, testing::PEER_ID);
         settle(&mut app, Message::Reload).await;
@@ -2252,7 +2197,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_pairing_that_cant_start_says_why_and_stays() {
-        let mut app = running(Vec::new());
+        let mut app = running();
         app.route = Route::AddDevice;
         settle(&mut app, Message::Pair("gone".into())).await;
         assert_eq!(app.route, Route::AddDevice);
@@ -2265,7 +2210,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn the_incoming_prompt_shows_on_any_page_until_resolved() {
-        let mut app = running(Vec::new());
+        let mut app = running();
         let core = core(&app);
         let (peer, _sent) = testing::connect_unpaired_peer(&core, testing::PEER_ID);
         testing::request_pairing(&core, &peer.device_id);
@@ -2310,7 +2255,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_failed_answer_keeps_the_prompt_open_with_the_reason() {
-        let mut app = running(Vec::new());
+        let mut app = running();
         // A request the core no longer has.
         let request = PairingSnapshot {
             id: Uuid::from_u128(1),
@@ -2354,7 +2299,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn the_transfers_page_shows_progress_and_cancels() {
-        let mut app = running(Vec::new());
+        let mut app = running();
         let core = core(&app);
         let (peer, _sent) = testing::connect_peer(&core, testing::PEER_ID, &[]);
         let mut transfer =
@@ -2363,7 +2308,11 @@ mod tests {
         transfer.transferring();
         transfer.progress(50);
         settle(&mut app, Message::Reload).await;
-        settle(&mut app, Message::Navigate(Route::Transfers)).await;
+        settle(
+            &mut app,
+            Message::Navigate(Route::Transfers, Origin::Window),
+        )
+        .await;
 
         let mut ui = Simulator::new(app.view(app.window.unwrap()));
         assert!(ui.find("From Peer · 50 bytes of 100 bytes").is_ok());
@@ -2421,7 +2370,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn opening_a_received_file_reports_only_failures() {
-        let mut app = running(Vec::new());
+        let mut app = running();
         let opener = Arc::new(FakeOpener::default());
         app.desktop.opener = opener.clone();
         let notes = PathBuf::from("/home/me/Downloads/notes.txt");
@@ -2473,9 +2422,9 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn renaming_shows_the_new_name_and_a_bad_one_says_why() {
-        let mut app = running(Vec::new());
+        let mut app = running();
         settle(&mut app, Message::Reload).await;
-        settle(&mut app, Message::Navigate(Route::Settings)).await;
+        settle(&mut app, Message::Navigate(Route::Settings, Origin::Window)).await;
         click(&mut app, "Device name").await;
         let dialog = app.dialogs.current().expect("the name dialog");
         assert_eq!(dialog.title, "Device name");
@@ -2514,16 +2463,16 @@ mod tests {
                 crate::plugins::clipboard::InMemoryClipboard::shared(),
             ),
         );
-        let clipboard = crate::ui::features::clipboard::ClipboardUi::new(plugin);
-        let mut app = running_on(core.clone(), vec![Box::new(clipboard)]);
+        let features = Features::new(plugin, Arc::new(BrowsePlugin::default()));
+        let mut app = running_with(core.clone(), features, &Fakes::default());
         settle(&mut app, Message::Reload).await;
-        settle(&mut app, Message::Navigate(Route::Settings)).await;
+        settle(&mut app, Message::Navigate(Route::Settings, Origin::Window)).await;
         let sync_enabled = |settings: &SettingsSnapshot| {
             crate::plugins::clipboard::ClipboardSettings::of(settings).sync_enabled
         };
         assert!(sync_enabled(settings(&app)));
 
-        // The plugin's own section.
+        // The feature's own section.
         click(&mut app, "Sync clipboard").await;
         assert!(!sync_enabled(&core.settings().unwrap()));
         settle(&mut app, Message::Reload).await;
@@ -2545,9 +2494,9 @@ mod tests {
 
     #[tokio::test]
     async fn the_version_is_shown() {
-        let mut app = running(Vec::new());
+        let mut app = running();
         settle(&mut app, Message::Reload).await;
-        settle(&mut app, Message::Navigate(Route::Settings)).await;
+        settle(&mut app, Message::Navigate(Route::Settings, Origin::Window)).await;
         assert!(shows(&app, "Version"));
         assert!(shows(&app, "1.2.3 (test)"));
     }
@@ -2584,9 +2533,9 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn the_download_folder_is_picked_from_the_current_one() {
-        let mut app = running(Vec::new());
+        let mut app = running();
         settle(&mut app, Message::Reload).await;
-        settle(&mut app, Message::Navigate(Route::Settings)).await;
+        settle(&mut app, Message::Navigate(Route::Settings, Origin::Window)).await;
         let current = settings(&app).download_dir.clone();
         let folder = tempfile::tempdir().unwrap();
 
@@ -2619,8 +2568,7 @@ mod tests {
         assert_eq!(settings(&app).download_dir, folder.path());
     }
 
-    /// An app running the share plugin's UI half over a core that runs
-    /// share, with `photo.jpg` and `notes.txt` to send from a folder that
+    /// An app over a core that runs share, with `photo.jpg` and `notes.txt` to send from a folder that
     /// also holds a folder, `album`.
     struct Sharing {
         app: App,
@@ -2632,10 +2580,7 @@ mod tests {
         fn new() -> Self {
             let (core, _plugin, _commands) =
                 crate::core::testing::handle_with_plugin(crate::plugins::share::SharePlugin);
-            let app = running_on(
-                core.clone(),
-                vec![Box::new(crate::ui::features::share::ShareUi)],
-            );
+            let app = running_on(core.clone());
             let files = tempfile::tempdir().unwrap();
             std::fs::write(files.path().join("photo.jpg"), "jpg").unwrap();
             std::fs::write(files.path().join("notes.txt"), "txt").unwrap();
@@ -2732,27 +2677,17 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn files_dropped_on_a_browse_folder_upload_there_and_elsewhere_send() {
-        use crate::{
-            plugins::browse,
-            ui::features::browse::tests::{Call, phone_files},
-        };
+        use crate::ui::features::browse::tests::{Call, phone_files};
 
         let mut sharing = Sharing::new();
         let phone = phone_files();
-        let Phase::Running(running) = &mut sharing.app.phase else {
-            panic!("the app runs");
-        };
-        running
-            .plugins
-            .push(Box::new(features::browse::BrowseUi::with_files(
-                phone.clone(),
-            )));
+        features_mut(&mut sharing.app).browse = browse::BrowseUi::with_files(phone.clone());
         let (peer, sent) = testing::connect_peer(
             &sharing.core,
             testing::PEER_ID,
             &[
                 crate::plugins::share::PACKET_TYPE,
-                browse::REQUEST_PACKET_TYPE,
+                crate::plugins::browse::REQUEST_PACKET_TYPE,
             ],
         );
         std::mem::forget(sent);
@@ -2762,17 +2697,26 @@ mod tests {
         // The device page's action opens the storage.
         settle(
             &mut sharing.app,
-            Message::Navigate(Route::Device(peer.clone())),
+            Message::Navigate(Route::Device(peer.clone()), Origin::Window),
         )
         .await;
         click(&mut sharing.app, "Browse files").await;
-        assert_eq!(sharing.app.route, features::browse::route(&peer, None));
+        assert_eq!(
+            sharing.app.route,
+            Route::Browse {
+                device: peer.clone(),
+                folder: None
+            }
+        );
         assert!(shows(&sharing.app, "Files on Peer"));
         click(&mut sharing.app, "All files").await;
         let folder = "/storage/emulated/0";
         assert_eq!(
             sharing.app.route,
-            features::browse::route(&peer, Some(folder))
+            Route::Browse {
+                device: peer.clone(),
+                folder: Some(folder.into())
+            }
         );
 
         let photo = sharing.file("photo.jpg");
@@ -2798,13 +2742,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_plugin_page_of_a_forgotten_device_says_so() {
-        let (plugin, _) = opener();
-        let mut app = running(vec![plugin]);
-        app.route = Route::Plugin {
-            plugin: "opener",
+    async fn a_browse_page_of_a_forgotten_device_says_so() {
+        let mut app = running();
+        app.route = Route::Browse {
             device: "gone".into(),
-            page: "files".into(),
+            folder: None,
         };
         assert!(shows(&app, "This device is no longer known."));
     }
@@ -3064,39 +3006,10 @@ mod tests {
     // The tray, closing, quitting and notifications: Flutter's
     // `background_host_test.dart`.
 
-    /// Shows a made-up battery level on every device, for tray labels.
-    struct Charge;
-
-    impl UiPlugin for Charge {
-        type Message = ();
-
-        fn id(&self) -> &'static str {
-            "charge"
-        }
-
-        fn device_status(&self, _device: &DeviceSnapshot) -> Option<plugin::DeviceStatus> {
-            Some(plugin::DeviceStatus {
-                icon: lucide::battery,
-                label: "82%".into(),
-            })
-        }
-
-        fn update(&mut self, _ctx: &UiContext, _message: ()) -> Command<()> {
-            Command::none()
-        }
-    }
-
-    /// An app on `fakes` running ping and find my phone.
+    /// An app on `fakes`.
     fn background(fakes: &Fakes) -> App {
         let (core, _commands) = handle();
-        running_on_desktop(
-            core,
-            vec![
-                Box::new(crate::ui::features::ping::PingUi),
-                Box::new(crate::ui::features::findmyphone::FindMyPhoneUi),
-            ],
-            fakes,
-        )
+        running_on_desktop(core, fakes)
     }
 
     /// A paired peer, connected and taking `capabilities`, as the app
@@ -3451,16 +3364,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn the_tray_lists_connected_paired_devices_then_settings_and_quit() {
         let fakes = Fakes::default();
-        let (core, _commands) = handle();
-        let mut app = running_on_desktop(
-            core.clone(),
-            vec![
-                Box::new(Charge),
-                Box::new(crate::ui::features::ping::PingUi),
-                Box::new(crate::ui::features::findmyphone::FindMyPhoneUi),
-            ],
-            &fakes,
+        let (core, _plugin, _commands) = crate::core::testing::handle_with_plugin(
+            crate::plugins::battery::BatteryPlugin::default(),
         );
+        let mut app = running_on_desktop(core.clone(), &fakes);
         // Paired, but away; and connected, but not paired.
         core.discover_device(
             &crate::core::testing::make_identity("0123456789abcdef0123456789abcdef", vec![]),
@@ -3478,6 +3385,11 @@ mod tests {
             ],
         )
         .await;
+        // The demo phone's first report: 82%.
+        for packet in crate::ui::features::battery::demo_packets(&testing::device("Phone"), 0) {
+            core.handle_peer_packet(testing::PEER_ID, packet);
+        }
+        settle(&mut app, Message::Reload).await;
 
         assert_eq!(
             tray_labels(&fakes),
@@ -3536,7 +3448,11 @@ mod tests {
         let _sent = peer(&mut app, &[]).await;
         let sent = fakes.tray.updates.load(Ordering::SeqCst);
         settle(&mut app, Message::Reload).await;
-        settle(&mut app, Message::Navigate(Route::Transfers)).await;
+        settle(
+            &mut app,
+            Message::Navigate(Route::Transfers, Origin::Window),
+        )
+        .await;
         assert_eq!(fakes.tray.updates.load(Ordering::SeqCst), sent);
     }
 
@@ -3563,22 +3479,31 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_tray_action_that_opens_a_page_shows_the_window() {
         let fakes = Fakes::default();
-        let (core, _commands) = handle();
-        let (opener, _) = opener();
-        let mut app = running_on_desktop(core, vec![opener], &fakes);
-        let _sent = peer(&mut app, &[]).await;
+        let mut app = background(&fakes);
+        let _sent = peer(&mut app, &[crate::plugins::browse::REQUEST_PACKET_TYPE]).await;
         close(&mut app).await;
 
-        choose(&mut app, &fakes, &["Peer", "Open"]).await;
+        choose(&mut app, &fakes, &["Peer", "Browse files"]).await;
         assert!(app.window.is_some());
-        assert!(matches!(
-            &app.route,
-            Route::Plugin {
-                plugin: "opener",
-                ..
+        assert_eq!(
+            app.route,
+            Route::Browse {
+                device: testing::PEER_ID.into(),
+                folder: None
             }
-        ));
-        assert!(app.toasts.is_empty(), "its toast is for the window");
+        );
+
+        // A toast is for the window, not the tray.
+        settle(
+            &mut app,
+            Message::Toast {
+                text: "Opening".into(),
+                action: None,
+                origin: Origin::Tray,
+            },
+        )
+        .await;
+        assert!(app.toasts.is_empty());
     }
 
     #[tokio::test(start_paused = true)]
@@ -3628,11 +3553,7 @@ mod tests {
         let fakes = Fakes::default();
         let (core, _plugin, _commands) =
             crate::core::testing::handle_with_plugin(crate::plugins::share::SharePlugin);
-        let mut app = running_on_desktop(
-            core.clone(),
-            vec![Box::new(crate::ui::features::share::ShareUi)],
-            &fakes,
-        );
+        let mut app = running_on_desktop(core.clone(), &fakes);
         let files = tempfile::tempdir().unwrap();
         let photo = files.path().join("photo.jpg");
         std::fs::write(&photo, "jpg").unwrap();

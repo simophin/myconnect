@@ -1,8 +1,7 @@
 //! The MyConnect desktop app: the composition root for the daemon and its
 //! UI in one process. It reads the flags and runs the UI
-//! (`myconnect::ui`) with a way to start the daemon with every plugin and
-//! its UI half; the UI starts it (again on Retry) and shuts it down on
-//! exit.
+//! (`myconnect::ui`) with a way to start the daemon with every plugin; the
+//! UI starts it (again on Retry) and shuts it down on exit.
 
 // No console window behind the app on Windows, except in debug builds,
 // where it shows the logs.

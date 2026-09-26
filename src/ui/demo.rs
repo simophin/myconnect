@@ -3,14 +3,14 @@
 //! written to the trust store; they vanish on exit.
 //!
 //! The devices support everything this build does. What they report comes
-//! from each UI plugin's [`demo_packets`](super::plugin::UiPlugin::demo_packets).
+//! from the features' [`demo_packets`](super::features::Features::demo_packets).
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::{
     core::{Core, DeviceReachability},
     protocol::{DeviceType, IdentityBody},
-    ui::plugin::ErasedUiPlugin,
+    ui::features::Features,
 };
 
 /// How often [`tick`] runs.
@@ -68,8 +68,8 @@ pub fn start(core: &Core) {
 }
 
 /// Step `tick` of the demo, every [`TICK`]: the TV comes and goes, and each
-/// connected device sends what the plugins make up for it.
-pub fn tick(core: &Core, plugins: &[Box<dyn ErasedUiPlugin>], tick: u64) {
+/// connected device sends what the features make up for it.
+pub(crate) fn tick(core: &Core, features: &Features, tick: u64) {
     if tick > 0 {
         let _ = if tick % 2 == 1 {
             core.mark_device_connected(TV, now())
@@ -84,10 +84,7 @@ pub fn tick(core: &Core, plugins: &[Box<dyn ErasedUiPlugin>], tick: u64) {
         else {
             continue;
         };
-        for packet in plugins
-            .iter()
-            .flat_map(|plugin| plugin.demo_packets(&device, tick))
-        {
+        for packet in features.demo_packets(&device, tick) {
             core.handle_peer_packet(id, packet);
         }
     }

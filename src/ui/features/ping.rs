@@ -1,18 +1,15 @@
-//! Ping's UI half: the *Ping* action, and a notification when a device
-//! pings this computer.
+//! Ping's UI: the *Ping* action, and a notification when a device pings
+//! this computer.
 
+use iced::Task;
 use iced_fonts::lucide;
 
-use crate::plugins::ping::{PACKET_TYPE, ReceivedPing, send_ping};
+use super::{DeviceAction, Feature};
 use crate::{
     core::{CoreEvent, DeviceReachability, DeviceSnapshot, EventData},
-    ui::{
-        error::describe_error,
-        plugin::{Command, DeviceAction, ShellRequest, UiContext, UiPlugin},
-    },
+    plugins::ping::{PACKET_TYPE, ReceivedPing, send_ping},
+    ui::{self, Origin, context::UiContext, error::describe_error, shell},
 };
-
-pub struct PingUi;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -21,53 +18,46 @@ pub enum Message {
     Ping { device_id: String, name: String },
 }
 
-impl UiPlugin for PingUi {
-    type Message = Message;
+/// Listed for every device, enabled while it is connected and takes
+/// pings.
+pub fn device_actions(device: &DeviceSnapshot) -> Vec<DeviceAction> {
+    vec![DeviceAction {
+        id: "ping",
+        label: "Ping".into(),
+        icon: lucide::bell_ring,
+        enabled: accepts_pings(device),
+        visible_in_tray: true,
+        message: Feature::Ping(Message::Ping {
+            device_id: device.device_id.clone(),
+            name: device.device_name.clone(),
+        }),
+    }]
+}
 
-    fn id(&self) -> &'static str {
-        crate::plugins::ping::ID
+pub(crate) fn on_event(event: &CoreEvent) -> Task<ui::Message> {
+    let EventData::Plugin(event) = &event.event else {
+        return Task::none();
+    };
+    match event.decode::<ReceivedPing>() {
+        Some(ping) => shell::notify(
+            ping.device_name,
+            ping.message.unwrap_or_else(|| "Ping!".into()),
+        ),
+        None => Task::none(),
     }
+}
 
-    /// Listed for every device, enabled while it is connected and takes
-    /// pings.
-    fn device_actions(&self, device: &DeviceSnapshot) -> Vec<DeviceAction<Message>> {
-        vec![DeviceAction {
-            id: "ping",
-            label: "Ping".into(),
-            icon: lucide::bell_ring,
-            enabled: accepts_pings(device),
-            visible_in_tray: true,
-            message: Message::Ping {
-                device_id: device.device_id.clone(),
-                name: device.device_name.clone(),
-            },
-        }]
-    }
-
-    fn on_event(&mut self, _ctx: &UiContext, event: &CoreEvent) -> Command<Message> {
-        let EventData::Plugin(event) = &event.event else {
-            return Command::none();
-        };
-        match event.decode::<ReceivedPing>() {
-            Some(ping) => Command::shell(ShellRequest::Notify {
-                title: ping.device_name,
-                body: ping.message.unwrap_or_else(|| "Ping!".into()),
-            }),
-            None => Command::none(),
-        }
-    }
-
-    fn update(&mut self, ctx: &UiContext, message: Message) -> Command<Message> {
-        match message {
-            Message::Ping { device_id, name } => {
-                // Queues the packet; nothing here waits on the network.
-                Command::shell(match send_ping(&ctx.plugin_context(), &device_id, None) {
-                    Ok(()) => ShellRequest::done(format!("Pinged {name}.")),
-                    Err(error) => ShellRequest::failed(
-                        format!("Couldn’t ping {name}"),
-                        describe_error(&error),
-                    ),
-                })
+pub(crate) fn update(ctx: &UiContext, message: Message, origin: Origin) -> Task<ui::Message> {
+    match message {
+        Message::Ping { device_id, name } => {
+            // Queues the packet; nothing here waits on the network.
+            match send_ping(&ctx.plugin_context(), &device_id, None) {
+                Ok(()) => shell::done(origin, format!("Pinged {name}.")),
+                Err(error) => shell::failed(
+                    origin,
+                    format!("Couldn’t ping {name}"),
+                    describe_error(&error),
+                ),
             }
         }
     }
@@ -87,12 +77,19 @@ mod tests {
     use super::*;
     use crate::{
         core::{PluginEvent, testing::handle},
-        ui::{plugin::Outcome, testing},
+        ui::testing,
     };
 
-    fn ping_action(device: &DeviceSnapshot) -> DeviceAction<Message> {
-        let [action] = PingUi.device_actions(device).try_into().unwrap();
+    fn ping_action(device: &DeviceSnapshot) -> DeviceAction {
+        let [action] = device_actions(device).try_into().unwrap();
         action
+    }
+
+    fn ping_message(device: &DeviceSnapshot) -> Message {
+        let Feature::Ping(message) = ping_action(device).message else {
+            panic!("a ping");
+        };
+        message
     }
 
     #[test]
@@ -110,13 +107,14 @@ mod tests {
         let (core, _commands) = handle();
         let (device, mut sent) = testing::connect_peer(&core, testing::PEER_ID, &[PACKET_TYPE]);
         let ctx = UiContext::new(core, tokio::runtime::Handle::current());
-        let message = ping_action(&device).message;
-        let outcomes = testing::outputs(PingUi.update(&ctx, message).into_task()).await;
+        let message = ping_message(&device);
+        let outcomes = testing::outputs(update(&ctx, message, Origin::Window)).await;
         let [
-            Outcome::Shell(ShellRequest::Report {
+            ui::Message::Report {
                 text,
                 failure: None,
-            }),
+                origin: Origin::Window,
+            },
         ] = &outcomes[..]
         else {
             panic!("unexpected outcomes: {outcomes:?}");
@@ -129,13 +127,14 @@ mod tests {
     async fn a_ping_to_a_device_that_is_gone_says_why() {
         let (core, _commands) = handle();
         let ctx = UiContext::new(core, tokio::runtime::Handle::current());
-        let message = ping_action(&testing::device("Pixel")).message;
-        let outcomes = testing::outputs(PingUi.update(&ctx, message).into_task()).await;
+        let message = ping_message(&testing::device("Pixel"));
+        let outcomes = testing::outputs(update(&ctx, message, Origin::Tray)).await;
         let [
-            Outcome::Shell(ShellRequest::Report {
+            ui::Message::Report {
                 text,
                 failure: Some(title),
-            }),
+                origin: Origin::Tray,
+            },
         ] = &outcomes[..]
         else {
             panic!("unexpected outcomes: {outcomes:?}");
@@ -146,8 +145,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_received_ping_notifies_with_its_message() {
-        let (core, _commands) = handle();
-        let ctx = UiContext::new(core, tokio::runtime::Handle::current());
         let received = |message: Option<&str>| CoreEvent {
             sequence: 1,
             timestamp: 0,
@@ -161,9 +158,8 @@ mod tests {
             ),
         };
         for (message, body) in [(Some("Dinner!"), "Dinner!"), (None, "Ping!")] {
-            let outcomes =
-                testing::outputs(PingUi.on_event(&ctx, &received(message)).into_task()).await;
-            let [Outcome::Shell(ShellRequest::Notify { title, body: said })] = &outcomes[..] else {
+            let outcomes = testing::outputs(on_event(&received(message))).await;
+            let [ui::Message::Notify { title, body: said }] = &outcomes[..] else {
                 panic!("unexpected outcomes: {outcomes:?}");
             };
             assert_eq!((title.as_str(), said.as_str()), ("Pixel", body));

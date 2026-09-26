@@ -2,9 +2,7 @@
 
 use uuid::Uuid;
 
-/// A page of the window. Pages the UI core owns have their own variant; a
-/// feature's pages are [`Route::Plugin`], drawn by that plugin's
-/// `view_page`.
+/// A page of the window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Route {
     /// The home page: paired devices.
@@ -18,13 +16,10 @@ pub enum Route {
     /// Every file transfer.
     Transfers,
     Settings,
-    /// A page a plugin owns, for one device.
-    Plugin {
-        /// The plugin's id.
-        plugin: &'static str,
+    /// A device's files: a folder, or its storage (`None`).
+    Browse {
         device: String,
-        /// Which of the plugin's pages; the plugin gives it meaning.
-        page: String,
+        folder: Option<String>,
     },
 }
 
@@ -38,7 +33,7 @@ impl Route {
                 Some(Self::Devices)
             }
             Self::Pairing(_) => Some(Self::AddDevice),
-            Self::Plugin { device, .. } => Some(Self::Device(device.clone())),
+            Self::Browse { device, .. } => Some(Self::Device(device.clone())),
         }
     }
 }
@@ -47,7 +42,7 @@ impl Route {
     /// The device this page is about, if any.
     pub fn device(&self) -> Option<&str> {
         match self {
-            Self::Device(device) | Self::Plugin { device, .. } => Some(device),
+            Self::Device(device) | Self::Browse { device, .. } => Some(device),
             _ => None,
         }
     }
@@ -59,10 +54,9 @@ mod tests {
 
     #[test]
     fn back_walks_up_to_the_devices_page() {
-        let files = Route::Plugin {
-            plugin: "browse",
+        let files = Route::Browse {
             device: "phone".into(),
-            page: "files".into(),
+            folder: Some("/storage/emulated/0".into()),
         };
         let mut trail = vec![files.clone()];
         while let Some(parent) = trail.last().unwrap().parent() {
