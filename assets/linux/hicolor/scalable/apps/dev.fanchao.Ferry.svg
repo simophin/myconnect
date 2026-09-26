@@ -1,34 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-  <!-- Two tin cans joined by a taut string: a direct link with nothing in
-       the middle. A wave travels along the string. -->
+  <!-- A ferry seen side on: a hull with an amber cabin, riding a wave. -->
   <defs>
     <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1A2B37"/>
-      <stop offset="1" stop-color="#101B23"/>
-    </linearGradient>
-    <linearGradient id="tin" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#F6F8FA"/>
-      <stop offset="0.55" stop-color="#E3E8EC"/>
-      <stop offset="1" stop-color="#BCC6CD"/>
+      <stop offset="0" stop-color="#3A95F0"/>
+      <stop offset="1" stop-color="#1553C0"/>
     </linearGradient>
   </defs>
   <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#tile)"/>
-  <!-- A faint rim, so the dark tile keeps its edge on dark docks, panels
-       and taskbars. -->
-  <rect x="9.25" y="9.25" width="237.5" height="237.5" rx="54.75" fill="none" stroke="#FFFFFF" stroke-opacity="0.16" stroke-width="2.5"/>
-  <g transform="rotate(-20 128 128)">
-    <path d="M92 128H104Q110 116 116 128T128 128T140 128T152 128H164" fill="none" stroke="#FFB224" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
-
-    <path d="M38 90L92 102V154L38 166Z" fill="url(#tin)"/>
-    <path d="M58 96V160M74 100V156" stroke="#A9B4BC" stroke-width="5"/>
-    <ellipse cx="38" cy="128" rx="13" ry="38" fill="#F6F8FA"/>
-    <ellipse cx="38" cy="128" rx="7" ry="29" fill="#0B151C"/>
-    <circle cx="92" cy="128" r="6" fill="#FFB224"/>
-
-    <path d="M218 90L164 102V154L218 166Z" fill="url(#tin)"/>
-    <path d="M198 96V160M182 100V156" stroke="#A9B4BC" stroke-width="5"/>
-    <ellipse cx="218" cy="128" rx="13" ry="38" fill="#F6F8FA"/>
-    <ellipse cx="218" cy="128" rx="7" ry="29" fill="#0B151C"/>
-    <circle cx="164" cy="128" r="6" fill="#FFB224"/>
+  <!-- Drawn on a 256 grid and scaled onto the 240-unit tile. -->
+  <g transform="translate(8 8) scale(0.9375)">
+    <path d="M112 82H144Q152 82 152 90V116H104V90Q104 82 112 82Z" fill="#FFB224"/>
+    <path d="M50 124H206Q202 168 166 176H90Q54 168 50 124Z" fill="#FFFFFF"/>
+    <path d="M56 202Q76 188 96 202T136 202T176 202T216 202" fill="none" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round"/>
   </g>
 </svg>
