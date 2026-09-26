@@ -27,6 +27,7 @@ gui = [
     "dep:rfd",
     "dep:tray-icon",
     "dep:windows-registry",
+    "dep:xcb",
     "dep:zbus",
 ]
 
@@ -89,6 +90,9 @@ libc = { version = "0.2", optional = true }
 # threads.
 ksni = { version = "0.3", default-features = false, features = ["async-io"], optional = true }
 zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }
+# Not used directly: `dl` makes `display-info` load libxcb at run time, as
+# winit does, rather than link it, so the binary needs only libc.
+xcb = { version = "1.7", features = ["dl"], optional = true }
 
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]
 # The tray (`gui`), with `muda` menus (re-exported as `tray_icon::menu`).

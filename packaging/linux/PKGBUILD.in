@@ -10,9 +10,9 @@ arch=(x86_64 aarch64)
 url='https://github.com/simophin/ferryapp'
 # No license chosen yet.
 license=(LicenseRef-unknown)
-# The .deb's Depends under Arch's names: glibc, libgcc and libxcb from the ELF files,
-# and the libraries winit loads at runtime. Without a GPU driver the app
-# draws in software.
+# The .deb's Depends under Arch's names: glibc and libgcc from the ELF files,
+# and the libraries winit and display-info load at runtime. Without a GPU
+# driver the app draws in software.
 depends=(
   glibc gcc-libs hicolor-icon-theme fontconfig ttf-font
   libxcb libxkbcommon libxkbcommon-x11 wayland libx11 libxcursor libxi libxrandr
