@@ -172,8 +172,8 @@ fn command_line<'a, M: Clone + 'a>(cli: CommandLine<'a>, actions: &Actions<M>) -
     let status = cli.status.filter(|status| status.enabled);
     let switch = widgets::switch_setting(
         lucide::square_terminal,
-        "Command line access",
-        "Let ferry-cli control this app",
+        fl!("settings-cli"),
+        fl!("settings-cli-detail"),
         status.is_some(),
         actions.set_api_enabled,
     );
@@ -182,7 +182,11 @@ fn command_line<'a, M: Clone + 'a>(cli: CommandLine<'a>, actions: &Actions<M>) -
     };
     let mut details = column![].spacing(10);
     if let Some(error) = &status.error {
-        details = details.push(text(error).size(13).style(text::danger));
+        details = details.push(
+            text(fl!("settings-cli-not-listening", error = error.as_str()))
+                .size(13)
+                .style(text::danger),
+        );
     }
     if let Some(setup) = cli_setup(status, false) {
         let code = container(text(setup).size(13).font(Font::MONOSPACE))
@@ -198,15 +202,15 @@ fn command_line<'a, M: Clone + 'a>(cli: CommandLine<'a>, actions: &Actions<M>) -
                 }
             });
         let buttons = row![
-            button(text("Copy setup").size(13))
+            button(text(fl!("settings-cli-copy-setup")).size(13))
                 .padding([6, 12])
                 .style(widgets::tonal)
                 .on_press(actions.copy_cli_setup.clone()),
-            button(text("Copy token").size(13))
+            button(text(fl!("settings-cli-copy-token")).size(13))
                 .padding([6, 12])
                 .style(widgets::outlined)
                 .on_press(actions.copy_api_token.clone()),
-            button(text("New token").size(13))
+            button(text(fl!("settings-cli-new-token")).size(13))
                 .padding([6, 12])
                 .style(widgets::outlined)
                 .on_press(actions.new_api_token.clone()),
@@ -214,13 +218,9 @@ fn command_line<'a, M: Clone + 'a>(cli: CommandLine<'a>, actions: &Actions<M>) -
         .spacing(8);
         details = details
             .push(
-                text(
-                    "ferry-cli on this computer finds the app by itself. \
-                     Elsewhere, such as a script run as another user, paste this \
-                     into its shell first:",
-                )
-                .size(13)
-                .style(text::secondary),
+                text(fl!("settings-cli-setup-hint"))
+                    .size(13)
+                    .style(text::secondary),
             )
             .push(code)
             .push(buttons);
@@ -228,7 +228,7 @@ fn command_line<'a, M: Clone + 'a>(cli: CommandLine<'a>, actions: &Actions<M>) -
     if let Some(path) = cli.cli_path {
         details = details.push(
             column![
-                text("ferry-cli is installed at")
+                text(fl!("settings-cli-installed-at"))
                     .size(13)
                     .style(text::secondary),
                 widgets::selectable_text(&path.display().to_string()),
@@ -392,7 +392,10 @@ mod tests {
             },
             actions(),
         ));
-        assert!(ui.find("couldn’t listen on port 24816").is_ok());
+        assert!(
+            ui.find("ferry-cli can’t reach the app: couldn’t listen on port 24816")
+                .is_ok()
+        );
         assert!(ui.find("Copy setup").is_err());
     }
 

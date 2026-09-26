@@ -86,8 +86,11 @@ git diff --check
 
 Run `cargo test` under a private display and bus with
 `ICED_BACKEND=tiny-skia` (CLAUDE.md). With `SNAPSHOT_DIR` set, the UI's
-snapshot tests write PNGs of each page there, in light and dark; look at
-them after a UI change.
+snapshot tests write PNGs of each page there, in light and dark, and in
+the en-XA pseudo-locale (`*-en-XA-light-*.png`: accented, longer, in
+brackets); look at them after a UI change. Plain English in an en-XA
+image is a string that wasn't extracted, or test data; a missing closing
+bracket is text cut off. `FERRY_LANG=en-XA` shows the real app in it.
 
 Also run the real app for anything involving windows, the tray, drops,
 dialogs or notifications (see "Verifying in the real app" below):

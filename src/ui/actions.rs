@@ -296,10 +296,7 @@ impl App {
             Err(error) => {
                 tracing::warn!(%error, "couldn't change command line access");
                 let read = self.read_api_status();
-                let toast = self.toast(
-                    format!("Couldn’t change command line access: {error}"),
-                    None,
-                );
+                let toast = self.toast(fl!("settings-cli-change-failed", error = error), None);
                 Task::batch([read, toast])
             }
         }
@@ -316,19 +313,19 @@ impl App {
             return Task::none();
         };
         let (copied, label) = match what {
-            CliCopy::Setup => (settings::cli_setup(&status, true), "Setup copied"),
+            CliCopy::Setup => (
+                settings::cli_setup(&status, true),
+                fl!("settings-cli-setup-copied"),
+            ),
             CliCopy::Token => (
                 status.token.map(|token| token.expose_secret().to_owned()),
-                "Token copied",
+                fl!("settings-cli-token-copied"),
             ),
         };
         let Some(copied) = copied else {
             return Task::none();
         };
-        Task::batch([
-            iced::clipboard::write(copied),
-            self.toast(label.into(), None),
-        ])
+        Task::batch([iced::clipboard::write(copied), self.toast(label, None)])
     }
 
     /// Have the system start the app at login, or stop, off the UI thread.

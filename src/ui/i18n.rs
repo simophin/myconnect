@@ -8,14 +8,16 @@
 //! at start ([`select_system_language`], from `launch::run`); until then,
 //! and in tests, [`LOADER`] holds en-US, the fallback for any key a
 //! translation lacks. Numbers in messages and dates are in the user's
-//! locale ([`format`]). See `docs/PLAN_I18N.md`.
+//! locale ([`format`]). `FERRY_LANG=en-XA` shows a pseudo-locale
+//! generated from en-US ([`pseudo`]). See `docs/PLAN_I18N.md`.
 
 pub mod format;
+pub mod pseudo;
 
-use std::sync::LazyLock;
+use std::{ops::Deref, sync::LazyLock};
 
 use i18n_embed::{
-    DesktopLanguageRequester, LanguageLoader,
+    DesktopLanguageRequester, I18nEmbedError, LanguageLoader,
     fluent::{FluentLanguageLoader, fluent_language_loader},
     unic_langid::LanguageIdentifier,
 };
@@ -30,7 +32,7 @@ pub const LANGUAGE_VARIABLE: &str = "FERRY_LANG";
 struct Localizations;
 
 /// The messages in the chosen language, falling back to en-US.
-pub static LOADER: LazyLock<FluentLanguageLoader> = LazyLock::new(|| {
+pub static LOADER: Loader = Loader(LazyLock::new(|| {
     let loader: FluentLanguageLoader = fluent_language_loader!();
     loader
         .load_fallback_language(&Localizations)
@@ -39,7 +41,51 @@ pub static LOADER: LazyLock<FluentLanguageLoader> = LazyLock::new(|| {
     loader.set_use_isolating(!cfg!(test));
     format_numbers(&loader);
     loader
+}));
+
+/// [`LOADER`]'s type: the app's one loader, except that in unit tests a
+/// thread inside [`in_pseudo_locale`] sees the pseudo-locale's.
+pub struct Loader(LazyLock<FluentLanguageLoader>);
+
+impl Deref for Loader {
+    type Target = FluentLanguageLoader;
+
+    fn deref(&self) -> &FluentLanguageLoader {
+        #[cfg(test)]
+        if IN_PSEUDO_LOCALE.get() {
+            return &PSEUDO_LOADER;
+        }
+        &self.0
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static IN_PSEUDO_LOCALE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// en-XA, with isolation marks, as the app would show it.
+#[cfg(test)]
+static PSEUDO_LOADER: LazyLock<FluentLanguageLoader> = LazyLock::new(|| {
+    let loader: FluentLanguageLoader = fluent_language_loader!();
+    load(&loader, &[pseudo::language()]).expect("en-XA is made from en-US, which parses");
+    loader
 });
+
+/// Run `f` with `fl!` on this thread looking messages up in en-XA, for
+/// snapshots: other tests running at the same time still see en-US.
+#[cfg(test)]
+pub fn in_pseudo_locale<T>(f: impl FnOnce() -> T) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            IN_PSEUDO_LOCALE.set(false);
+        }
+    }
+    IN_PSEUDO_LOCALE.set(true);
+    let _reset = Reset;
+    f()
+}
 
 /// Write `loader`'s numbers in the user's locale. Like isolation, this is
 /// lost whenever the loader's languages are (re)loaded.
@@ -89,10 +135,9 @@ fn forced_language() -> Option<LanguageIdentifier> {
 }
 
 fn select(requested: &[LanguageIdentifier]) -> Vec<LanguageIdentifier> {
-    match i18n_embed::select(&*LOADER, &Localizations, requested) {
+    match load(&LOADER, requested) {
         Ok(languages) => {
             tracing::info!(?requested, ?languages, "chose the UI's languages");
-            format_numbers(&LOADER);
             format::set_locale(requested, languages.first().unwrap_or(&en_us()));
             languages
         }
@@ -103,6 +148,22 @@ fn select(requested: &[LanguageIdentifier]) -> Vec<LanguageIdentifier> {
             LOADER.current_languages()
         }
     }
+}
+
+/// Load into `loader` the translations that best match `requested`, the
+/// pseudo-locale only if it is asked for by name, and have it write
+/// numbers in the user's locale.
+fn load(
+    loader: &FluentLanguageLoader,
+    requested: &[LanguageIdentifier],
+) -> Result<Vec<LanguageIdentifier>, I18nEmbedError> {
+    let languages = if pseudo::is_requested(requested) {
+        i18n_embed::select(loader, &pseudo::WithPseudo(Localizations), requested)?
+    } else {
+        i18n_embed::select(loader, &Localizations, requested)?
+    };
+    format_numbers(loader);
+    Ok(languages)
 }
 
 fn en_us() -> LanguageIdentifier {
@@ -172,6 +233,35 @@ mod tests {
         assert_eq!(LOADER.current_languages(), [en_us()]);
         assert_eq!(fl!("drop-send-to-header", count = 1), "Send 1 file to:");
         assert_eq!(fl!("drop-send-to-header", count = 3), "Send 3 files to:");
+    }
+
+    #[test]
+    fn the_pseudo_locale_is_only_for_the_thread_that_asks() {
+        let pseudo = in_pseudo_locale(|| fl!("settings-title"));
+        assert_eq!(pseudo, "[Šééţţîîñĝš]");
+        assert_eq!(fl!("settings-title"), "Settings");
+        let other = std::thread::spawn(|| in_pseudo_locale(|| ()));
+        other.join().unwrap();
+        assert_eq!(fl!("settings-title"), "Settings");
+    }
+
+    #[test]
+    fn en_xa_is_loaded_only_when_asked_for_by_name() {
+        // Other loaders, so the shared one stays as the other tests expect.
+        let tags = |tags: &[&str]| -> Vec<LanguageIdentifier> {
+            tags.iter().map(|tag| tag.parse().unwrap()).collect()
+        };
+        let loader: FluentLanguageLoader = fluent_language_loader!();
+        let chosen = load(&loader, &tags(&["en-XA"])).unwrap();
+        assert_eq!(chosen, tags(&["en-XA", "en-US"]));
+        loader.set_use_isolating(false);
+        assert_eq!(
+            loader.get_args("drop-send-to-header", [("count", 1234)].into()),
+            "[Šééñď 1,234 fîîļééš ţöö:]"
+        );
+
+        let loader: FluentLanguageLoader = fluent_language_loader!();
+        assert_eq!(load(&loader, &tags(&["en-GB"])).unwrap(), [en_us()]);
     }
 
     #[test]

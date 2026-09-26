@@ -52,7 +52,7 @@ pub fn view<'a, Message: Clone + 'a>(
             ))
             .size(13)
             .style(text::secondary)
-            .wrapping(text::Wrapping::None),
+            .wrapping(text::Wrapping::WordOrGlyph),
         ]
         .spacing(6)
         .align_y(Alignment::Center)
@@ -70,10 +70,7 @@ pub fn view<'a, Message: Clone + 'a>(
     let header = column![
         title,
         row![
-            container(this_computer)
-                .padding([0, 4])
-                .width(Length::Fill)
-                .clip(true),
+            container(this_computer).padding([0, 4]).width(Length::Fill),
             add
         ]
         .spacing(12)

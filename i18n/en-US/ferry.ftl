@@ -280,6 +280,20 @@ settings-close-to-tray = Keep running when the window is closed
 settings-close-to-tray-detail = Stay in the tray so devices can still reach this computer
 settings-start-on-login = Start when you log in
 settings-start-on-login-detail = Open in the tray, ready for your devices
+settings-cli = Command line access
+settings-cli-detail = Let ferry-cli control this app
+settings-cli-setup-hint = ferry-cli on this computer finds the app by itself. Elsewhere, such as a script run as another user, paste this into its shell first:
+settings-cli-copy-setup = Copy setup
+settings-cli-copy-token = Copy token
+settings-cli-new-token = New token
+# Under it, the path to the `ferry-cli` program.
+settings-cli-installed-at = ferry-cli is installed at
+# `error` is the system's reason, in English, like "Address already in use".
+settings-cli-not-listening = ferry-cli can’t reach the app: { $error }
+# `error` is the reason, in English.
+settings-cli-change-failed = Couldn’t change command line access: { $error }
+settings-cli-setup-copied = Setup copied
+settings-cli-token-copied = Token copied
 settings-about = About Ferry
 # `version` is the app's, like "1.2.0".
 settings-version = Version { $version }

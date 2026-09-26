@@ -15,6 +15,7 @@ gui = [
     "dep:chrono",
     "dep:display-info",
     "dep:fluent-bundle",
+    "dep:fluent-syntax",
     "dep:i18n-embed",
     "dep:i18n-embed-fl",
     "dep:iced",
@@ -108,6 +109,9 @@ icu_datetime = { version = "2.3", optional = true }
 icu_decimal = { version = "2.3", features = ["alloc", "ryu"], optional = true }
 icu_locale_core = { version = "2.3", optional = true }
 fluent-bundle = { version = "0.16", optional = true }
+# Reads and writes `.ftl` files: the en-XA pseudo-locale is made from
+# en-US's (`ui::i18n::pseudo`); already in the tree through `i18n-embed`.
+fluent-syntax = { version = "0.12", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 # The uid in the single-instance socket's name (`gui`).
@@ -154,9 +158,6 @@ name = "ui_e2e"
 required-features = ["gui"]
 
 [dev-dependencies]
-# Parses every locale's `.ftl` in `ui::i18n`'s tests; already in the tree
-# through `i18n-embed`.
-fluent-syntax = "0.12"
 iced_runtime = "0.14"
 iced_test = "0.14"
 tempfile = "3"

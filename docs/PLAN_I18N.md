@@ -77,11 +77,12 @@ Split into four commits, one per step, each passing the checks.
 - [x] Percentages and other numbers through Fluent
 
 ### 4. Pseudo-locale
-- [ ] A generated `en-XA` (accented, ~40% longer, bracketed) built from
+- [x] A generated `en-XA` (accented, ~40% longer, bracketed) built from
       en-US, not checked in by hand
-- [ ] Snapshot tests also render `en-XA` when `SNAPSHOT_DIR` is set; fix
+- [x] Snapshot tests also render `en-XA` when `SNAPSHOT_DIR` is set; fix
       any unextracted string or clipped layout they show
-- [ ] `FERRY_LANG=en-XA` works in the real app
+- [ ] `FERRY_LANG=en-XA` works in the real app (unit-tested; not yet seen
+      on screen, see Notes)
 
 ### 5. Platform integration
 - [ ] macOS: `CFBundleLocalizations` and a `<lang>.lproj` per shipped
@@ -252,3 +253,34 @@ Anything a later phase must know, one line each, newest last.
   "Couldn’t change command line access: …") in English. Phase 4 must
   extract these first, then use the pseudo-locale to catch anything else.
   The CLI binary is now `ferry-cli` (`src/bin/ferry-cli`).
+- 4: first extracted main's "Command line access" section (`settings-cli-…`
+  keys). The API's own error (`ApiStatus::error`, English from the OS)
+  now sits in a sentence, `settings-cli-not-listening`.
+- 4: en-XA is made at run time from the embedded en-US file
+  (`ui::i18n::pseudo`, `fluent-syntax` parses and re-serializes it), so
+  there is no `i18n/en-XA/` and the key test doesn't see it. It is offered
+  only when `en-XA` is requested by name (`pseudo::is_requested`): with
+  Fluent's `Filtering`, a system asking for `en-GB` could otherwise land on
+  it. Phase 7's language list must leave it out, or show it only for
+  testing. Brackets are `{ "[" }` string literals, which Fluent doesn't
+  isolate. The accented letters are all Latin-1/Extended-A (Figtree has
+  them); numbers format as English.
+- 4: unit tests render en-XA through `ui::i18n::in_pseudo_locale`, which
+  makes `LOADER` (now a `Deref` wrapper, `ui::i18n::Loader`) return an
+  en-XA loader on that thread only, so parallel tests stay en-US.
+  `testing::snapshot` keeps it on through layout, as `responsive` builds
+  its content then, and writes `<name>-en-XA-light-<backend>.png`
+  (isolation marks on, as in the app; they render as nothing).
+- 4: what the en-XA snapshots still show in English is test data (the
+  fake features "Wave"/"Hug"/"Waving"/"N bars" and "Sync clipboard" passed
+  in by tests, dialogs and toasts built with literal text, device, file
+  and storage names), and errors from outside the app (the startup
+  screen's OS error). Nothing unextracted was found. One layout fix: the
+  device list's "This computer: …" line was cut off beside "Add device"
+  (`Wrapping::None` + clip); it wraps now.
+- 4 was checked on macOS, as 3 was: the same `tests/lan.rs` loopback
+  failure, `ui_e2e` doesn't run there. The real app wasn't run (no Xvfb
+  on macOS): run `FERRY_LANG=en-XA ... cargo run -p ferry-gui -- --demo`
+  under Xvfb on Linux and look at the window, the tray menu and a
+  notification. The en-XA path is covered by unit tests
+  (`ui::i18n::tests::en_xa_is_loaded_only_when_asked_for_by_name`).

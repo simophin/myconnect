@@ -257,6 +257,8 @@ mod tests {
         assert_eq!(number("de", 12345.0, None), "12.345");
         assert_eq!(number("fr", 12345.0, None), "12\u{A0}345");
         assert_eq!(number("zh-CN", 1.5, Some(1)), "1.5");
+        // The pseudo-locale formats as English.
+        assert_eq!(number("en-XA", 12345.5, None), "12,345.5");
     }
 
     #[test]
