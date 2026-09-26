@@ -47,14 +47,14 @@ under "Notes" for anything the next phase must know, and commit.
 ## Phases
 
 ### 1. Infrastructure
-- [ ] `i18n.toml`, `i18n/en-US/ferry.ftl`, dependencies (gui-only),
+- [x] `i18n.toml`, `i18n/en-US/ferry.ftl`, dependencies (gui-only),
       library table in `adr/0001`
-- [ ] `ui::i18n`: a static loader, `fl!` re-exported, language chosen at
+- [x] `ui::i18n`: a static loader, `fl!` re-exported, language chosen at
       boot in `launch.rs` (system, `FERRY_LANG` override, en-US fallback)
-- [ ] Tests pinned to en-US with isolation marks off (`ui::testing`,
+- [x] Tests pinned to en-US with isolation marks off (`ui::testing`,
       `tests/ui_e2e.rs`, unit tests)
-- [ ] A test that every locale's `.ftl` parses and has exactly en-US's keys
-- [ ] `cargo build -p ferry` still has no iced, and no i18n crates
+- [x] A test that every locale's `.ftl` parses and has exactly en-US's keys
+- [x] `cargo build -p ferry` still has no iced, and no i18n crates
 
 ### 2. Extract every string
 Split into four commits, one per step, each passing the checks.
@@ -108,3 +108,24 @@ Split into four commits, one per step, each passing the checks.
 ## Notes
 
 Anything a later phase must know, one line each, newest last.
+
+- Phase 1: `use crate::ui::i18n::fl;` then `fl!("key", name = value)`;
+  `LOADER` is the static loader. Only `drop-send-to-header` (drops.rs's
+  tray chooser, a plural) is extracted so far, as the pilot; 2a does the
+  rest of `drops`.
+- Language selection runs only in `launch::run`, never in `program`, so
+  unit tests (`cfg(test)` turns isolation off) and `tests/ui_e2e.rs`
+  (`ui::i18n::use_test_language()` in `launch`) stay en-US without marks.
+  `set_use_isolating` resets whenever languages are (re)loaded: phase 7's
+  runtime switch must apply it again after `select`.
+- The key test (`ui::i18n::tests`) reads every `i18n/*/ferry.ftl` from
+  disk and compares message, term and attribute ids with en-US; a new
+  locale directory needs no registration.
+- Editing only an `.ftl` doesn't make cargo rebuild `fl!`'s compile-time
+  check (debug builds read the files at run time through `rust-embed`);
+  touch a `.rs` file if a stale key check confuses you.
+- `i18n_embed::select` negotiates with `Filtering`: check in phase 6 that
+  macOS's `zh-Hans-CN` and Windows' tags reach `zh-CN`, or map them.
+- Phase 1 was checked on macOS (no Xvfb there): `ui_e2e` is Linux-only and
+  didn't run, the real-clipboard tests were skipped, and `tests/lan.rs`'s
+  loopback test fails on macOS (no `127.255.255.255`, HANDOFF "Traps"; no gui code in it).

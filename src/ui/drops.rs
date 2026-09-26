@@ -10,6 +10,7 @@ use super::{
     desktop::tray::{TrayCommand, TrayItem},
     error,
     features::DropTarget,
+    i18n::fl,
     overlay::drop as dropping,
     route::Route,
 };
@@ -59,10 +60,7 @@ impl App {
     /// The tray's menu for files dropped on it: which device to send
     /// `count` files to. No file names: they can be any length.
     fn tray_chooser(&self, count: usize) -> Vec<TrayItem> {
-        let header = match count {
-            1 => "Send 1 file to:".to_owned(),
-            _ => format!("Send {count} files to:"),
-        };
+        let header = fl!("drop-send-to-header", count = count);
         let mut menu = vec![TrayItem::item(header, None)];
         let devices = self.recipients();
         if devices.is_empty() {

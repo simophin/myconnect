@@ -1,0 +1,5 @@
+# Where `i18n-embed` and `fl!` find the app's translations (`src/ui/i18n.rs`).
+fallback_language = "en-US"
+
+[fluent]
+assets_dir = "i18n"

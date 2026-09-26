@@ -27,6 +27,7 @@ pub mod desktop;
 mod drops;
 pub mod error;
 pub mod features;
+pub mod i18n;
 mod launch;
 pub mod overlay;
 pub mod pages;

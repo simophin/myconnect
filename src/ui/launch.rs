@@ -29,6 +29,7 @@ use super::{
         window::{self as windowing, Windows},
     },
     features::Features,
+    i18n,
     overlay::{dialog::Dialogs, drop::Drag, toast::Toasts},
     route::Route,
     theme,
@@ -76,6 +77,9 @@ pub type StartFuture = Pin<Box<dyn Future<Output = Result<Started>> + Send>>;
 /// window closed, the app keeps running in the tray. If another launch
 /// already runs with the same data directory, show its window instead.
 pub fn run(options: UiOptions, start: impl Fn() -> StartFuture + 'static) -> Result<()> {
+    // Before anything shows text: the tray, notifications, the window.
+    // Tests run `program` instead, and stay in en-US.
+    i18n::select_system_language();
     let runtime = options.runtime.clone();
     let (events, received) = tokio::sync::mpsc::unbounded_channel();
     let data_dir = options.data_dir.clone().or_else(config::default_config_dir);
