@@ -73,7 +73,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 rusqlite_migration = { version = "2.6", features = ["from-directory"] }
 include_dir = "0.7"
 # The identity's certificate and key in its stored JSON; already in the tree.
-base64 = "0.22"
+base64 = "0.23"
 # The desktop UI (`gui` feature). Upgrading iced is its own change.
 iced = { version = "0.14", features = ["advanced", "image-without-codecs"], optional = true }
 iced_fonts = { version = "0.3", features = ["lucide"], optional = true }
