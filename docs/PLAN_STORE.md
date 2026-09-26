@@ -1,5 +1,8 @@
 # Plan: the daemon's data in SQLite
 
+**Status:** steps 1–7 are done. Step 8's check in the real app remains
+(HANDOFF, "Open work").
+
 The daemon keeps its data in JSON files: `identity.json`,
 `settings.json` and one `trusted-devices/<id>.json` per paired device.
 Features coming next need data that grows and is queried, which files

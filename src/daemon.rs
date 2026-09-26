@@ -41,7 +41,8 @@ pub struct RunRequest {
     /// Directory in which received files should be stored. Overrides the
     /// stored setting for this run only.
     pub download_dir: Option<PathBuf>,
-    /// Directory holding local identity and trust state. Defaults to
+    /// Directory holding the daemon's data (`ferry.db`: its identity,
+    /// paired devices and settings). Defaults to
     /// the platform configuration directory.
     pub data_dir: Option<PathBuf>,
     /// Name this device advertises to peers. Overrides the stored setting

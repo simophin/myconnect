@@ -137,6 +137,12 @@ core and its plugins. The rules the core keeps:
   snapshot leaves the core) and calls `ctx.device_changed(id)` when its
   answer changes. It owns a typed settings section, stored and exposed
   under `plugins.<id>` (§7), and reads it with `ctx.settings::<T>()`.
+- **Data.** A plugin keeps anything else in the store (`ctx.store()`),
+  under `ConfigKey`s it declares as `<id>.<name>`, per device where the
+  value belongs to one (`PerDevice`, removed when the device is
+  unpaired). It can `watch` a key it cares about, its settings section
+  included (`PLUGIN_SETTINGS.of(id)`). It never writes files of its own in
+  the data directory.
 - **Events and errors.** A plugin publishes its own event types
   (`ctx.publish(&T)` for `T: PluginEventKind`); they look like core events
   on the wire. Its errors map to `ApiProblem` inside the plugin; core errors
@@ -145,7 +151,7 @@ core and its plugins. The rules the core keeps:
 `PluginContext` offers: `device(id)` and `device_changed(id)`;
 `send(device, packet)` (paired, connected, and the peer advertised the
 type), `can_send` and `broadcast(packet, except)`; `publish`;
-`settings::<T>()`; `transfers()`; and `payload_peer(device)` for payload
+`settings::<T>()`; `store()`; `transfers()`; and `payload_peer(device)` for payload
 connections and SSH sign-in without the private key.
 
 A new feature is a module under `plugins/`: `mod.rs` implementing
@@ -463,7 +469,7 @@ also runs standalone for trying the app without a phone.
 both ways, unpairing, ping, clipboard, files both ways, browsing, and
 notifications. The
 UI's unit tests sit next to each page and plugin UI half, over a real
-core from `core::testing` with fake desktop services, and snapshot tests
+core from `core::testing` (on `Store::open_in_memory()`) with fake desktop services, and snapshot tests
 render each page to PNG in light and dark when `SNAPSHOT_DIR` is set.
 Most end-to-end tests spin up two in-process peers (real UDP/TCP/TLS on
 loopback, no mocked network layer) and exercise discovery through encrypted

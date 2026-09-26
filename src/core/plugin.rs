@@ -225,7 +225,7 @@ impl PluginEvent {
     }
 }
 
-/// A plugin's settings: a section of `settings.json` and of
+/// A plugin's settings: a section of the stored settings and of
 /// `GET`/`PATCH /settings`, under `plugins.<ID>`.
 ///
 /// Every field has a default (`#[serde(default)]` on the type), so a section

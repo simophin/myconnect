@@ -134,6 +134,10 @@ impl Store {
     /// It takes the database's write lock at the start, so another process
     /// on the same data directory waits (up to the busy timeout) rather
     /// than failing midway, after both have read the same state.
+    ///
+    /// `body` must use the [`Transaction`] it's given, never this `Store`:
+    /// the store's lock is held throughout and isn't reentrant, so a call
+    /// on the store from `body` deadlocks.
     pub fn transaction<R, E>(
         &self,
         body: impl FnOnce(&mut Transaction<'_>) -> Result<R, E>,
