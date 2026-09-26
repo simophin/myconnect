@@ -454,9 +454,11 @@ impl App {
             },
             Message::Unpair { device_id, name } => self.dialogs.open(
                 Dialog::confirm(
-                    format!("Unpair {name}?"),
-                    "The device will need to be paired again before it can exchange \
-                     anything with this computer.",
+                    "Unpair device?",
+                    format!(
+                        "{name} will need to be paired again before it can exchange \
+                         anything with this computer."
+                    ),
                     "Unpair",
                     Submit::Close(Arc::new(move |_| Message::Forget {
                         device_id: device_id.clone(),

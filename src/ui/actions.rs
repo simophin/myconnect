@@ -369,7 +369,9 @@ mod tests {
 
         // Cancelling keeps the device.
         settle(&mut app, unpair()).await;
-        assert_eq!(app.dialogs.current().unwrap().title, "Unpair Peer?");
+        let dialog = app.dialogs.current().unwrap();
+        assert_eq!(dialog.title, "Unpair device?");
+        assert!(dialog.body.as_ref().unwrap().starts_with("Peer will need"));
         settle(&mut app, Message::Key(KeyCommand::Cancel)).await;
         assert!(core.device(&peer.device_id).is_some());
 

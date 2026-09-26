@@ -340,7 +340,7 @@ mod tests {
         sharing
             .window(window::Event::FileDropped(photo.clone()))
             .await;
-        assert!(shows(&sharing.app, "Send photo.jpg"));
+        assert!(shows(&sharing.app, "photo.jpg"));
         assert!(sharing.sent().is_empty());
 
         click(&mut sharing.app, "Peer").await;
@@ -366,7 +366,7 @@ mod tests {
         )
         .await;
         assert!(sharing.app.window.is_some());
-        assert!(shows(&sharing.app, "Send photo.jpg"));
+        assert!(shows(&sharing.app, "photo.jpg"));
         assert!(sharing.sent().is_empty());
 
         assert_eq!(sharing.app.recipients()[0].device_id, peer);

@@ -143,9 +143,11 @@ pub fn chooser<'a, M: Clone + 'a>(
     choose: fn(String) -> M,
     cancel: M,
 ) -> Element<'a, M> {
-    let title = match paths {
-        [path] => format!("Send {}", file_name(path)),
-        _ => format!("Send {} files", paths.len()),
+    // The title stays short; a file's name, which can be any length, goes
+    // under it and wraps.
+    let (title, name) = match paths {
+        [path] => ("Send file".to_owned(), Some(file_name(path))),
+        _ => (format!("Send {} files", paths.len()), None),
     };
     let body: Element<'a, M> = if devices.is_empty() {
         text("No paired device is connected and able to receive files.")
@@ -156,7 +158,9 @@ pub fn chooser<'a, M: Clone + 'a>(
             button(
                 row![
                     device_icon(device.device_type).size(20),
-                    text(&device.device_name).size(15),
+                    text(&device.device_name)
+                        .size(15)
+                        .wrapping(text::Wrapping::WordOrGlyph),
                 ]
                 .spacing(14)
                 .align_y(Alignment::Center),
@@ -176,10 +180,14 @@ pub fn chooser<'a, M: Clone + 'a>(
     };
     surface(
         column![
-            text(title)
-                .size(20)
-                .font(widgets::bold())
-                .wrapping(text::Wrapping::None),
+            column![text(title).size(20).font(widgets::bold())]
+                .push(name.map(|name| {
+                    text(name)
+                        .size(14)
+                        .style(text::secondary)
+                        .wrapping(text::Wrapping::WordOrGlyph)
+                }))
+                .spacing(4),
             body,
             row![
                 space::horizontal(),
@@ -261,7 +269,8 @@ mod tests {
         let laptop = capable("Laptop");
         let photo = [PathBuf::from("/tmp/photo.jpg")];
         let mut ui = Simulator::new(chooser(&photo, vec![&pixel, &laptop], Some, None));
-        assert!(ui.find("Send photo.jpg").is_ok());
+        assert!(ui.find("Send file").is_ok());
+        assert!(ui.find("photo.jpg").is_ok());
         ui.click("Laptop").unwrap();
         ui.click("Cancel").unwrap();
         let asked: Vec<_> = ui.into_messages().collect();
@@ -286,6 +295,17 @@ mod tests {
             super::super::dialog::modal(
                 container(text("page")).center(Length::Fill).into(),
                 chooser(&paths, vec![&pixel, &laptop], |_| (), ()),
+                None,
+            )
+        });
+        // A long name wraps under the title, even without spaces.
+        let long = [PathBuf::from(
+            "/Holiday_photos_from_the_trip_to_the_mountains_in_the_summer_of_2025_final_edit.jpg",
+        )];
+        testing::snapshot("drop-chooser-long-name", (440.0, 620.0), || {
+            super::super::dialog::modal(
+                container(text("page")).center(Length::Fill).into(),
+                chooser(&long, Vec::new(), |_| (), ()),
                 None,
             )
         });

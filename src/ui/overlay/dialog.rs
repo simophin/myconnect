@@ -120,6 +120,14 @@ impl<M> Dialog<M> {
         }
     }
 
+    /// Text between the title and the field. Names the user or a device
+    /// chose (a file, a device, a notification) belong here, not in the
+    /// title: they can be any length, and here they wrap.
+    pub fn with_body(mut self, body: impl Into<String>) -> Self {
+        self.body = Some(body.into());
+        self
+    }
+
     pub fn danger(mut self) -> Self {
         self.danger = true;
         self
@@ -317,7 +325,7 @@ pub fn modal<'a, T: Clone + 'a>(
 fn view<M>(dialog: &Dialog<M>) -> Element<'_, DialogEvent> {
     let mut content = column![text(&dialog.title).size(20).font(bold())].spacing(16);
     if let Some(body) = &dialog.body {
-        content = content.push(text(body).size(14));
+        content = content.push(text(body).size(14).wrapping(text::Wrapping::WordOrGlyph));
     }
     if let Some(field) = &dialog.field {
         content = content.push(field_view(field, dialog.error(), dialog.busy));
@@ -567,8 +575,9 @@ mod tests {
         let mut confirm: Dialogs<()> = Dialogs::default();
         let _: Task<()> = confirm.open(
             Dialog::confirm(
-                "Unpair Pixel 8a?",
-                "It will need to be paired again before it can reach this computer.",
+                "Unpair device?",
+                "Pixel 8a will need to be paired again before it can exchange anything \
+                 with this computer.",
                 "Unpair",
                 Submit::Close(Arc::new(|_| ())),
             )

@@ -273,6 +273,10 @@ The UI's traps. Those about driving the app under Xvfb are in
   real app. Snapshots render one frame and don't show it.
 - **macOS loopback.** `--discovery-loopback` can't find peers on macOS
   (no `127.255.255.255`). Use `--demo` there, and do peer tests on Linux.
+- **Dialog titles are fixed text.** A name someone chose (a file, a
+  device, a notification's sender) can be any length, so it goes in the
+  body, which wraps anywhere (`Wrapping::WordOrGlyph`): "Unpair device?"
+  with "Pixel 8a will need…" under it, not "Unpair Pixel 8a?".
 - **iced is pinned** (`iced = "0.14"`, `iced_fonts = "0.3"`). Upgrading it
   is its own change, never mixed into a feature.
 

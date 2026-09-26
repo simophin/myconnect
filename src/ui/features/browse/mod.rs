@@ -304,6 +304,7 @@ impl BrowseUi {
         };
         shell::prompt(shell::Prompt {
             title: title.into(),
+            body: None,
             label: "Name".into(),
             initial: initial.into(),
             selection: (!initial.is_empty()).then_some(Range {
@@ -636,15 +637,27 @@ impl BrowseUi {
                 else {
                     return Task::none();
                 };
-                let body = if file.kind == FileKind::Directory {
-                    "The folder and everything in it will be deleted from the device. This \
-                     can’t be undone."
+                let (title, body) = if file.kind == FileKind::Directory {
+                    (
+                        "Delete folder?",
+                        format!(
+                            "“{}” and everything in it will be deleted from the device. \
+                             This can’t be undone.",
+                            file.name
+                        ),
+                    )
                 } else {
-                    "The file will be deleted from the device. This can’t be undone."
+                    (
+                        "Delete file?",
+                        format!(
+                            "“{}” will be deleted from the device. This can’t be undone.",
+                            file.name
+                        ),
+                    )
                 };
                 shell::confirm(
                     origin,
-                    format!("Delete {}?", file.name),
+                    title,
                     body,
                     "Delete",
                     Feature::Browse(Message::Change {
@@ -1088,8 +1101,8 @@ pub(crate) mod tests {
         else {
             panic!("a confirmation");
         };
-        assert_eq!(title, "Delete DCIM?");
-        assert!(body.contains("everything in it"), "{body}");
+        assert_eq!(title, "Delete folder?");
+        assert!(body.starts_with("“DCIM” and everything in it"), "{body}");
         assert_eq!(confirm_label, "Delete");
         browser.send(browse(then.clone())).await;
         assert!(
@@ -1100,12 +1113,13 @@ pub(crate) mod tests {
         );
 
         browser.row_action("notes.txt", "Delete").await;
-        let [ui::Message::Confirm { body, .. }] = &browser.take_requests()[..] else {
+        let [ui::Message::Confirm { title, body, .. }] = &browser.take_requests()[..] else {
             panic!("a confirmation");
         };
+        assert_eq!(title, "Delete file?");
         assert_eq!(
             body,
-            "The file will be deleted from the device. This can’t be undone."
+            "“notes.txt” will be deleted from the device. This can’t be undone."
         );
     }
 
