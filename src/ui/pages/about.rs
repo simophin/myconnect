@@ -1,8 +1,8 @@
 //! The About page: the app's icon, name and version, what it is, who made
 //! it, links to its source and to supporting its development, and the
 //! licenses of the third-party code in it. The links open in the system
-//! browser, and so do the licenses (a page the package installs:
-//! `desktop::licenses`).
+//! browser, the licenses included: the website publishes them with each
+//! release (the Build workflow's Website job).
 
 use std::sync::LazyLock;
 
@@ -19,6 +19,7 @@ pub const NAME: &str = "Ferry";
 pub const AUTHOR_URL: &str = "https://fanchao.dev";
 pub const SOURCE_URL: &str = "https://github.com/simophin/ferryapp";
 pub const SPONSOR_URL: &str = "https://github.com/sponsors/simophin";
+pub const LICENSES_URL: &str = "https://simophin.github.io/ferryapp/licenses.html";
 
 /// The app's icon, the one its window has, decoded once.
 static ICON: LazyLock<image::Handle> = LazyLock::new(|| {
@@ -34,8 +35,6 @@ pub struct Actions<M> {
     pub back: M,
     /// Open a web page in the system browser.
     pub open_link: fn(&'static str) -> M,
-    /// Open the third-party licenses.
-    pub open_licenses: M,
 }
 
 /// The page, showing the app's `version`.
@@ -81,17 +80,11 @@ pub fn view<'a, M: Clone + 'a>(version: &'a str, actions: Actions<M>) -> Element
             fl!("about-support-detail"),
             SPONSOR_URL,
         ),
-        widgets::setting(
+        link(
             lucide::scroll_text,
             fl!("about-licenses"),
             fl!("about-licenses-detail"),
-            Some(
-                lucide::external_link()
-                    .size(16)
-                    .style(text::secondary)
-                    .into(),
-            ),
-            Some(actions.open_licenses),
+            LICENSES_URL,
         ),
     ]
     .spacing(8);
@@ -113,14 +106,12 @@ mod tests {
     enum Message {
         Back,
         Open(&'static str),
-        Licenses,
     }
 
     fn actions() -> Actions<Message> {
         Actions {
             back: Message::Back,
             open_link: Message::Open,
-            open_licenses: Message::Licenses,
         }
     }
 
@@ -151,7 +142,10 @@ mod tests {
         assert_eq!(clicked("Made by Fanchao"), [Message::Open(AUTHOR_URL)]);
         assert_eq!(clicked("Source code"), [Message::Open(SOURCE_URL)]);
         assert_eq!(clicked("Support development"), [Message::Open(SPONSOR_URL)]);
-        assert_eq!(clicked("Open source licenses"), [Message::Licenses]);
+        assert_eq!(
+            clicked("Open source licenses"),
+            [Message::Open(LICENSES_URL)]
+        );
         assert_eq!(clicked(iced::widget::Id::from("Back")), [Message::Back]);
     }
 

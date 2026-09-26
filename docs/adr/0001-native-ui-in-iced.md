@@ -247,10 +247,11 @@ Decisions for steps 11 and 13:
 - **Third-party notices** come from `cargo-about` (`about.toml`,
   `about.hbs`): nearly every dependency's license (MIT, BSD, Apache and
   the rest) asks for its notice to ship with the binary. The Build
-  workflow writes `THIRD_PARTY_LICENSES.html`, and each package puts it
-  where About's "Open source licenses" finds it from the running binary
-  (`ui::desktop::licenses`): the bundle's `Resources`, next to
-  `Ferry.exe`, and `/usr/share/doc/ferry`. `about.toml` lists the
+  workflow writes `THIRD_PARTY_LICENSES.html`, and each package ships it:
+  in the bundle's `Resources`, next to `Ferry.exe`, and in
+  `/usr/share/doc/ferry`. The Website job publishes the same page as
+  `licenses.html`, which About's "Open source licenses" opens in the
+  browser, so it works in any build, packaged or not. `about.toml` lists the
   accepted licenses; a dependency under any other fails CI (the Licenses
   job) until someone accepts it. The Lucide font that `iced_fonts`
   embeds isn't in any crate's metadata, so its notice is written into
