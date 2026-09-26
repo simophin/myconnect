@@ -112,7 +112,6 @@ shell-autostart-comment = Ferry im Infobereich starten
 tray-open = Ferry öffnen
 tray-no-paired-devices = Keine gekoppelten Geräte
 tray-no-devices-connected = Keine Geräte verbunden
-tray-device-status = { $name } · { $status }
 tray-show-details = Details anzeigen
 tray-settings = Einstellungen
 tray-about = Über Ferry

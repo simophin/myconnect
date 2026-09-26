@@ -141,9 +141,6 @@ tray-open = Open Ferry
 tray-no-paired-devices = No paired devices
 # In place of the devices, when none of the paired ones is connected.
 tray-no-devices-connected = No devices connected
-# A connected device's submenu; `status` is its first status chip, like
-# its battery ("82%").
-tray-device-status = { $name } · { $status }
 # The last item of a device's submenu: opens its page.
 tray-show-details = Show details
 tray-settings = Settings

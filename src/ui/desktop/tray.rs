@@ -232,9 +232,12 @@ mod native {
     }
 
     /// A single `&` marks a mnemonic in a `muda` label, so "Tom & Jerry"
-    /// would lose it.
+    /// would lose it. Fluent's bidi isolation marks around placeables go:
+    /// Windows menus draw them as boxes.
     pub(super) fn escape(label: &str) -> String {
-        label.replace('&', "&&")
+        label
+            .replace(['\u{2068}', '\u{2069}'], "")
+            .replace('&', "&&")
     }
 
     pub(super) fn icon() -> Option<Icon> {
@@ -346,6 +349,11 @@ mod native {
         #[test]
         fn labels_keep_their_ampersands() {
             assert_eq!(escape("Tom & Jerry"), "Tom && Jerry");
+        }
+
+        #[test]
+        fn labels_lose_their_isolation_marks() {
+            assert_eq!(escape("\u{2068}82\u{2069}%"), "82%");
         }
 
         #[test]
