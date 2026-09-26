@@ -67,7 +67,7 @@ use overlay::{
     drop::{self as dropping, Drag, Dropped},
     toast::Toasts,
 };
-use pages::{add_device, device, devices, pairing, settings, startup, transfers};
+use pages::{about, add_device, device, devices, pairing, settings, startup, transfers};
 use route::Route;
 use store::Snapshot;
 
@@ -222,6 +222,8 @@ pub(crate) enum Message {
     RevealFile(PathBuf),
     /// Opening a file failed: which one, and why.
     OpenFailed(PathBuf, String),
+    /// Open a web page in the system browser.
+    OpenLink(&'static str),
     /// Ask for a new name for this computer.
     Rename,
     /// Pick the folder received files are saved in.
@@ -569,6 +571,7 @@ impl App {
                 tracing::warn!(path = %path.display(), %error, "couldn't open a file");
                 self.toast(format!("Couldn’t open {}", path.display()), None)
             }
+            Message::OpenLink(url) => self.open_link(url),
             Message::Rename => self.rename(),
             Message::ChooseDownloadDir => self.choose_download_dir(),
             Message::DownloadDirPicked(Some(folder)) => self.update_settings(SettingsPatch {
@@ -811,6 +814,14 @@ impl App {
                     choose_download_dir: Message::ChooseDownloadDir,
                     set_close_to_tray: Message::SetCloseToTray,
                     set_start_on_login: Message::SetStartOnLogin,
+                    about: navigate(Route::About),
+                },
+            ),
+            Route::About => about::view(
+                &self.options.version,
+                about::Actions {
+                    back: Message::Back,
+                    open_link: Message::OpenLink,
                 },
             ),
         }

@@ -16,6 +16,8 @@ pub enum Route {
     /// Every file transfer.
     Transfers,
     Settings,
+    /// The app: its version, author and links. Opened from Settings.
+    About,
     /// A device's files: a folder, or its storage (`None`).
     Browse {
         device: String,
@@ -33,6 +35,7 @@ impl Route {
                 Some(Self::Devices)
             }
             Self::Pairing(_) => Some(Self::AddDevice),
+            Self::About => Some(Self::Settings),
             Self::Browse { device, .. } => Some(Self::Device(device.clone())),
         }
     }
@@ -68,5 +71,6 @@ mod tests {
         );
         assert_eq!(Route::Pairing(Uuid::nil()).parent(), Some(Route::AddDevice));
         assert_eq!(Route::Settings.parent(), Some(Route::Devices));
+        assert_eq!(Route::About.parent(), Some(Route::Settings));
     }
 }

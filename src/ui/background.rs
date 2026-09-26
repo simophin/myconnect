@@ -29,7 +29,7 @@ use crate::{
 
 /// The tray menu: Open, then each connected paired device with what can be
 /// done to it (left out while devices are unknown, e.g. the daemon didn't
-/// start), then Settings and Quit. The window lists the rest.
+/// start), then Settings, About and Quit. The window lists the rest.
 pub(crate) fn tray_menu(running: Option<(&Store, &Features)>) -> Vec<TrayItem> {
     let mut menu = vec![
         TrayItem::item("Open Ferry", Some(TrayCommand::Open)),
@@ -56,6 +56,7 @@ pub(crate) fn tray_menu(running: Option<(&Store, &Features)>) -> Vec<TrayItem> {
     }
     menu.extend([
         TrayItem::item("Settings", Some(TrayCommand::Settings)),
+        TrayItem::item("About Ferry", Some(TrayCommand::About)),
         TrayItem::Separator,
         TrayItem::item("Quit", Some(TrayCommand::Quit)),
     ]);
@@ -243,6 +244,7 @@ impl App {
         match command {
             TrayCommand::Open => self.show_window(),
             TrayCommand::Settings => Task::batch([self.go(Route::Settings), self.show_window()]),
+            TrayCommand::About => Task::batch([self.go(Route::About), self.show_window()]),
             TrayCommand::ShowDevice(device_id) => {
                 Task::batch([self.go(Route::Device(device_id)), self.show_window()])
             }
@@ -807,6 +809,7 @@ mod tests {
                 "Peer · 82%",
                 "-",
                 "Settings",
+                "About Ferry",
                 "-",
                 "Quit"
             ]
@@ -831,7 +834,14 @@ mod tests {
         let mut app = background(&fakes);
         assert_eq!(
             tray_labels(&fakes),
-            ["Open Ferry", "-", "Settings", "-", "Quit"],
+            [
+                "Open Ferry",
+                "-",
+                "Settings",
+                "About Ferry",
+                "-",
+                "Quit"
+            ],
             "devices unknown yet"
         );
         settle(&mut app, Message::Reload).await;
@@ -865,7 +875,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn the_tray_opens_a_device_or_settings_in_the_window() {
+    async fn the_tray_opens_a_device_settings_or_about_in_the_window() {
         let fakes = Fakes::default();
         let mut app = background(&fakes);
         let _sent = peer(&mut app, &[]).await;
@@ -882,6 +892,9 @@ mod tests {
             1,
             "already open: raised"
         );
+
+        choose(&mut app, &fakes, &["About Ferry"]).await;
+        assert_eq!(app.route, Route::About);
     }
 
     #[tokio::test(start_paused = true)]
@@ -1010,7 +1023,14 @@ mod tests {
         let _ = app.update(Message::Started(Err("no".into())));
         assert_eq!(
             tray_labels(&fakes),
-            ["Open Ferry", "-", "Settings", "-", "Quit"]
+            [
+                "Open Ferry",
+                "-",
+                "Settings",
+                "About Ferry",
+                "-",
+                "Quit"
+            ]
         );
         // No settings to ask: closing keeps the tray as the way out.
         close(&mut app).await;

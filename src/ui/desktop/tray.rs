@@ -18,6 +18,8 @@ pub enum TrayCommand {
     Open,
     /// Show the window on Settings.
     Settings,
+    /// Show the window on About.
+    About,
     Quit,
     /// Show the window on this device's page.
     ShowDevice(String),

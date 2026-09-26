@@ -8,7 +8,7 @@ use iced::{Element, Task};
 use uuid::Uuid;
 
 use super::{
-    App, Message, Phase, context, error,
+    App, Message, Origin, Phase, context, error,
     overlay::{
         dialog::{Dialog, Field, Submit},
         incoming,
@@ -152,6 +152,26 @@ impl App {
             .await
             .unwrap_or_else(|error| Err(error.to_string()));
             result.err().map(|error| Message::OpenFailed(path, error))
+        })
+        .and_then(Task::done)
+    }
+
+    /// Open a web page in the browser, off the UI thread, toasting a
+    /// failure.
+    pub(super) fn open_link(&self, url: &'static str) -> Task<Message> {
+        let opener = self.desktop.opener.clone();
+        context::on_runtime(&self.options.runtime, async move {
+            let result = tokio::task::spawn_blocking(move || opener.browse(url))
+                .await
+                .unwrap_or_else(|error| Err(error.to_string()));
+            result.err().map(|error| {
+                tracing::warn!(url, %error, "couldn't open a link");
+                Message::Toast {
+                    text: format!("Couldn’t open {url}"),
+                    action: None,
+                    origin: Origin::Window,
+                }
+            })
         })
         .and_then(Task::done)
     }
@@ -650,6 +670,7 @@ mod tests {
     #[derive(Default)]
     struct FakeOpener {
         opened: Mutex<Vec<(PathBuf, bool)>>,
+        browsed: Mutex<Vec<String>>,
     }
 
     impl FakeOpener {
@@ -670,6 +691,31 @@ mod tests {
         fn reveal(&self, path: &std::path::Path) -> Result<(), String> {
             self.record(path, true)
         }
+
+        fn browse(&self, url: &str) -> Result<(), String> {
+            if url.contains("broken") {
+                return Err("no browser".into());
+            }
+            self.browsed.lock().unwrap().push(url.into());
+            Ok(())
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn opening_a_link_reports_only_failures() {
+        let mut app = running();
+        let opener = Arc::new(FakeOpener::default());
+        app.desktop.opener = opener.clone();
+
+        settle(&mut app, Message::OpenLink("https://fanchao.dev")).await;
+        assert!(app.toasts.is_empty());
+        assert_eq!(*opener.browsed.lock().unwrap(), ["https://fanchao.dev"]);
+
+        settle(&mut app, Message::OpenLink("https://broken.example")).await;
+        assert_eq!(
+            app.toasts.items()[0].text,
+            "Couldn’t open https://broken.example"
+        );
     }
 
     #[tokio::test(start_paused = true)]
