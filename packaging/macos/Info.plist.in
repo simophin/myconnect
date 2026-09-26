@@ -24,6 +24,9 @@
 	<string>@BUILD@</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>@MINIMUM_SYSTEM_VERSION@</string>
+	<!-- In the menu bar, with no Dock icon until the window opens. -->
+	<key>LSUIElement</key>
+	<true/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<key>NSHighResolutionCapable</key>

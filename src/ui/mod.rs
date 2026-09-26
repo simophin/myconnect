@@ -609,6 +609,9 @@ impl App {
             }
             Message::StartTray => {
                 self.desktop.tray.start();
+                // Again now it takes: macOS sets its own when it finishes
+                // launching.
+                desktop::dock::show(self.window.is_some());
                 Task::none()
             }
             Message::WindowOpened => Task::none(),

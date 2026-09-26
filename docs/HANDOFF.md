@@ -118,8 +118,13 @@ Windows machine:
 - Run it: the icon shows, the menu's items (and submenus) work, it
   updates as devices come and go, and closing the window keeps the app in
   the tray. If `build()` fails, the app falls back to having no tray.
-- On macOS, clicking the Dock icon with the window closed does nothing
-  yet; it should show the window (`applicationShouldHandleReopen`).
+- On macOS the app lives in the menu bar: it has a Dock icon only while
+  its window is open (`desktop::dock`, the activation policy; the bundle
+  sets `LSUIElement`). A Dock icon with the window closed would do
+  nothing when clicked, as winit doesn't handle
+  `applicationShouldHandleReopen:`. Check that the window comes to the
+  front when opened from the tray, and that no Dock icon flashes at a
+  start in the tray.
 - `notify-rust` for `Notifier`: clicks work on Windows and are best effort
   on macOS; nothing is withdrawn (ADR 0001, "Desktop integration").
 - macOS's menu-bar Quit and logout take the quit path. They go through
