@@ -62,7 +62,8 @@ test -n "$depends"
 # Loaded at runtime (dlopen), so dpkg-shlibdeps can't see them: winit's
 # keyboard, Wayland and X11 libraries, and the libxcb `display-info` lists
 # the monitors with. Without a GPU driver the app draws in software, so the
-# GPU's are only recommended; a font is needed to draw text.
+# GPU's are only recommended. The app bundles its Latin font, but a system
+# font is needed for the monospace pairing code and for other scripts.
 depends="$depends, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxrandr2, fontconfig, fonts-dejavu-core | fonts-freefont-ttf | fonts-liberation"
 recommends="libvulkan1, mesa-vulkan-drivers | vulkan-icd, libegl1, xdg-desktop-portal"
 

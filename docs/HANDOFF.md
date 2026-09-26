@@ -77,8 +77,7 @@ git diff --check
 Run `cargo test` under a private display and bus with
 `ICED_BACKEND=tiny-skia` (CLAUDE.md). With `SNAPSHOT_DIR` set, the UI's
 snapshot tests write PNGs of each page there, in light and dark; look at
-them after a UI change (the snapshot font isn't the app's, so judge
-layout, not typography).
+them after a UI change.
 
 Also run the real app for anything involving windows, the tray, drops,
 dialogs or notifications (see "Verifying in the real app" below):
