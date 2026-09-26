@@ -47,8 +47,9 @@ feature.
   [`adr/0002`](adr/0002-store-the-daemons-data-in-sqlite.md)). A small
   value is a `ConfigKey` declared by its owner and named `<owner>.<name>`
   (`core`, `ui`, or the plugin's id); plugins reach the store through
-  `PluginContext::store()`. Lists get a table, defined by the core in the
-  schema. Nothing writes its own files in the data directory. A stored
+  `PluginContext::store()`. Lists get a table, which the core adds in a
+  new migration (`src/store/migrations/`, never an edit to an old one).
+  Nothing writes its own files in the data directory. A stored
   resource clients see still needs a snapshot and events: `Store::watch`
   only reaches code in the same process.
 - **A feature is a plugin.** It lives in `src/plugins/<name>/`,

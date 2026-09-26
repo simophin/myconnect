@@ -8,6 +8,7 @@
 
 mod config;
 mod devices;
+mod schema;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -32,33 +33,6 @@ use crate::config::create_private_dir;
 
 /// The database's file name in the data directory.
 pub const FILE_NAME: &str = "ferry.db";
-
-/// Bumped when the schema changes. Nothing is migrated before the first
-/// release: a database of another version is refused.
-const SCHEMA_VERSION: i32 = 1;
-
-const SCHEMA: &str = "
-CREATE TABLE configs (
-  key        TEXT NOT NULL,
-  scope      TEXT NOT NULL DEFAULT '',
-  id         TEXT NOT NULL DEFAULT '',
-  value      TEXT NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (key, scope, id)
-) WITHOUT ROWID;
-
-CREATE TABLE devices (
-  device_id             TEXT PRIMARY KEY,
-  certificate_der       BLOB NOT NULL,
-  protocol_version      INTEGER NOT NULL,
-  name                  TEXT,
-  device_type           TEXT,
-  incoming_capabilities TEXT,
-  outgoing_capabilities TEXT,
-  paired_at             INTEGER NOT NULL,
-  updated_at            INTEGER NOT NULL
-);
-";
 
 /// How many untyped changes [`Store::changes`] buffers for a slow listener.
 const CHANGES_CAPACITY: usize = 256;
@@ -107,17 +81,7 @@ impl Store {
 
     fn with_connection(mut connection: Connection) -> Result<Self, StoreError> {
         connection.pragma_update(None, "foreign_keys", true)?;
-        let version: i32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        match version {
-            0 => {
-                let transaction = connection.transaction()?;
-                transaction.execute_batch(SCHEMA)?;
-                transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                transaction.commit()?;
-            }
-            SCHEMA_VERSION => {}
-            other => return Err(StoreError::UnsupportedVersion(other)),
-        }
+        schema::migrate(&mut connection)?;
         Ok(Self {
             state: Arc::new(Mutex::new(State {
                 connection,
@@ -207,8 +171,10 @@ pub enum StoreError {
     UnsupportedProtocolVersion,
     #[error("a paired device's record is corrupt")]
     CorruptDevice,
-    #[error("the database has schema version {0}, which this build can't read; delete {FILE_NAME}")]
+    #[error("the database has schema version {0}, from a newer Ferry than this one")]
     UnsupportedVersion(i32),
+    #[error("the database could not be migrated to this version's schema")]
+    Migration(#[source] rusqlite_migration::Error),
 }
 
 #[cfg(test)]

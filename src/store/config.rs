@@ -597,7 +597,7 @@ mod tests {
                 "a transaction sees its writes"
             );
             transaction.set(&NAME, &"Desk".to_owned())?;
-            Err(StoreError::UnsupportedVersion(0))
+            Err(StoreError::InvalidDeviceId)
         });
         assert!(result.is_err());
         assert_eq!(store.get(&COUNT).unwrap(), Some(1));

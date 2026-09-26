@@ -26,6 +26,12 @@ released, so nothing on disk has to be carried over.
   committed change.
 - **Records that are lists get tables**: paired devices are the
   `devices` table.
+- **The schema is its migrations**, applied with `rusqlite_migration` as
+  the database opens: SQL files in `src/store/migrations/`
+  (`<number>-<name>/up.sql`), embedded in the binary, the first creating
+  every table. `PRAGMA user_version` counts those applied; a database
+  from a newer build is refused. A schema change is a new migration, and
+  a shipped one is never edited.
 - **No migration from the JSON files.** Devices paired before the change
   are paired again.
 - `window.json` stays a file: it's the UI's, and the UI keeps nothing in
@@ -51,4 +57,5 @@ steps.
 | Concern | Choice | Why |
 | --- | --- | --- |
 | Database | `rusqlite` (feature `bundled`) | The standard SQLite binding: synchronous, which the trust checks in the TLS verifier need, and thin. `bundled` builds SQLite into the binary, so no platform needs a system library. `sqlx` is async and brings its own runtime integration and macros for no gain here. |
+| Schema migrations | `rusqlite_migration` 2.6 (feature `from-directory`), with `include_dir` 0.7 | Built on `rusqlite` and `user_version`, with no table of its own: it runs the pending SQL files in one transaction and refuses a database newer than it knows. `refinery` keeps a history table and targets several databases, which Ferry doesn't need. `include_dir` is the macro it loads the directory with. |
 | Bytes in JSON values | `base64` 0.22 | Already in the tree. Keeps the identity's certificate and key readable in `sqlite3`, where serde would write a list of numbers. |

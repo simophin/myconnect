@@ -131,7 +131,7 @@ src/
 ├── lib.rs           # shared library
 ├── protocol/        # wire packet models and bounded framing
 ├── config/          # the local identity, the API token, the app's API settings
-├── store/           # the SQLite store: configs and paired devices
+├── store/           # the SQLite store: configs, paired devices, migrations
 ├── transport/       # UDP discovery, TCP/TLS, auxiliary payload connections
 ├── core(.rs/*)      # devices, connections, pairing, transfers, settings, events, plugin API
 ├── plugins/         # features: ping, findmyphone, battery, clipboard, share, browse, notifications
