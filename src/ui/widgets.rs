@@ -421,16 +421,24 @@ pub fn gap(size: impl Into<Length> + Copy) -> Space {
     Space::new().width(size).height(size)
 }
 
+/// The app's font, Figtree, bundled so text looks the same on every
+/// system. It covers Latin only: cosmic-text draws other scripts, such as
+/// CJK, in a system font.
+pub const FONT: Font = Font::with_name("Figtree");
+
+/// Figtree's faces, one per weight the app draws with: [`FONT`] and
+/// [`bold`]. cosmic-text matches the weight exactly, so a weight added
+/// here needs its face too. Licensed under the OFL (`assets/fonts/OFL.txt`).
+pub const FONT_FACES: [&[u8]; 2] = [
+    include_bytes!("../../assets/fonts/Figtree-Regular.ttf"),
+    include_bytes!("../../assets/fonts/Figtree-Bold.ttf"),
+];
+
 /// The app's bold font, for titles.
-///
-/// Bold rather than semibold: cosmic-text keeps the sans-serif family only
-/// for the exact weight asked for, and many don't ship a semibold (Noto
-/// Sans on most Linux desktops), so a semibold title fell back to whatever
-/// installed face is weight 600, such as URW Bookman's serif.
 pub fn bold() -> Font {
     Font {
         weight: font::Weight::Bold,
-        ..Font::DEFAULT
+        ..FONT
     }
 }
 
