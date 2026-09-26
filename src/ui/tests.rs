@@ -244,8 +244,11 @@ pub(super) fn running_with(core: Core, features: Features, fakes: &Fakes) -> App
     let runtime = tokio::runtime::Handle::current();
     let mut app = app_on(runtime.clone(), fakes);
     app.phase = Phase::Running(Box::new(Running {
+        api: ApiSwitch::unavailable(core.clone()),
         ctx: UiContext::new(core, runtime),
         features,
+        api_status: None,
+        api_busy: false,
     }));
     app
 }

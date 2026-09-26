@@ -1,5 +1,6 @@
 //! The local identity and the API token.
 
+mod api;
 mod identity;
 mod token;
 
@@ -7,6 +8,7 @@ use std::path::PathBuf;
 
 use directories::ProjectDirs;
 
+pub use api::{API, StoredApi};
 pub use identity::{IDENTITY, IdentityError, LocalIdentity, StoredIdentity};
 pub use token::{ApiToken, ApiTokenError};
 
