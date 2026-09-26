@@ -1,4 +1,4 @@
-//! Works out the version the app shows in Settings: `MYCONNECT_VERSION` if
+//! Works out the version the app shows in Settings: `FERRY_VERSION` if
 //! the build sets it (a release), otherwise the crate's version plus
 //! `git describe` when the source is a git checkout. On Windows it also
 //! embeds the exe's icon and names.
@@ -6,8 +6,8 @@
 use std::{env, path::PathBuf, process::Command};
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=MYCONNECT_VERSION");
-    let version = match env::var("MYCONNECT_VERSION") {
+    println!("cargo:rerun-if-env-changed=FERRY_VERSION");
+    let version = match env::var("FERRY_VERSION") {
         Ok(version) if !version.trim().is_empty() => version.trim().to_owned(),
         _ => {
             let package = env::var("CARGO_PKG_VERSION").expect("cargo sets it");
@@ -17,7 +17,7 @@ fn main() {
             }
         }
     };
-    println!("cargo:rustc-env=MYCONNECT_APP_VERSION={version}");
+    println!("cargo:rustc-env=FERRY_APP_VERSION={version}");
     #[cfg(windows)]
     windows_resources();
 }
@@ -33,9 +33,9 @@ fn windows_resources() {
     println!("cargo:rerun-if-changed={icon}");
     winresource::WindowsResource::new()
         .set_icon(icon)
-        .set("FileDescription", "MyConnect")
-        .set("ProductName", "MyConnect")
-        .set("OriginalFilename", "myConnect.exe")
+        .set("FileDescription", "Ferry")
+        .set("ProductName", "Ferry")
+        .set("OriginalFilename", "Ferry.exe")
         .compile()
         .expect("could not embed the Windows resources");
 }

@@ -14,9 +14,9 @@ pub use settings::{SettingsError, SettingsFile, StoredSettings};
 pub use token::{ApiToken, ApiTokenError};
 pub use trust::{FilesystemTrustStore, TrustError, TrustStore, TrustedDevice, TrustedIdentity};
 
-/// Return the platform-specific directory used for MyConnect configuration.
+/// Return the platform-specific directory used for Ferry configuration.
 pub fn default_config_dir() -> Option<PathBuf> {
-    ProjectDirs::from("org", "MyConnect", "MyConnect")
+    ProjectDirs::from("dev", "fanchao", "Ferry")
         .map(|directories| directories.config_dir().to_path_buf())
 }
 

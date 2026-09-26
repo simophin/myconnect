@@ -11,10 +11,10 @@ and the owner runs the real app on the same machine. Anything you launch
 collide with another run. Do this every time, without being asked:
 
 - **Data.** Give every daemon a fresh directory made with `mktemp -d` under
-  your scratchpad, never the default config dir (`~/.config/MyConnect`, the
+  your scratchpad, never the default config dir (`~/.config/ferry`, the
   owner's real identity and trust) and never a fixed path like `/tmp/ui`
   that another session may be using:
-  - CLI and the app (`myconnect-gui`): `--data-dir "$dir/data"
+  - CLI and the app (`ferry-gui`): `--data-dir "$dir/data"
     --download-dir "$dir/downloads"`. Without the download dir, received
     files land in the owner's `~/Downloads`.
   - `tests/ui_e2e.rs` and the other integration tests already make their
@@ -48,7 +48,7 @@ collide with another run. Do this every time, without being asked:
   dir=$(mktemp -d -p "$scratchpad")
   env -u WAYLAND_DISPLAY ICED_BACKEND=tiny-skia \
     dbus-run-session -- xvfb-run --auto-servernum \
-    cargo run -p myconnect-gui -- --discovery-loopback \
+    cargo run -p ferry-gui -- --discovery-loopback \
       --data-dir "$dir/data" --download-dir "$dir/downloads"
   ```
 

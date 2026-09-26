@@ -1,6 +1,6 @@
 //! End-to-end ping: a ping sent through the application reaches a paired
 //! KDE Connect peer over the TLS control connection, and two paired
-//! MyConnect instances can ping each other, with the receiver publishing a
+//! Ferry instances can ping each other, with the receiver publishing a
 //! `ping.received` event.
 
 use std::{
@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use myconnect::{
+use ferry::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore, TrustedDevice},
     core::{Core, CoreError, DeviceReachability, EventData, LanCommand, LocalDeviceSnapshot},
     plugins::clipboard::InMemoryClipboard,
@@ -54,11 +54,11 @@ fn peer(name: &str) -> Peer {
         8,
         public_key_der,
         trust_store.clone(),
-        myconnect::plugins::builtin(InMemoryClipboard::shared()),
+        ferry::plugins::builtin(InMemoryClipboard::shared()),
         32,
         128,
         identity.clone(),
-        myconnect::core::TransferConfig::new(directory.path().join("downloads")),
+        ferry::core::TransferConfig::new(directory.path().join("downloads")),
     )
     .unwrap();
     Peer {
@@ -137,7 +137,7 @@ async fn pair(a: &Core, b: &Core, a_id: &str, b_id: &str) {
     let incoming = timeout(Duration::from_secs(2), async {
         loop {
             let event = b_events.recv().await.unwrap();
-            if let myconnect::core::EventData::PairingRequested(snapshot) = event.event {
+            if let ferry::core::EventData::PairingRequested(snapshot) = event.event {
                 return snapshot;
             }
         }
@@ -281,18 +281,18 @@ async fn ping_reaches_a_paired_kde_connect_peer_over_tls() {
     send_ping(
         &local_peer.application.plugin_context(),
         &kde_id,
-        Some("hello from MyConnect".into()),
+        Some("hello from Ferry".into()),
     )
     .unwrap();
     let ping: Value = serde_json::from_str(&read_line(&mut tls_stream).await).unwrap();
     assert_eq!(ping["type"], json!(plugins::ping::PACKET_TYPE));
-    assert_eq!(ping["body"]["message"], json!("hello from MyConnect"));
+    assert_eq!(ping["body"]["message"], json!("hello from Ferry"));
 
     service.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn paired_myconnect_peers_ping_each_other() {
+async fn paired_ferry_peers_ping_each_other() {
     let a = peer("Peer A");
     let b = peer("Peer B");
     let a_id = a.identity.device_id().to_owned();

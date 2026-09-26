@@ -32,7 +32,7 @@ use x509_parser::parse_x509_certificate;
 /// connection uses the same fixed name and identity is instead established
 /// through [`DeviceIdentityVerifier`].
 fn placeholder_server_name() -> ServerName<'static> {
-    ServerName::try_from("myconnect.invalid").expect("static name is valid")
+    ServerName::try_from("ferry.invalid").expect("static name is valid")
 }
 
 /// Local certificate and private key material in the shapes rustls expects.

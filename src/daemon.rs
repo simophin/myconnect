@@ -31,7 +31,7 @@ use crate::{
     },
 };
 
-/// Options for starting the MyConnect service.
+/// Options for starting the Ferry service.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunRequest {
     /// Bearer token API clients must present. `None` leaves the control API
@@ -83,7 +83,7 @@ impl Default for RunRequest {
 
 /// A started daemon: LAN transport, core, and control API.
 ///
-/// The CLI runs one until Ctrl-C; the desktop app (`myconnect-gui`) starts
+/// The CLI runs one until Ctrl-C; the desktop app (`ferry-gui`) starts
 /// one with [`RunningService::start_with`], hands its [`RunningService::core`]
 /// to the UI, and shuts it down when the user quits.
 pub struct RunningService {
@@ -243,7 +243,7 @@ pub async fn run_service(request: RunRequest) -> Result<()> {
 }
 
 /// The host name, trimmed to its first label and to what a KDE Connect
-/// device name allows, or "MyConnect" if nothing usable is left.
+/// device name allows, or "Ferry" if nothing usable is left.
 fn default_device_name() -> String {
     device_name_from_host(&gethostname::gethostname().to_string_lossy())
 }
@@ -259,12 +259,12 @@ fn device_name_from_host(host: &str) -> String {
     if is_valid_device_name(name) {
         name.to_owned()
     } else {
-        "MyConnect".to_owned()
+        "Ferry".to_owned()
     }
 }
 
 /// The platform download directory, if one can be determined. Falls back to
-/// a `downloads` directory under the MyConnect configuration directory.
+/// a `downloads` directory under the Ferry configuration directory.
 fn default_download_dir() -> Option<PathBuf> {
     directories::UserDirs::new().and_then(|dirs| dirs.download_dir().map(PathBuf::from))
 }
@@ -282,7 +282,7 @@ mod tests {
             "a-very-long-host-name-that-keeps"
         );
         assert_eq!(device_name_from_host("(desk)"), "desk");
-        assert_eq!(device_name_from_host(""), "MyConnect");
-        assert_eq!(device_name_from_host(".local"), "MyConnect");
+        assert_eq!(device_name_from_host(""), "Ferry");
+        assert_eq!(device_name_from_host(".local"), "Ferry");
     }
 }

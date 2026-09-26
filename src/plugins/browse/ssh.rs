@@ -4,7 +4,7 @@
 //! The peer's SSH host key is its KDE Connect key pair: the key in the TLS
 //! certificate pinned at pairing. The server is therefore authenticated
 //! against that certificate. KDE Connect's own clients skip this check;
-//! MyConnect doesn't. This device authenticates with its own TLS key,
+//! Ferry doesn't. This device authenticates with its own TLS key,
 //! through the core ([`PayloadPeer::authenticate_ssh`]), so the key never
 //! reaches this plugin. KDE Connect for Android accepts it from the paired
 //! device. The one-off password from the offer is only a fallback.

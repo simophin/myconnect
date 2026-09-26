@@ -44,7 +44,7 @@ fn describe(code: &str, reason: Option<&str>) -> String {
         "files_failed" => "The device’s files couldn’t be reached.",
         "files_timed_out" => "The device took too long to answer.",
         "files_host_key_mismatch" => {
-            "The device’s file server didn’t prove it is the paired device, so MyConnect \
+            "The device’s file server didn’t prove it is the paired device, so Ferry \
              didn’t connect to it."
         }
         code => return describe_code(code),
@@ -75,7 +75,7 @@ mod tests {
             (
                 "files_host_key_mismatch",
                 "The device’s file server didn’t prove it is the paired device, so \
-                 MyConnect didn’t connect to it.",
+                 Ferry didn’t connect to it.",
             ),
         ] {
             assert_eq!(describe(code, None), message, "{code}");

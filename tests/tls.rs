@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use myconnect::{
+use ferry::{
     config::LocalIdentity,
     transport::tls::{self, PeerPin, TlsMaterial, subject_public_key_info},
 };

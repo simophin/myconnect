@@ -22,18 +22,18 @@ apt-get update -qq
 apt-get install -y -qq --no-install-recommends "$package" \
   xvfb xauth dbus x11-utils python3 desktop-file-utils >/dev/null
 
-test -x /usr/bin/myConnect
-test -x /usr/bin/myconnect
+test -x /usr/bin/Ferry
+test -x /usr/bin/ferry
 # Debian 12's validator predates SingleMainWindow (Desktop Entry 1.5).
-problems=$(desktop-file-validate /usr/share/applications/org.myconnect.MyConnect.desktop |
+problems=$(desktop-file-validate /usr/share/applications/dev.fanchao.Ferry.desktop |
   grep -v '"SingleMainWindow"' || true)
 if [ -n "$problems" ]; then
   echo "$problems" >&2
   exit 1
 fi
-test -f /usr/share/icons/hicolor/256x256/apps/org.myconnect.MyConnect.png
-myConnect --version
-myconnect --version
+test -f /usr/share/icons/hicolor/256x256/apps/dev.fanchao.Ferry.png
+Ferry --version
+ferry --version
 
 run=$(mktemp -d)
 trap 'rm -rf "$run"' EXIT
@@ -41,14 +41,14 @@ port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); pr
 
 cat >"$run/session.sh" <<SESSION
 set -eu
-myConnect --data-dir "$run/data" --download-dir "$run/downloads" \
+Ferry --data-dir "$run/data" --download-dir "$run/downloads" \
   --discovery-loopback --no-system-clipboard --device-name "Package check" \
   --api-port $port --api-token check >"$run/app.log" 2>&1 &
 app=\$!
 trap 'kill \$app 2>/dev/null || true' EXIT
 for _ in \$(seq 60); do
-  if xwininfo -root -tree 2>/dev/null | grep -q '"MyConnect"' &&
-    MYCONNECT_API_TOKEN=check myconnect --api-port $port settings >/dev/null 2>&1; then
+  if xwininfo -root -tree 2>/dev/null | grep -q '"Ferry"' &&
+    FERRY_API_TOKEN=check ferry --api-port $port settings >/dev/null 2>&1; then
     break
   fi
   if ! kill -0 \$app 2>/dev/null; then
@@ -57,10 +57,10 @@ for _ in \$(seq 60); do
   fi
   sleep 1
 done
-xwininfo -root -tree | grep '"MyConnect"'
-xprop -name MyConnect WM_CLASS | tee /dev/stderr | grep -q '"org.myconnect.MyConnect"'
-xprop -name MyConnect _NET_WM_ICON | grep -q 'Icon'
-MYCONNECT_API_TOKEN=check myconnect --api-port $port settings
+xwininfo -root -tree | grep '"Ferry"'
+xprop -name Ferry WM_CLASS | tee /dev/stderr | grep -q '"dev.fanchao.Ferry"'
+xprop -name Ferry _NET_WM_ICON | grep -q 'Icon'
+FERRY_API_TOKEN=check ferry --api-port $port settings
 kill \$app
 wait \$app || true
 SESSION

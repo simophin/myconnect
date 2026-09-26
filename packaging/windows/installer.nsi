@@ -1,38 +1,38 @@
 ; The Windows installer: per user (no administrator rights), into
-; %LOCALAPPDATA%\Programs\MyConnect, with a Start menu shortcut and an entry
+; %LOCALAPPDATA%\Programs\Ferry, with a Start menu shortcut and an entry
 ; in Settings → Apps.
 ;
-;   makensis /DVERSION=1.2.3 /DFILE_VERSION=1.2.3.0 /DAPP=path\to\myconnect-gui.exe
-;            /DCLI=path\to\myconnect.exe /DOUT=path\to\setup.exe installer.nsi
+;   makensis /DVERSION=1.2.3 /DFILE_VERSION=1.2.3.0 /DAPP=path\to\ferry-gui.exe
+;            /DCLI=path\to\ferry.exe /DOUT=path\to\setup.exe installer.nsi
 ;
-; The app is installed as myConnect.exe and the CLI as cli\myconnect.exe:
+; The app is installed as Ferry.exe and the CLI as cli\ferry.exe:
 ; Windows ignores case, so the two can't share a folder (docs/adr/0001,
 ; "Packaging").
 
 Unicode true
 !include "MUI2.nsh"
 
-!define APP_ID "org.myconnect.MyConnect"
+!define APP_ID "dev.fanchao.Ferry"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_ID}"
 
-Name "MyConnect"
+Name "Ferry"
 OutFile "${OUT}"
-InstallDir "$LOCALAPPDATA\Programs\MyConnect"
+InstallDir "$LOCALAPPDATA\Programs\Ferry"
 InstallDirRegKey HKCU "${UNINSTALL_KEY}" "InstallLocation"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
 VIProductVersion "${FILE_VERSION}"
-VIAddVersionKey "ProductName" "MyConnect"
-VIAddVersionKey "FileDescription" "MyConnect installer"
+VIAddVersionKey "ProductName" "Ferry"
+VIAddVersionKey "FileDescription" "Ferry installer"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "FileVersion" "${VERSION}"
-VIAddVersionKey "LegalCopyright" "Copyright © 2026 MyConnect"
+VIAddVersionKey "LegalCopyright" "Copyright © 2026 Fanchao"
 
 !define MUI_ICON "..\..\assets\windows\app_icon.ico"
 !define MUI_UNICON "..\..\assets\windows\app_icon.ico"
-!define MUI_FINISHPAGE_RUN "$INSTDIR\myConnect.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "Start MyConnect"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\Ferry.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "Start Ferry"
 
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
@@ -41,26 +41,26 @@ VIAddVersionKey "LegalCopyright" "Copyright © 2026 MyConnect"
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 
-Section "MyConnect"
+Section "Ferry"
   SetOutPath "$INSTDIR"
-  File "/oname=myConnect.exe" "${APP}"
+  File "/oname=Ferry.exe" "${APP}"
   SetOutPath "$INSTDIR\cli"
-  File "/oname=myconnect.exe" "${CLI}"
+  File "/oname=ferry.exe" "${CLI}"
   SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
-  CreateShortcut "$SMPROGRAMS\MyConnect.lnk" "$INSTDIR\myConnect.exe"
+  CreateShortcut "$SMPROGRAMS\Ferry.lnk" "$INSTDIR\Ferry.exe"
 
   ; The notification id (AUMID) the app sends toasts as, registered the way
   ; Windows documents for apps that aren't packaged.
-  WriteRegStr HKCU "Software\Classes\AppUserModelId\${APP_ID}" "DisplayName" "MyConnect"
-  WriteRegStr HKCU "Software\Classes\AppUserModelId\${APP_ID}" "IconUri" "$INSTDIR\myConnect.exe"
+  WriteRegStr HKCU "Software\Classes\AppUserModelId\${APP_ID}" "DisplayName" "Ferry"
+  WriteRegStr HKCU "Software\Classes\AppUserModelId\${APP_ID}" "IconUri" "$INSTDIR\Ferry.exe"
 
-  WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "MyConnect"
+  WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "Ferry"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${VERSION}"
-  WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\myConnect.exe"
-  WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "MyConnect"
-  WriteRegStr HKCU "${UNINSTALL_KEY}" "URLInfoAbout" "https://github.com/simophin/myconnect"
+  WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\Ferry.exe"
+  WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "Fanchao"
+  WriteRegStr HKCU "${UNINSTALL_KEY}" "URLInfoAbout" "https://github.com/simophin/ferryapp"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
@@ -69,9 +69,9 @@ SectionEnd
 
 ; Leaves the data (identity, trust, settings) and received files alone.
 Section "Uninstall"
-  Delete "$SMPROGRAMS\MyConnect.lnk"
-  Delete "$INSTDIR\myConnect.exe"
-  Delete "$INSTDIR\cli\myconnect.exe"
+  Delete "$SMPROGRAMS\Ferry.lnk"
+  Delete "$INSTDIR\Ferry.exe"
+  Delete "$INSTDIR\cli\ferry.exe"
   RMDir "$INSTDIR\cli"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"

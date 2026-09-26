@@ -32,7 +32,7 @@ use crate::{
 /// start), then Settings and Quit. The window lists the rest.
 pub(crate) fn tray_menu(running: Option<(&Store, &Features)>) -> Vec<TrayItem> {
     let mut menu = vec![
-        TrayItem::item("Open MyConnect", Some(TrayCommand::Open)),
+        TrayItem::item("Open Ferry", Some(TrayCommand::Open)),
         TrayItem::Separator,
     ];
     if let Some((store, features)) = running
@@ -802,7 +802,7 @@ mod tests {
         assert_eq!(
             tray_labels(&fakes),
             [
-                "Open MyConnect",
+                "Open Ferry",
                 "-",
                 "Peer · 82%",
                 "-",
@@ -831,7 +831,7 @@ mod tests {
         let mut app = background(&fakes);
         assert_eq!(
             tray_labels(&fakes),
-            ["Open MyConnect", "-", "Settings", "-", "Quit"],
+            ["Open Ferry", "-", "Settings", "-", "Quit"],
             "devices unknown yet"
         );
         settle(&mut app, Message::Reload).await;
@@ -1010,13 +1010,13 @@ mod tests {
         let _ = app.update(Message::Started(Err("no".into())));
         assert_eq!(
             tray_labels(&fakes),
-            ["Open MyConnect", "-", "Settings", "-", "Quit"]
+            ["Open Ferry", "-", "Settings", "-", "Quit"]
         );
         // No settings to ask: closing keeps the tray as the way out.
         close(&mut app).await;
         assert!(app.window.is_none());
         assert!(!app.quitting);
-        choose(&mut app, &fakes, &["Open MyConnect"]).await;
+        choose(&mut app, &fakes, &["Open Ferry"]).await;
         assert!(app.window.is_some());
     }
 }

@@ -18,8 +18,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
-use futures_util::StreamExt;
-use myconnect::{
+use ferry::{
     client::{
         ApiClient, ClientError, ClipboardWatchUpdate, DeviceWatchUpdate, TransferWatchUpdate,
     },
@@ -32,6 +31,7 @@ use myconnect::{
     plugins::clipboard::ClipboardSnapshot,
     protocol::DeviceType,
 };
+use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
 use tempfile::TempDir;

@@ -604,7 +604,7 @@ Moving share (phase 3) showed:
 - **Pre-existing problems this surfaced, not fixed here:**
   - `ApiClient::watch_transfer` reads the snapshot before subscribing to
     `/events`, so a transfer that ends in between leaves
-    `myconnect send --watch` waiting.
+    `ferry send --watch` waiting.
   - When an upload's transfer is cancelled, the handler still reads the
     rest of the multipart body to look for further parts. A large upload
     then ends in `408` after the idle timeout rather than at once. The
@@ -738,7 +738,7 @@ The core cleanup (phase 5) showed:
   `CoreEvent`. A module named `core` at the crate root shadows the `core`
   crate only for `use core::…` written in `lib.rs` itself; nothing does,
   and macros use `::core`. `crate::device` moved in as `core/devices.rs`
-  (`myconnect::device::*` is now `myconnect::core::*`), since the registry
+  (`ferry::device::*` is now `ferry::core::*`), since the registry
   is core state that nothing else touches.
 - **The trait, `Query`, `QueryResult` and `Command` are gone.** The API
   server takes the `Core` and calls plain methods (`status()`,
@@ -796,15 +796,15 @@ The core cleanup (phase 5) showed:
   gone with the fixed table in phase 4; ARCHITECTURE §2 now describes the
   plugin system instead.
 - **No wire change.** Routes, JSON, events, error codes and the identity
-  packet are the same; Rust callers change shape (`myconnect::core`,
-  `myconnect::daemon`).
+  packet are the same; Rust callers change shape (`ferry::core`,
+  `ferry::daemon`).
 - **Checked live**, isolated (a temporary data and download dir each, free
   ports, loopback discovery, a private Xvfb display and D-Bus session):
   the app, a CLI peer, and the fake phone. Pairing an incoming request
   from the peer in the app (codes matched), ping both ways, clipboard
   both ways (through the app's X clipboard, read and written by a third
   daemon with `--system-clipboard` on the same display), a 5 MB file both
-  ways through the file picker and `myconnect send` (byte-identical),
+  ways through the file picker and `ferry send` (byte-identical),
   pairing the fake phone from the app's Add device page, its battery
   (`Connected · 73%`), browsing its storage and downloading a file,
   ringing it from the tray menu, and Quit from the tray. `ss -lunpt`

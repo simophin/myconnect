@@ -1,6 +1,6 @@
 # Handoff
 
-For agents continuing MyConnect. It has the ground rules, the checks that
+For agents continuing Ferry. It has the ground rules, the checks that
 define "done", what is still open, and how to verify in the real app.
 
 The plan for the first UI milestone (items 1–11: unpairing, interop with
@@ -27,7 +27,7 @@ records are in [`archive/flutter-adr/`](archive/flutter-adr/README.md).
    0009 (window placement), and what differs from the Flutter app on
    purpose.
 
-The app is `gui/` (`myconnect-gui`) and all UI code is `src/ui/`: the
+The app is `gui/` (`ferry-gui`) and all UI code is `src/ui/`: the
 shell, and each feature's UI in `src/ui/features/`, all behind the `gui`
 cargo feature.
 
@@ -57,7 +57,7 @@ cargo feature.
 - **Token auth is optional.** It is enforced only when the daemon was
   started with one. The app always sets one (random unless given
   `--api-token`); the CLI defaults to none.
-- **`cargo build -p myconnect` has no iced in it.** UI code and its
+- **`cargo build -p ferry` has no iced in it.** UI code and its
   dependencies stay behind the `gui` feature.
 - Use reputable dependencies, and record new ones in `adr/0001`'s library
   table (or write a new ADR if the choice changes an existing decision).
@@ -69,8 +69,8 @@ Done means all of these pass:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --all-targets     # also builds and tests the UI
-cargo build -p myconnect                 # the CLI alone, without iced
-cargo tree -p myconnect -e normal --prefix none | grep -c '^iced'   # prints 0
+cargo build -p ferry                     # the CLI alone, without iced
+cargo tree -p ferry -e normal --prefix none | grep -c '^iced'   # prints 0
 git diff --check
 ```
 
@@ -158,7 +158,7 @@ rustup target add aarch64-apple-darwin x86_64-pc-windows-msvc
 #   exec clang $target -c -x c /dev/null -o "$out"
 # fakear: find the archive (`$2`, or `-out:<path>`), write "!<arch>\n" to it
 CC_aarch64_apple_darwin=fakecc AR_aarch64_apple_darwin=fakear \
-  cargo clippy --target aarch64-apple-darwin -p myconnect-gui -p myconnect \
+  cargo clippy --target aarch64-apple-darwin -p ferry-gui -p ferry \
   --all-targets -- -D warnings
 # Windows: the same with CC_/AR_x86_64_pc_windows_msvc and that target.
 ```
@@ -192,7 +192,7 @@ installer installed in CI, but neither was used on a real desktop yet.
 
 **Smaller follow-ups.**
 
-- Ringing a device (`kdeconnect.findmyphone.request`: `myconnect ring`,
+- Ringing a device (`kdeconnect.findmyphone.request`: `ferry ring`,
   the details page and the tray) was checked against the fake phone only,
   not a real one. This machine doesn't ring when a peer asks it to.
 
@@ -214,7 +214,7 @@ installer installed in CI, but neither was used on a real desktop yet.
   responses (e.g. a header) and drop older events.
 - The reconnecting banner and the startup error screen have not been
   exercised in the real app, only in unit tests.
-- `myconnect send` prints only the upload's response, which is taken once
+- `ferry send` prints only the upload's response, which is taken once
   the last byte has been forwarded, so it ends on `transferring (N/N)`
   rather than `completed`. Waiting for the terminal state (or watching
   `/events`) would make the CLI report the real outcome.
@@ -272,7 +272,7 @@ cargo run -- --api-port "$port" run --discovery-loopback \
 # app (separate identity, loopback only), on a private display and bus
 env -u WAYLAND_DISPLAY ICED_BACKEND=tiny-skia \
   dbus-run-session -- xvfb-run --auto-servernum \
-  cargo run -p myconnect-gui -- --discovery-loopback \
+  cargo run -p ferry-gui -- --discovery-loopback \
     --data-dir "$dir/app" --download-dir "$dir/app-downloads" \
     --device-name "UI Desktop" --api-port "$app_port"
 ```

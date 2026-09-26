@@ -1,4 +1,4 @@
-use myconnect::protocol::{IdentityBody, Packet, PacketCodec, PairingBody};
+use ferry::protocol::{IdentityBody, Packet, PacketCodec, PairingBody};
 use serde_json::{Value, json};
 
 const IDENTITY: &str = include_str!("fixtures/identity.json");

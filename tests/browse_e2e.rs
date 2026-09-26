@@ -16,8 +16,7 @@ use std::{
     time::Duration,
 };
 
-use futures_util::StreamExt;
-use myconnect::{
+use ferry::{
     api::{ApiServer, ApiServerConfig},
     client::{ApiClient, ClientError},
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
@@ -36,6 +35,7 @@ use myconnect::{
         tls::subject_public_key_info,
     },
 };
+use futures_util::StreamExt;
 use support::fake_phone::{BrowseReply, FakePhone, FakePhoneConfig, PHONE_BATTERY, PHONE_NAME};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -60,7 +60,7 @@ struct Harness {
 
 /// The built-in plugins, with `browse` the instance the test drives.
 fn builtin_with(browse: Arc<BrowsePlugin>) -> Vec<Arc<dyn Plugin>> {
-    let mut plugins = myconnect::plugins::builtin(InMemoryClipboard::shared());
+    let mut plugins = ferry::plugins::builtin(InMemoryClipboard::shared());
     plugins.retain(|plugin| plugin.id() != browse.id());
     plugins.push(browse);
     plugins
@@ -110,7 +110,7 @@ fn test_config(bind: SocketAddr, target: SocketAddr) -> LanConfig {
 async fn wait_for_device(
     application: &Core,
     device_id: &str,
-    accept: impl Fn(&myconnect::core::DeviceSnapshot) -> bool,
+    accept: impl Fn(&ferry::core::DeviceSnapshot) -> bool,
 ) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {

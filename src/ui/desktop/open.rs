@@ -44,7 +44,7 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_refused_before_anything_opens() {
-        let missing = Path::new("/nonexistent/myconnect/test.txt");
+        let missing = Path::new("/nonexistent/ferry/test.txt");
         assert_eq!(System.open(missing), Err("no such file".into()));
         assert_eq!(System.reveal(missing), Err("no such file".into()));
     }

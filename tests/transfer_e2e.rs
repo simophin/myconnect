@@ -6,7 +6,7 @@
 //!
 //! Real KDE Connect interoperability cannot be exercised in this
 //! environment (no physical or emulated device is available); these tests
-//! cover the MyConnect-to-MyConnect path only. See the handoff plan for the
+//! cover the Ferry-to-Ferry path only. See the handoff plan for the
 //! outstanding manual interoperability check.
 
 use std::{
@@ -17,7 +17,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use myconnect::{
+use ferry::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     core::{
         Core, CoreError, DeviceReachability, EventData, LocalDeviceSnapshot, TransferConfig,
@@ -185,7 +185,7 @@ async fn connected_and_paired_with(
         8,
         a_pubkey,
         a_trust.clone(),
-        myconnect::plugins::builtin(InMemoryClipboard::shared()),
+        ferry::plugins::builtin(InMemoryClipboard::shared()),
         32,
         128,
         a_identity.clone(),
@@ -200,7 +200,7 @@ async fn connected_and_paired_with(
         8,
         b_pubkey,
         b_trust.clone(),
-        myconnect::plugins::builtin(InMemoryClipboard::shared()),
+        ferry::plugins::builtin(InMemoryClipboard::shared()),
         32,
         128,
         b_identity.clone(),
@@ -328,7 +328,7 @@ async fn zero_byte_small_and_larger_than_buffer_files_transfer_without_full_buff
     let harness = connected_and_paired("Sender", "Receiver").await;
 
     run_successful_transfer(&harness, "empty.bin", Vec::new()).await;
-    run_successful_transfer(&harness, "small.txt", b"hello, myconnect".to_vec()).await;
+    run_successful_transfer(&harness, "small.txt", b"hello, ferry".to_vec()).await;
 
     // Larger than the transport's fixed per-chunk buffer
     // (`transport::payload::PAYLOAD_CHUNK_SIZE`, 64 KiB), so a correct
@@ -387,7 +387,7 @@ async fn unpaired_device_cannot_initiate_a_transfer() {
         8,
         a_pubkey,
         Arc::new(FilesystemTrustStore::new(a_dir.path())),
-        myconnect::plugins::builtin(InMemoryClipboard::shared()),
+        ferry::plugins::builtin(InMemoryClipboard::shared()),
         8,
         32,
         a_identity,

@@ -87,7 +87,7 @@ fn build(
     Core::new(
         LocalDeviceSnapshot {
             device_id: "local".into(),
-            device_name: "MyConnect".into(),
+            device_name: "Ferry".into(),
         },
         8,
         b"local-pubkey".to_vec(),

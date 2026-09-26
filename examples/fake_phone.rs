@@ -19,7 +19,7 @@ mod fake_phone;
 use std::{net::SocketAddr, path::PathBuf};
 
 use fake_phone::{BrowseReply, FakePhone, FakePhoneConfig, PHONE_NAME};
-use myconnect::transport::lan::{DISCOVERY_PORT, LOOPBACK_BROADCAST};
+use ferry::transport::lan::{DISCOVERY_PORT, LOOPBACK_BROADCAST};
 
 #[tokio::main]
 async fn main() {

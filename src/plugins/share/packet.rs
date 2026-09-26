@@ -8,7 +8,7 @@
 //! must dial to pull the bytes. `kdeconnect.share.request.update` carries
 //! `numberOfFiles`/`totalPayloadSize` and is used upstream to announce the
 //! total size of a multi-file batch before the individual `share.request`
-//! packets; MyConnect's MVP only ever transfers one file per transfer
+//! packets; Ferry's MVP only ever transfers one file per transfer
 //! resource; the type is modeled and round-trip tested for protocol
 //! completeness and future batch support, but it is never sent by this build.
 //!

@@ -302,7 +302,7 @@ async fn run(
                 None => commands_open = false,
             },
             // A rename applies to connections made from now on; announcing
-            // it right away makes peers (KDE Connect and MyConnect alike)
+            // it right away makes peers (KDE Connect and Ferry alike)
             // pick up the new name and reconnect.
             changed = device_name.changed(), if device_name_open => match changed {
                 Ok(()) => {

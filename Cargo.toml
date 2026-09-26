@@ -2,10 +2,10 @@
 members = [".", "gui"]
 
 [package]
-name = "myconnect"
+name = "ferry"
 version = "0.1.0"
 edition = "2024"
-default-run = "myconnect"
+default-run = "ferry"
 
 [features]
 # The desktop UI: `src/ui/`. Off by default so the

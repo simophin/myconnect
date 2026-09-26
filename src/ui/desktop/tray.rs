@@ -278,7 +278,7 @@ mod native {
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone();
             let mut builder = TrayIconBuilder::new()
-                .with_tooltip("MyConnect")
+                .with_tooltip("Ferry")
                 .with_menu(Box::new(self.build(&menu)))
                 .with_menu_on_left_click(cfg!(target_os = "macos"))
                 .with_icon_as_template(cfg!(target_os = "macos"));
@@ -349,11 +349,11 @@ mod sni {
 
     impl ksni::Tray for Sni {
         fn id(&self) -> String {
-            "myconnect".into()
+            "ferry".into()
         }
 
         fn title(&self) -> String {
-            "MyConnect".into()
+            "Ferry".into()
         }
 
         fn icon_pixmap(&self) -> Vec<ksni::Icon> {
@@ -362,7 +362,7 @@ mod sni {
 
         fn tool_tip(&self) -> ksni::ToolTip {
             ksni::ToolTip {
-                title: "MyConnect".into(),
+                title: "Ferry".into(),
                 ..ksni::ToolTip::default()
             }
         }

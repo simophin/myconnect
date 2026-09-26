@@ -46,7 +46,7 @@ impl System {
     /// if one was given.
     pub fn new(data_dir: Option<&Path>) -> Self {
         let name = entry_name(data_dir);
-        let program = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("myConnect"));
+        let program = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("Ferry"));
         let mut args = vec![OsString::from("--background")];
         if let Some(data_dir) = data_dir {
             let absolute = std::path::absolute(data_dir).unwrap_or_else(|_| data_dir.to_owned());
@@ -132,8 +132,8 @@ fn entry(_name: &str, program: &Path, args: &[OsString]) -> String {
     format!(
         "[Desktop Entry]\n\
          Type=Application\n\
-         Name=MyConnect\n\
-         Comment=Start MyConnect in the tray\n\
+         Name=Ferry\n\
+         Comment=Start Ferry in the tray\n\
          Exec={}\n\
          Icon={APP_ID}\n\
          Terminal=false\n\
@@ -316,7 +316,7 @@ mod tests {
         let file = directory.path().join("autostart/entry");
         let item = System {
             name: "entry".into(),
-            program: "/opt/My Connect/myConnect".into(),
+            program: "/opt/Ferry App/Ferry".into(),
             args: vec!["--background".into()],
             file: Some(file.clone()),
         };
@@ -328,7 +328,7 @@ mod tests {
         assert!(
             std::fs::read_to_string(&file)
                 .unwrap()
-                .contains("myConnect")
+                .contains("Ferry App")
         );
         item.set_enabled(true).unwrap();
 
@@ -342,11 +342,11 @@ mod tests {
     fn exec_quotes_what_needs_it() {
         let entry = entry(
             "x",
-            Path::new("/opt/My Connect/myConnect"),
+            Path::new("/opt/Ferry App/Ferry"),
             &["--data-dir".into(), "/home/me/100%$dir".into()],
         );
         assert!(
-            entry.contains(r#"Exec="/opt/My Connect/myConnect" --data-dir "/home/me/100%%\\$dir""#),
+            entry.contains(r#"Exec="/opt/Ferry App/Ferry" --data-dir "/home/me/100%%\\$dir""#),
             "{entry}"
         );
         assert!(!disabled_in(&entry));
@@ -356,9 +356,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn the_launch_agent_lists_each_argument() {
-        let entry = entry("a&b", Path::new("/Applications/My<Connect"), &[]);
+        let entry = entry("a&b", Path::new("/Applications/Ferry<App"), &[]);
         assert!(entry.contains("<string>a&amp;b</string>"));
-        assert!(entry.contains("<string>/Applications/My&lt;Connect</string>"));
+        assert!(entry.contains("<string>/Applications/Ferry&lt;App</string>"));
     }
 
     #[cfg(windows)]
@@ -366,10 +366,10 @@ mod tests {
     fn the_command_line_quotes_paths_with_spaces() {
         assert_eq!(
             command_line(
-                Path::new(r"C:\Program Files\MyConnect\myConnect.exe"),
+                Path::new(r"C:\Program Files\Ferry\Ferry.exe"),
                 &["--background".into()]
             ),
-            r#""C:\Program Files\MyConnect\myConnect.exe" --background"#
+            r#""C:\Program Files\Ferry\Ferry.exe" --background"#
         );
     }
 }

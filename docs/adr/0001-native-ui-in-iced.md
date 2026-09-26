@@ -26,7 +26,7 @@ fixes.
   (`iced_fonts`). The look follows iced's built-in theme palette, not the
   Flutter app's pixels; parity means the same behaviour.
 - **In-process access to the core.** The app (`gui/`, binary
-  `myconnect-gui`) starts a `RunningService` and hands its `Core` to the UI:
+  `ferry-gui`) starts a `RunningService` and hands its `Core` to the UI:
   snapshots from `Core`, events from `core.subscribe()` (a fresh snapshot
   after the receiver lags), and actions through typed Rust functions. The
   UI never calls the HTTP API. The embedded daemon still serves it, so the
@@ -68,13 +68,13 @@ fixes.
   missed `match` arm.
 - **A `gui` cargo feature.** `src/ui/` is behind `feature = "gui"`, which
   turns on the UI's optional dependencies; nothing in `src/plugins/` is.
-  `gui/` depends on `myconnect` with the feature; `cargo build -p
-  myconnect` (the CLI and daemon) has no iced in its tree, which CI
+  `gui/` depends on `ferry` with the feature; `cargo build -p
+  ferry` (the CLI and daemon) has no iced in its tree, which CI
   checks.
 - **Configuration is flags and environment variables**, mirroring
-  `myconnect run`: `--data-dir`, `--download-dir`, `--device-name`,
+  `ferry run`: `--data-dir`, `--download-dir`, `--device-name`,
   `--discovery-loopback`, `--no-system-clipboard`, `--api-port`,
-  `--api-token`, each also read from `MYCONNECT_<NAME>`. The API token
+  `--api-token`, each also read from `FERRY_<NAME>`. The API token
   defaults to a random one; the API address is logged at `info`.
 
 ### What happens to the Flutter UI's records
@@ -119,7 +119,7 @@ first needs one adds it to the `gui` feature.
 | Tray (macOS, Windows) | `tray-icon` 0.25 (step 13b) | The Tauri team's tray crate, with `muda` menus (used through its `tray_icon::menu` re-export, so the versions match). Default features off: they are Linux's (GTK, libappindicator). |
 | Dock icon (macOS) | `objc2` 0.6, `objc2-app-kit` 0.3 | Already in the tree through `tray-icon`. Switches the activation policy, so the app has a Dock icon only while its window is open. |
 | Login item (Windows) | `windows-registry` 0.6 | The `Run` value for starting on login. From windows-rs, whose `windows-link`, `windows-result` and `windows-strings` are already in the tree. On Linux and macOS the entry is a small file the app writes itself (a `.desktop` file, a LaunchAgent plist), so those need no crate. |
-| Windows exe resources | `winresource` (step 15, build dependency of `gui` on Windows only) | Embeds the icon Explorer and the taskbar show, and the name Task Manager lists, in `myConnect.exe`. |
+| Windows exe resources | `winresource` (step 15, build dependency of `gui` on Windows only) | Embeds the icon Explorer and the taskbar show, and the name Task Manager lists, in `Ferry.exe`. |
 | Packaging | Shell scripts in `packaging/`, NSIS on Windows (step 15) | See "Packaging" below. |
 
 ## Desktop integration (plan step 10)
@@ -189,7 +189,7 @@ Decisions for steps 11 and 13:
   shows the window on Linux, macOS and Windows;** withdrawing is Linux and
   macOS only.
 - **Single instance:** `GenericNamespaced`, named
-  `myconnect-<uid>-<hash of the absolute data dir>` (short enough for
+  `ferry-<uid>-<hash of the absolute data dir>` (short enough for
   macOS's 104-byte socket paths; the uid keeps users apart in Linux's
   shared abstract namespace). Connect first: a reply means another
   instance runs, so send `show` and exit; a refusal means listen with
@@ -210,19 +210,19 @@ Decisions for steps 11 and 13:
   `packaging/windows/installer.nsi` (NSIS). `cargo-packager` would be one
   more tool and config for the same result, and it can't derive the
   `.deb`'s dependencies or join two architectures into one binary.
-- **The CLI is built on its own** (`cargo build -p myconnect`): built
-  together with `myconnect-gui`, feature unification turns `gui` on for it
+- **The CLI is built on its own** (`cargo build -p ferry`): built
+  together with `ferry-gui`, feature unification turns `gui` on for it
   and puts iced in it. `build_deb.sh` refuses a CLI with iced in it.
-- **One app id, `org.myconnect.MyConnect`** (`ui::desktop::APP_ID`): the
+- **One app id, `dev.fanchao.Ferry`** (`ui::desktop::APP_ID`): the
   Linux window's app id and X11 class, the `.desktop` file, the icons and
   the notifications' `desktop-entry`; the macOS bundle id; the Windows
   notification id (AUMID), which the installer registers under
-  `HKCU\Software\Classes\AppUserModelId`. The Flutter app's was
-  `org.myconnect.myconnect_ui`.
-- **Names** (owner's decision): `/usr/bin/myConnect` and the CLI as
-  `/usr/bin/myconnect` in the same `.deb`; `MyConnect.app/Contents/MacOS/myConnect`
-  (no CLI); `myConnect.exe` and the CLI as `cli\myconnect.exe`. The
-  Windows installer is per user (`%LOCALAPPDATA%\Programs\MyConnect`, no
+  `HKCU\Software\Classes\AppUserModelId`. The Flutter app had an id
+  of its own, from before the app was named Ferry.
+- **Names** (owner's decision): `/usr/bin/Ferry` and the CLI as
+  `/usr/bin/ferry` in the same `.deb`; `Ferry.app/Contents/MacOS/Ferry`
+  (no CLI); `Ferry.exe` and the CLI as `cli\ferry.exe`. The
+  Windows installer is per user (`%LOCALAPPDATA%\Programs\Ferry`, no
   administrator rights), with a Start menu shortcut.
 - **Icons** come from `assets/icon/*.svg` through `assets/generate_icons.sh`,
   which writes every platform's: the hicolor theme, the macOS iconset, the
@@ -237,7 +237,7 @@ Decisions for steps 11 and 13:
 These differ on purpose (owner's decisions). Don't "fix" them back.
 
 - **No external daemon mode.** Flutter could attach to a daemon through
-  `MYCONNECT_API_URL`; the app always embeds its daemon.
+  the API URL variable (now `FERRY_API_URL`); the app always embeds its daemon.
 - **Configuration is flags and environment variables**, not compile-time
   defines (see Decision). The version in Settings is
   `CARGO_PKG_VERSION`, plus `git describe` when available.
@@ -256,7 +256,7 @@ These differ on purpose (owner's decisions). Don't "fix" them back.
 - **Not sandboxed on macOS.** Flutter's sandbox caused the download-folder
   bookmark problem; the new app is a plain, ad-hoc-signed bundle unless
   the owner later wants the App Store.
-- The window title is "MyConnect", not "myconnect_ui".
+- The window title is "Ferry", not the Flutter project's name.
 
 ## Consequences
 

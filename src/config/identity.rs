@@ -14,7 +14,7 @@ use super::{create_private_dir, private_file_options};
 
 const IDENTITY_FILE: &str = "identity.json";
 
-/// Persistent TLS identity used by the local MyConnect device.
+/// Persistent TLS identity used by the local Ferry device.
 ///
 /// This deliberately does not implement `Debug`, preventing accidental key
 /// disclosure through otherwise harmless diagnostic formatting.

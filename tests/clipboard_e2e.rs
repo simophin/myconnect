@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use myconnect::{
+use ferry::{
     config::{FilesystemTrustStore, LocalIdentity, TrustStore},
     core::{Core, DeviceReachability, LanCommand, LocalDeviceSnapshot, Plugin},
     plugins,
@@ -53,7 +53,7 @@ fn peer(name: &str) -> Peer {
         32,
         128,
         identity.clone(),
-        myconnect::core::TransferConfig::new(directory.path().join("downloads")),
+        ferry::core::TransferConfig::new(directory.path().join("downloads")),
     )
     .unwrap();
     Peer {
@@ -161,13 +161,13 @@ async fn wait_for_clipboard_text(clipboard: &ClipboardPlugin, expected_text: &st
 /// from periodic discovery announcements, which must not be mistaken for a
 /// clipboard feedback loop.
 fn count_clipboard_events(
-    events: &mut tokio::sync::broadcast::Receiver<myconnect::core::CoreEvent>,
+    events: &mut tokio::sync::broadcast::Receiver<ferry::core::CoreEvent>,
 ) -> usize {
     let mut count = 0;
     while let Ok(event) = events.try_recv() {
         if matches!(
             event.event,
-            myconnect::core::EventData::Plugin(ref event)
+            ferry::core::EventData::Plugin(ref event)
                 if event.decode::<ClipboardSnapshot>().is_some()
         ) {
             count += 1;
@@ -182,7 +182,7 @@ async fn pair(a: &Core, b: &Core, a_id: &str, b_id: &str) {
     let incoming = timeout(Duration::from_secs(2), async {
         loop {
             let event = b_events.recv().await.unwrap();
-            if let myconnect::core::EventData::PairingRequested(snapshot) = event.event {
+            if let ferry::core::EventData::PairingRequested(snapshot) = event.event {
                 return snapshot;
             }
         }

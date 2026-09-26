@@ -45,8 +45,8 @@ jobs:
       - run: cargo test --workspace --all-targets --locked
       - name: The CLI builds without the UI
         run: |
-          cargo build -p myconnect --locked
-          count=$(cargo tree -p myconnect -e normal --locked --prefix none | grep -c '^iced' || true)
+          cargo build -p ferry --locked
+          count=$(cargo tree -p ferry -e normal --locked --prefix none | grep -c '^iced' || true)
           if [ "$count" != 0 ]; then
             echo "iced is in the CLI's dependency tree"
             exit 1

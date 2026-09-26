@@ -3,8 +3,8 @@
 #
 #   build_deb.sh APP CLI VERSION OUT_DIR
 #
-# APP is cargo's myconnect-gui, installed as /usr/bin/myConnect; CLI is the
-# myconnect command line, installed next to it (docs/adr/0001, "Packaging").
+# APP is cargo's ferry-gui, installed as /usr/bin/Ferry; CLI is the
+# ferry command line, installed next to it (docs/adr/0001, "Packaging").
 # The menu entry and icons go to /usr/share. Runs on Debian or
 # Ubuntu: it needs dpkg-deb, and dpkg-shlibdeps to work out the dependencies
 # from the ELF files. Build on the oldest release you want to support, since
@@ -20,7 +20,7 @@ cli=$2
 version=$3
 out_dir=$4
 
-app_id=org.myconnect.MyConnect
+app_id=dev.fanchao.Ferry
 packaging=$(cd "$(dirname "$0")" && pwd)
 assets=$packaging/../../assets
 arch=$(dpkg --print-architecture)
@@ -28,7 +28,7 @@ arch=$(dpkg --print-architecture)
 # The CLI must be built on its own: built together with the app, cargo
 # turns the gui feature on for it too.
 if LC_ALL=C grep -aq iced_winit "$cli"; then
-  echo "build_deb.sh: $cli has the UI in it; build it with cargo build -p myconnect alone" >&2
+  echo "build_deb.sh: $cli has the UI in it; build it with cargo build -p ferry alone" >&2
   exit 1
 fi
 
@@ -38,19 +38,19 @@ root=$work/root
 
 mkdir -p "$root/usr/bin" "$root/usr/share/applications" \
   "$root/usr/share/icons" "$root/DEBIAN"
-install -m 755 -s "$app" "$root/usr/bin/myConnect"
-install -m 755 -s "$cli" "$root/usr/bin/myconnect"
+install -m 755 -s "$app" "$root/usr/bin/Ferry"
+install -m 755 -s "$cli" "$root/usr/bin/ferry"
 install -m 644 "$packaging/$app_id.desktop" "$root/usr/share/applications/"
 cp -R "$assets/linux/hicolor" "$root/usr/share/icons/"
 chmod -R u=rwX,go=rX "$root/usr/share"
 
 # dpkg-shlibdeps wants to run from a source tree; give it a minimal one.
 mkdir -p "$work/src/debian"
-printf 'Source: myconnect\n\nPackage: myconnect\nArchitecture: any\n' \
+printf 'Source: ferry\n\nPackage: ferry\nArchitecture: any\n' \
   >"$work/src/debian/control"
 depends=$(
   cd "$work/src" &&
-    dpkg-shlibdeps -O "$root/usr/bin/myConnect" "$root/usr/bin/myconnect" \
+    dpkg-shlibdeps -O "$root/usr/bin/Ferry" "$root/usr/bin/ferry" \
       2>"$work/shlibdeps.log" |
     sed -n 's/^shlibs:Depends=//p'
 ) || {
@@ -65,7 +65,7 @@ depends="$depends, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libx11
 recommends="libvulkan1, mesa-vulkan-drivers | vulkan-icd, libegl1, xdg-desktop-portal"
 
 cat >"$root/DEBIAN/control" <<CONTROL
-Package: myconnect
+Package: ferry
 Version: $version
 Architecture: $arch
 Maintainer: fanchao <dev@fanchao.dev>
@@ -74,15 +74,15 @@ Depends: $depends
 Recommends: $recommends
 Section: net
 Priority: optional
-Homepage: https://github.com/simophin/myconnect
+Homepage: https://github.com/simophin/ferryapp
 Description: Pair with your devices and share files and the clipboard
- MyConnect connects your computer with your phone and other devices on the
+ Ferry connects your computer with your phone and other devices on the
  local network, using the KDE Connect protocol: send files, share the
  clipboard and ping devices you have paired with. It comes with the
- myconnect command line, which drives the running app.
+ ferry command line, which drives the running app.
 CONTROL
 
 mkdir -p "$out_dir"
-package=$out_dir/myconnect_${version}_$arch.deb
+package=$out_dir/ferry_${version}_$arch.deb
 dpkg-deb --root-owner-group --build "$root" "$package"
 echo "$package"

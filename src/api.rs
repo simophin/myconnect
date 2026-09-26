@@ -346,7 +346,7 @@ async fn require_authentication(
         let mut response = ApiProblem::unauthorized().into_response();
         response.headers_mut().insert(
             WWW_AUTHENTICATE,
-            HeaderValue::from_static("Bearer realm=\"myconnect\""),
+            HeaderValue::from_static("Bearer realm=\"ferry\""),
         );
         response
     }
