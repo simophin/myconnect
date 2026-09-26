@@ -5,6 +5,7 @@ pub mod autostart;
 pub mod dialogs;
 pub mod dock;
 pub mod instance;
+pub mod licenses;
 pub mod notify;
 pub mod open;
 pub mod placement;

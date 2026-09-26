@@ -6,6 +6,7 @@ name = "ferry"
 version = "0.1.0"
 edition = "2024"
 default-run = "ferry"
+publish = false
 
 [features]
 # The desktop UI: `src/ui/`. Off by default so the
