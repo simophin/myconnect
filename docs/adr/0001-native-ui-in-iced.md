@@ -72,10 +72,13 @@ fixes.
   ferry` (the CLI and daemon) has no iced in its tree, which CI
   checks.
 - **Configuration is flags and environment variables**, mirroring
-  `ferry run`: `--data-dir`, `--download-dir`, `--device-name`,
+  `ferry-cli run`: `--data-dir`, `--download-dir`, `--device-name`,
   `--discovery-loopback`, `--no-system-clipboard`, `--api-port`,
-  `--api-token`, each also read from `FERRY_<NAME>`. The API token
-  defaults to a random one; the API address is logged at `info`.
+  `--api-token`, each also read from `FERRY_<NAME>`. The HTTP API is off
+  unless Settings → Command line access turns it on (ARCHITECTURE §9);
+  `--api-port` turns it on for one run. Its token is mandatory, made when
+  it is first turned on and kept in `api.json`; `--api-token` overrides
+  it for one run.
 
 ### What happens to the Flutter UI's records
 
@@ -230,9 +233,13 @@ Decisions for steps 11 and 13:
   `HKCU\Software\Classes\AppUserModelId`. The Flutter app had an id
   of its own, from before the app was named Ferry.
 - **Names** (owner's decision): `/usr/bin/ferry-gui` (cargo's name for
-  the app) and the CLI as `/usr/bin/ferry` in the same `.deb`;
-  `Ferry.app/Contents/MacOS/Ferry` (no CLI); `Ferry.exe` and the CLI
-  as `cli\ferry.exe`. The Windows installer is per user
+  the app) and the CLI as `/usr/bin/ferry-cli` in the same `.deb`;
+  `Ferry.app/Contents/MacOS/Ferry` and the CLI as
+  `Ferry.app/Contents/MacOS/ferry-cli` (signed as nested code, before the
+  bundle); `Ferry.exe` and the CLI next to it as `ferry-cli.exe`. The CLI
+  was `ferry` before, which on Windows had to live in a `cli\` folder, as
+  Windows ignores case; the installer removes that one on upgrade. The
+  Windows installer is per user
   (`%LOCALAPPDATA%\Programs\Ferry`, no administrator rights), with a
   Start menu shortcut.
 - **Icons** come from `assets/icon/*.svg` through `assets/generate_icons.sh`,

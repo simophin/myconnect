@@ -1,10 +1,14 @@
 #!/bin/sh
-# Assemble Ferry.app from the app's binaries and pack it into a DMG.
+# Assemble Ferry.app from the app's and the CLI's binaries and pack it into
+# a DMG.
 #
-#   build_app.sh VERSION BUILD DMG BINARY...
+#   build_app.sh VERSION BUILD DMG RELEASE_DIR...
 #
-# Each BINARY is cargo's ferry-gui for one architecture; with more than
-# one, lipo joins them into a universal binary. VERSION is MAJOR.MINOR.PATCH
+# Each RELEASE_DIR is cargo's release directory for one architecture (e.g.
+# target/aarch64-apple-darwin/release), holding ferry-gui and ferry-cli; with
+# more than one, lipo joins each into a universal binary. The app is
+# Contents/MacOS/Ferry and the CLI Contents/MacOS/ferry-cli, which users
+# link onto their PATH. VERSION is MAJOR.MINOR.PATCH
 # (macOS accepts nothing else) and BUILD a number. Writes the DMG, and leaves
 # Ferry.app next to it. Needs macOS: lipo, iconutil, codesign and
 # hdiutil.
@@ -15,7 +19,7 @@
 set -eu
 
 if [ $# -lt 4 ]; then
-  echo "usage: $0 VERSION BUILD DMG BINARY..." >&2
+  echo "usage: $0 VERSION BUILD DMG RELEASE_DIR..." >&2
   exit 2
 fi
 version=$1
@@ -33,7 +37,22 @@ mkdir -p "$out_dir"
 app=$out_dir/Ferry.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-lipo -create -output "$app/Contents/MacOS/Ferry" "$@"
+apps=
+clis=
+for dir in "$@"; do
+  # The CLI must be built on its own: built together with the app, cargo
+  # turns the gui feature on for it too.
+  if LC_ALL=C grep -aq iced_winit "$dir/ferry-cli"; then
+    echo "build_app.sh: $dir/ferry-cli has the UI in it; build it with cargo build -p ferry alone" >&2
+    exit 1
+  fi
+  apps="$apps $dir/ferry-gui"
+  clis="$clis $dir/ferry-cli"
+done
+# shellcheck disable=SC2086 # Word splitting is wanted; paths have no spaces.
+lipo -create -output "$app/Contents/MacOS/Ferry" $apps
+# shellcheck disable=SC2086
+lipo -create -output "$app/Contents/MacOS/ferry-cli" $clis
 sed -e "s|@VERSION@|$version|" -e "s|@BUILD@|$build|" \
   -e "s|@MINIMUM_SYSTEM_VERSION@|$minimum|" \
   "$packaging/Info.plist.in" >"$app/Contents/Info.plist"
@@ -41,6 +60,9 @@ plutil -lint "$app/Contents/Info.plist"
 printf 'APPL????' >"$app/Contents/PkgInfo"
 iconutil -c icns -o "$app/Contents/Resources/AppIcon.icns" \
   "$assets/macos/AppIcon.iconset"
+# Nested code first: signing the bundle seals the CLI's signature into it.
+codesign --force --sign - --identifier dev.fanchao.Ferry.cli \
+  "$app/Contents/MacOS/ferry-cli"
 codesign --force --sign - --identifier dev.fanchao.Ferry "$app"
 codesign --verify --strict --verbose=2 "$app"
 

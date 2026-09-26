@@ -42,7 +42,7 @@ it is given. The set of plugins is fixed at compile time, listed in
 ABI. Boundaries are kept by module visibility and review, in one crate.
 
 ```text
-binary (src/bin/ferry) → daemon, client
+binary (src/bin/ferry-cli) → daemon, client, config
 gui (ferry-gui) → daemon, ui, plugins::builtin_parts    [feature "gui"]
 ui → core (snapshots, events), protocol (types only)         [feature "gui"]
 ui::features → ui (shell messages, widgets), plugins/* (typed APIs), core   [feature "gui"]
@@ -66,7 +66,7 @@ and `plugins` never import `ui`.
 | Module | File(s) | Responsibility |
 | --- | --- | --- |
 | `protocol` | `src/protocol/{mod,packet,codec,verification}.rs` | Wire packet envelope, identity/pairing body types, bounded newline-delimited JSON codec, the protocol-v8 verification-code function. No I/O. |
-| `config` | `src/config/{mod,identity,settings,token,trust}.rs` | Local device identity (UUID + self-signed cert), the optional API bearer token (never persisted), filesystem-backed `TrustStore` of pinned peer certificates (one `trusted-devices/<id>.json` each, with the name, type and capabilities the peer last reported over an authenticated connection), and `settings.json` (user settings, written atomically). |
+| `config` | `src/config/{mod,api,identity,settings,token,trust}.rs` | Local device identity (UUID + self-signed cert), the optional API bearer token, `api.json` (the app's HTTP API: on or off, its port and token; `0600`, apart from `settings.json` so the token never reaches `GET /settings` or events), filesystem-backed `TrustStore` of pinned peer certificates (one `trusted-devices/<id>.json` each, with the name, type and capabilities the peer last reported over an authenticated connection), and `settings.json` (user settings, written atomically). |
 | `transport` | `src/transport/{lan,tls,payload}.rs` | UDP discovery, TCP control-channel connect/accept, the real rustls TLS handshake and certificate pinning, and the auxiliary TLS payload connection used for file transfer. `LanConfig::loopback` (the daemon's `--discovery-loopback`) binds discovery to `127.255.255.255` and the control listener to `127.0.0.1`, so nothing on the LAN can discover or reach the instance. It takes `LanCommand`s (announce now, announce to one address) from the core. |
 | `core` | `src/core.rs` | `Core`, the cloneable handle to everything below: its state, construction, status, settings, and running the plugins' hooks. One `RwLock` holds what must change together (devices, connections, pairings); transfers, settings and every plugin's state have their own locks. |
 | | `src/core/devices.rs` | The device registry and `DeviceSnapshot` (whose `plugins` map is filled from each plugin's `device_state` when a snapshot leaves the core), discovery, forgetting a device, and keeping a paired device's trust record up to date. The registry starts with every paired device from the `TrustStore`, as `unavailable`, so paired devices are listed while offline. |
@@ -79,7 +79,7 @@ and `plugins` never import `ui`.
 | `daemon` | `src/daemon.rs` | The composition root: `RunningService` builds the core with `plugins::builtin()`, applies the stored settings, starts the plugins, the LAN transport (advertising the core's capabilities) and the API, and stops them in order. Used by the CLI's `run` and by the desktop app. `start_with` takes the plugin list from the caller (the desktop app, which keeps each plugin's UI half), and `core()` hands the running core to a frontend in the same process. |
 | `api` | `src/api.rs`, `src/api/upload.rs` | The Axum server: the core's routes (`/status`, `/discovery`, `/devices`, `/pairings`, `/transfers`, `/settings`, `/events`), every plugin's routes merged in, `ApiProblem` (the `application/problem+json` error every handler returns, with `From<CoreError>`), optional bearer-token auth, body-size limits, request deadline and SSE. Streaming routes (every plugin's `streaming_routes`) get the transfer-sized body limit and no request deadline; `upload` has the helpers they share (idle timeout, forwarding a multipart file part into a transfer until the part or the transfer ends, and the lingering close that drains an upload a handler answered before reading to its end). |
 | `client` | `src/client.rs` | Typed HTTP client used by the CLI (and any future frontend) to talk to `api`. |
-| `src/bin/ferry` | `cli.rs`, `main.rs` | Argument parsing and daemon bootstrap only. |
+| `src/bin/ferry-cli` | `cli.rs`, `main.rs` | The `ferry-cli` binary: argument parsing and daemon bootstrap only. Without a token or address given, client commands read the app's from `api.json`. |
 | `ui` | `src/ui/{mod,launch,shell,background,drops,actions,context,route,store,sync,activity,demo,error,widgets,testing,tests}.rs`, `src/ui/pages/*.rs`, `src/ui/overlay/*.rs`, `src/ui/desktop/*.rs`, `src/ui/features/{mod,ping,findmyphone,battery,clipboard,share,notifications}.rs`, `src/ui/features/browse/{mod,view,preview,files,describe}.rs` | The desktop UI in iced, behind the `gui` feature ([`adr/0001`](adr/0001-native-ui-in-iced.md)). It runs in the daemon's process and reads the core directly (§9): `sync` subscribes to the event bus, then takes a snapshot into `store`, and takes a fresh one after a lag. `mod` holds `App`, the one app `Message`, `update`'s dispatch, `view` and `subscription`; `launch` the entry points (`run`, `UiOptions`, `Started`), booting and Retry; `route` the typed routes. Each feature's UI is a module under `features/`, and `features/mod.rs` is the one place that lists them: the `Feature` message enum, and `Features`, whose functions the shell calls to fill its slots (the device card's status chips, the device page's and the tray's actions, drop targets, the file browser's page, the settings page's sections) and to pass on route changes and core events, calling each feature by name in `builtin()` order. Features ask the shell for things through plain `Message`s built by `shell`'s helpers (toast, report, notify, navigate, pick files, confirm, prompt), carrying the `Origin` (window or tray) of the action that caused them; `shell` also holds the `App` side of those requests. The pages the core owns are shell code: devices, device, Add device, pairing (and the incoming pairing prompt, drawn over every page while a request waits), transfers, settings, About (the app's version, author and links), and the startup and error screens; `actions` is what they ask of the core. `drops` routes dropped files and the recipient chooser. `background` is the window's life (show, close to the tray, quit, placement), the tray and notifications; `desktop` holds the platform glue behind small traits (the tray, notifications, dialogs with `rfd`, opening files and web links with `opener`, the saved window placement, the single-instance socket, the login item), so tests swap in fakes. `demo` fills the core with made-up devices for `--demo`; `tests` is the shell's shared test harness. |
 | `ferry-gui` | `gui/src/main.rs` | The desktop app's composition root: flags (each also an environment variable), starting the daemon through `RunningService::start_with` and `plugins::builtin_parts()`, running `ui::run`, and shutting the daemon down after. |
 
@@ -282,7 +282,7 @@ States: `queued → connecting → transferring → completed | cancelled | fail
 - Backends implement `ClipboardService`. `SystemClipboard` is the desktop
   clipboard (`arboard`; on Linux the Wayland data-control protocol where the
   compositor has it, else X11/XWayland), selected by `RunRequest::
-  system_clipboard` (`ferry run --system-clipboard`; the app turns it
+  system_clipboard` (`ferry-cli run --system-clipboard`; the app turns it
   on unless given `--no-system-clipboard`). `InMemoryClipboard` is the
   default, for tests and headless runs, and the fallback when the desktop
   clipboard can't be opened (logged as a warning).
@@ -296,7 +296,7 @@ States: `queued → connecting → transferring → completed | cancelled | fail
   and non-text content (images) are not reported, and copies made while
   sync is off are dropped.
 - Sending to one device on request (`POST /devices/{deviceId}/clipboard`,
-  `ferry clipboard send`, "Send clipboard" in the app and tray) covers
+  `ferry-cli clipboard send`, "Send clipboard" in the app and tray) covers
   what automatic sync can miss, e.g. text already on the clipboard at start
   or a peer that dropped an update. It reads the clipboard itself (falling
   back to the snapshot), sends a plain `kdeconnect.clipboard` even if the
@@ -337,7 +337,7 @@ the platform download directory, `true`.
   read. `GET /settings` always lists every section, defaults filled in.
   The old top-level `clipboardSyncEnabled` is not migrated: a file that
   still has it is read as if it didn't, and it is dropped on the next save.
-- **Precedence.** A start option (`ferry run --device-name` /
+- **Precedence.** A start option (`ferry-cli run --device-name` /
   `--download-dir`, or the app's flags of the same names)
   overrides the stored value for that run only and is not saved. Changing
   that setting through `PATCH /settings` saves it and drops the override
@@ -360,10 +360,11 @@ the platform download directory, `true`.
 ## 8. HTTP API (`/api/v1`)
 
 Authentication is optional. When the daemon is started with a token
-(`ferry run --api-token`, `FERRY_API_TOKEN`, or always in the desktop
-app, which picks a random one unless given `--api-token`), every request must carry `Authorization: Bearer <token>`
+(`ferry-cli run --api-token`, `FERRY_API_TOKEN`, or always in the desktop
+app), every request must carry `Authorization: Bearer <token>`
 and gets a `401` otherwise. Without a token — the CLI default — any local
-client may call the API. Tokens are never persisted; clients pass the same
+client may call the API. `ferry-cli run`'s token is for that run only; the
+app's is kept in `api.json` (§9), which `ferry-cli` reads when given no
 `--api-token`/`FERRY_API_TOKEN`. The server binds `127.0.0.1` by default;
 CORS is disabled. Errors use `application/problem+json`. Requests must finish
 within 15 seconds (`408 request_timeout`), except the file uploads (the
@@ -436,10 +437,19 @@ no HTTP between them:
   functions its `http.rs` also calls). Anything that does I/O runs as a
   task on the daemon's tokio runtime (`UiOptions::runtime`); iced's own
   executor never touches the daemon's sockets.
-- **The API stays.** The embedded daemon serves the HTTP API on
-  `127.0.0.1`, on a free port (`--api-port` picks one) with a random token
-  (`--api-token` sets one), and logs the address, so the CLI can drive the
-  same instance.
+- **The API is opt-in.** The UI doesn't need the HTTP API, so the
+  embedded daemon serves it only while **Settings → Command line access**
+  is on (`daemon::ApiMode::Stored`). `daemon::ApiSwitch` starts and stops
+  the server while the app runs (each server on a child of the service's
+  cancellation token) and keeps the choice, the port (default 24816) and a
+  token it makes when first turned on in `api.json`, so a CLI set up with
+  the token keeps working across restarts; "New token" replaces it.
+  `ferry-cli` on the same machine reads the file for the port and token.
+  If the port is taken, the switch stays off and says why; stored as on,
+  the app starts anyway, with the reason on the Settings page. `--api-port`
+  turns it on for one run (`0` picks a free port) and `--api-token` sets
+  that run's token, neither stored. `ferry-cli run` serves it for the
+  whole run instead (`ApiMode::Always`), which can't be switched.
 - **Lifetime.** The UI starts the daemon (again on Retry after a failed
   start). The app keeps running in the tray with its window closed, so
   the daemon stops only when the user quits

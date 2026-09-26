@@ -29,7 +29,7 @@ use std::{
 use ferry::{
     client::ApiClient,
     core::{Core, DeviceReachability, EventData, PairingStatus, TransferDirection, TransferStatus},
-    daemon::{RunRequest, RunningService},
+    daemon::{ApiMode, RunRequest, RunningService},
     plugins::{self, clipboard::ClipboardSettings, ping::ReceivedPing, share},
     transport::lan::{DISCOVERY_PORT, LOOPBACK_BROADCAST},
     ui::{
@@ -443,14 +443,16 @@ impl Test {
     /// Start the app on a fresh identity and wait for its empty home page.
     fn launch(&self) -> App<impl iced::Program + use<>> {
         let request = RunRequest {
-            api_token: None,
+            // Off, as the app starts by default.
+            api: ApiMode::Stored {
+                port: None,
+                token: None,
+            },
             data_dir: Some(self.directory.path().join("data")),
             download_dir: Some(self.downloads()),
             device_name: Some(APP_NAME.into()),
             discovery_loopback: true,
             system_clipboard: false,
-            api_host: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            api_port: 0,
         };
         let core: Arc<Mutex<Option<Core>>> = Arc::default();
         let start = {
@@ -794,7 +796,7 @@ where
     }
 }
 
-/// The other end: a daemon as `ferry run` starts it, with a name no
+/// The other end: a daemon as `ferry-cli run` starts it, with a name no
 /// other instance on loopback has.
 struct Peer {
     service: RunningService,
@@ -811,19 +813,24 @@ impl Peer {
             &uuid::Uuid::new_v4().simple().to_string()[..6]
         );
         let service = RunningService::start(RunRequest {
-            api_token: None,
+            api: ApiMode::Always {
+                host: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                port: 0,
+                token: None,
+            },
             data_dir: Some(directory.path().join("data")),
             download_dir: Some(directory.path().join("downloads")),
             device_name: Some(name.clone()),
             discovery_loopback: true,
             system_clipboard: false,
-            api_host: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            api_port: 0,
         })
         .await
         .expect("the peer starts");
-        let client = ApiClient::new(&format!("http://{}", service.api_addr()), None)
-            .expect("a client for the peer");
+        let client = ApiClient::new(
+            &format!("http://{}", service.api().address().await.unwrap()),
+            None,
+        )
+        .expect("a client for the peer");
         Self {
             service,
             client,

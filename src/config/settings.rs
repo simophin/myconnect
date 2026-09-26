@@ -1,16 +1,14 @@
 use std::{
     collections::BTreeMap,
     fs,
-    io::Write,
     path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
-use uuid::Uuid;
 
-use super::{create_private_dir, private_file_options};
+use super::write_private_file;
 
 /// User preferences as persisted in `settings.json`. A missing field means
 /// "use the default", so defaults can change without rewriting the file.
@@ -56,40 +54,11 @@ impl SettingsFile {
         }
     }
 
-    /// Replace the stored settings atomically: write a temporary file, sync
-    /// it, then rename it over the old one.
+    /// Replace the stored settings atomically.
     pub fn save(&self, settings: &StoredSettings) -> Result<(), SettingsError> {
-        create_private_dir(&self.directory).map_err(SettingsError::Io)?;
-        let temporary = self
-            .directory
-            .join(format!(".settings-{}.tmp", Uuid::new_v4().simple()));
         let bytes = serde_json::to_vec_pretty(settings).map_err(|_| SettingsError::Encoding)?;
-
-        let result = (|| {
-            let mut file = private_file_options()
-                .open(&temporary)
-                .map_err(SettingsError::Io)?;
-            file.write_all(&bytes).map_err(SettingsError::Io)?;
-            file.sync_all().map_err(SettingsError::Io)?;
-            fs::rename(&temporary, self.directory.join(Self::FILE_NAME))
-                .map_err(SettingsError::Io)?;
-            sync_directory(&self.directory).map_err(SettingsError::Io)
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        result
+        write_private_file(&self.directory, Self::FILE_NAME, &bytes).map_err(SettingsError::Io)
     }
-}
-
-#[cfg(unix)]
-fn sync_directory(directory: &Path) -> std::io::Result<()> {
-    fs::File::open(directory)?.sync_all()
-}
-
-#[cfg(not(unix))]
-fn sync_directory(_directory: &Path) -> std::io::Result<()> {
-    Ok(())
 }
 
 #[derive(Debug, Error)]

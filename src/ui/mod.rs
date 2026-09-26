@@ -2,8 +2,10 @@
 //!
 //! The UI runs in the daemon's process and talks to the core directly:
 //! snapshots from [`Core`], events from [`Core::subscribe`], and actions
-//! through typed Rust functions, never the HTTP API. The daemon still serves
-//! that API, so the CLI can drive and inspect the instance the UI shows.
+//! through typed Rust functions, never the HTTP API. The daemon serves that
+//! API only when the user turns on command line access in Settings
+//! ([`ApiSwitch`](crate::daemon::ApiSwitch)), so the CLI can drive and
+//! inspect the instance the UI shows.
 //!
 //! This module is the shell: the window, the tray, the pages it owns, and
 //! what features share. Each feature's UI lives in [`features`], which the
@@ -55,7 +57,10 @@ use iced::{
 use iced_fonts::lucide;
 use uuid::Uuid;
 
-use crate::core::{PairingSnapshot, SettingsPatch, SettingsSnapshot};
+use crate::{
+    core::{PairingSnapshot, SettingsPatch, SettingsSnapshot},
+    daemon::{ApiStatus, ApiSwitch},
+};
 use context::UiContext;
 use desktop::{
     DesktopEvent,
@@ -238,6 +243,15 @@ pub(crate) enum Message {
     StartOnLoginSet(bool, Option<String>),
     /// A settings change finished: the settings now, or why it failed.
     SettingsSaved(Result<SettingsSnapshot, String>),
+    /// Turn command line access (the daemon's HTTP API) on or off.
+    SetApiEnabled(bool),
+    /// Replace the HTTP API's token.
+    NewApiToken,
+    /// Command line access as it is now, read at start or after a change,
+    /// or why the change failed.
+    ApiChanged(Result<ApiStatus, String>),
+    /// Copy what Settings shows for setting up the CLI.
+    CopyCli(CliCopy),
     /// The wait for the rest of this drag's dropped files is over.
     DropSettled(u64),
     /// Send the dropped files to this device, chosen in the chooser.
@@ -252,6 +266,14 @@ pub(crate) enum Message {
     Window(window::Id, window::Event),
     /// The system's light or dark mode, at start and when it changes.
     SystemTheme(iced::theme::Mode),
+}
+
+/// What Settings' command line access copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CliCopy {
+    /// The environment variables, address and token.
+    Setup,
+    Token,
 }
 
 /// Keyboard shortcuts the shell handles.
@@ -310,6 +332,8 @@ struct App {
     start_on_login: bool,
     /// Light or dark, following the system.
     theme: iced::Theme,
+    /// Where `ferry-cli` is, when it was installed next to the app.
+    cli_path: Option<PathBuf>,
 }
 
 /// Whether the daemon runs yet.
@@ -324,6 +348,12 @@ enum Phase {
 struct Running {
     ctx: UiContext,
     features: Features,
+    /// Turns command line access on and off.
+    api: ApiSwitch,
+    /// Command line access as last read; `None` until then.
+    api_status: Option<ApiStatus>,
+    /// A change to command line access is under way.
+    api_busy: bool,
 }
 
 impl App {
@@ -612,6 +642,10 @@ impl App {
                 Task::none()
             }
             Message::SettingsSaved(Err(error)) => self.toast(error, None),
+            Message::SetApiEnabled(enabled) => self.set_api_enabled(enabled),
+            Message::NewApiToken => self.new_api_token(),
+            Message::ApiChanged(result) => self.api_changed(result),
+            Message::CopyCli(what) => self.copy_cli(what),
             Message::DropSettled(gesture) => match self.drag.settled(gesture) {
                 Some(paths) => self.dropped(paths),
                 None => Task::none(),
@@ -818,6 +852,10 @@ impl App {
                 |settings| running.features.settings_sections(settings),
                 &self.options.version,
                 self.start_on_login,
+                settings::CommandLine {
+                    status: running.api_status.as_ref(),
+                    cli_path: self.cli_path.as_deref(),
+                },
                 settings::Actions {
                     back: Message::Back,
                     retry: Message::Reload,
@@ -825,6 +863,10 @@ impl App {
                     choose_download_dir: Message::ChooseDownloadDir,
                     set_close_to_tray: Message::SetCloseToTray,
                     set_start_on_login: Message::SetStartOnLogin,
+                    set_api_enabled: Message::SetApiEnabled,
+                    copy_cli_setup: Message::CopyCli(CliCopy::Setup),
+                    copy_api_token: Message::CopyCli(CliCopy::Token),
+                    new_api_token: Message::NewApiToken,
                     about: navigate(Route::About),
                 },
             ),

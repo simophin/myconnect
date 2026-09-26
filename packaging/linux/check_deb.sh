@@ -23,7 +23,7 @@ apt-get install -y -qq --no-install-recommends "$package" \
   xvfb xauth dbus x11-utils python3 desktop-file-utils >/dev/null
 
 test -x /usr/bin/ferry-gui
-test -x /usr/bin/ferry
+test -x /usr/bin/ferry-cli
 # Debian 12's validator predates SingleMainWindow (Desktop Entry 1.5).
 problems=$(desktop-file-validate /usr/share/applications/dev.fanchao.Ferry.desktop |
   grep -v '"SingleMainWindow"' || true)
@@ -33,7 +33,7 @@ if [ -n "$problems" ]; then
 fi
 test -f /usr/share/icons/hicolor/256x256/apps/dev.fanchao.Ferry.png
 ferry-gui --version
-ferry --version
+ferry-cli --version
 
 run=$(mktemp -d)
 trap 'rm -rf "$run"' EXIT
@@ -48,7 +48,7 @@ app=\$!
 trap 'kill \$app 2>/dev/null || true' EXIT
 for _ in \$(seq 60); do
   if xwininfo -root -tree 2>/dev/null | grep -q '"Ferry"' &&
-    FERRY_API_TOKEN=check ferry --api-port $port settings >/dev/null 2>&1; then
+    FERRY_API_TOKEN=check ferry-cli --api-port $port settings >/dev/null 2>&1; then
     break
   fi
   if ! kill -0 \$app 2>/dev/null; then
@@ -60,7 +60,7 @@ done
 xwininfo -root -tree | grep '"Ferry"'
 xprop -name Ferry WM_CLASS | tee /dev/stderr | grep -q '"dev.fanchao.Ferry"'
 xprop -name Ferry _NET_WM_ICON | grep -q 'Icon'
-FERRY_API_TOKEN=check ferry --api-port $port settings
+FERRY_API_TOKEN=check ferry-cli --api-port $port settings
 kill \$app
 wait \$app || true
 SESSION

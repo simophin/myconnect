@@ -69,11 +69,21 @@ upload, rename, delete, create folders, and preview images.
 
 ### CLI interface
 
-The CLI interface is command based, allowing users to interact with Ferry through terminal commands.
+The CLI, `ferry-cli`, is command based. It ships with the app: in the
+Debian package as `/usr/bin/ferry-cli`, in the macOS app as
+`Ferry.app/Contents/MacOS/ferry-cli` (link it onto your `PATH`), and next to
+`Ferry.exe` on Windows.
+
+`ferry-cli run` is a daemon of its own. To drive the desktop app instead,
+turn on **Settings → Command line access** in it: the app then serves its
+HTTP API on `127.0.0.1:24816` with a token it keeps in its data directory,
+and `ferry-cli` on the same computer finds both without any flags. The
+setting shows the address and token, with a button to copy them as
+environment variables for a script run elsewhere.
 
 #### Example Commands
 
-- `ferry run [--data-dir <dir>] [--download-dir <dir>] [--device-name <name>] [--discovery-loopback]` -
+- `ferry-cli run [--data-dir <dir>] [--download-dir <dir>] [--device-name <name>] [--discovery-loopback]` -
   Run the authenticated local daemon in the foreground. `--discovery-loopback`
   keeps discovery and connections on loopback instead of the real network —
   useful for running multiple local instances against each other for testing
@@ -82,22 +92,22 @@ The CLI interface is command based, allowing users to interact with Ferry throug
   other over a real NIC). Discovery binds `127.255.255.255:1716` and the
   control and payload ports bind `127.0.0.1`, so real devices can neither
   discover nor connect to the instance.
-- `ferry devices [--watch]` - List devices and optionally follow changes.
-- `ferry scan [--address <ip>] [--timeout <seconds>] [--watch]` -
+- `ferry-cli devices [--watch]` - List devices and optionally follow changes.
+- `ferry-cli scan [--address <ip>] [--timeout <seconds>] [--watch]` -
   Broadcast a discovery request and list unpaired devices that answer.
   `--address` announces to that IPv4 address instead, for networks where
   broadcast doesn't reach the other device.
-- `ferry pair <device-id>` - Start pairing with a discovered device.
-- `ferry pair accept|reject <pairing-id>` - Resolve a pairing request.
-- `ferry unpair <device-id>` - Remove trust and forget a device.
-- `ferry ping <device-id> [message]` - Ping a paired device, optionally
+- `ferry-cli pair <device-id>` - Start pairing with a discovered device.
+- `ferry-cli pair accept|reject <pairing-id>` - Resolve a pairing request.
+- `ferry-cli unpair <device-id>` - Remove trust and forget a device.
+- `ferry-cli ping <device-id> [message]` - Ping a paired device, optionally
   with a message. Receiving pings is not supported yet.
-- `ferry ring <device-id>` - Make a paired device ring so you can find it.
-- `ferry send <device-id> <file> [--watch]` - Stream a file to a device.
-- `ferry notifications <device-id> [ls [--watch] | reply <id> <message> |
+- `ferry-cli ring <device-id>` - Make a paired device ring so you can find it.
+- `ferry-cli send <device-id> <file> [--watch]` - Stream a file to a device.
+- `ferry-cli notifications <device-id> [ls [--watch] | reply <id> <message> |
   action <id> <label> | dismiss <id>]` - List a phone's notifications, or
   answer, press a button on, or dismiss one.
-- `ferry clipboard get|set <text>|watch|send <device-id>` - Control text synchronization, or send the clipboard to one device now.
+- `ferry-cli clipboard get|set <text>|watch|send <device-id>` - Control text synchronization, or send the clipboard to one device now.
 
 Add `--json` for machine-readable output. `--api-host`/`--api-port` (global
 flags, default `127.0.0.1:24816`) set the address the control API listens on
@@ -107,7 +117,10 @@ bearer token from every API client, and makes every other command send it;
 with no token the API is unauthenticated. Prefer the environment variable
 over the flag so the token does not show up in process listings. For
 development, `FERRY_API_URL` overrides the API URL (superseded by
-`--api-host`/`--api-port` when either is given).
+`--api-host`/`--api-port` when either is given). With neither a token nor an
+address given, the other commands use the app's, read from `api.json` in
+its data directory (`--data-dir` or `FERRY_DATA_DIR`, default the
+platform's configuration directory).
 
 ### Project structure
 
@@ -118,16 +131,16 @@ thin CLI entry point, plus the desktop app:
 src/
 ├── lib.rs           # shared library
 ├── protocol/        # wire packet models and bounded framing
-├── config/          # persistent identity, optional API token, peer trust
+├── config/          # persistent identity, settings, the app's API settings, peer trust
 ├── transport/        # UDP discovery, TCP/TLS, auxiliary payload connections
 ├── core(.rs/*)       # devices, connections, pairing, transfers, settings, events, plugin API
 ├── plugins/          # features: ping, findmyphone, battery, clipboard, share, browse, notifications
-├── daemon.rs         # composition root: core + built-in plugins + LAN + API
+├── daemon(.rs/*)     # composition root: core + built-in plugins + LAN + API switch
 ├── api.rs               # local HTTP control plane (optional token auth)
 ├── client.rs             # HTTP client used by the CLI
 ├── ui/                   # desktop UI in iced ("gui" feature)
 └── bin/
-    └── ferry/            # CLI binary
+    └── ferry-cli/        # CLI binary
         ├── cli.rs
         └── main.rs
 gui/                      # ferry-gui: the desktop app (daemon + ui)
@@ -150,7 +163,7 @@ cargo run -- send <device-id> <file> --watch
 ```
 
 Run the desktop app with `cargo run -p ferry-gui` (`--help` lists its
-flags, which mirror `ferry run`; `--demo` fills it with made-up
+flags, which mirror `ferry-cli run`; `--demo` fills it with made-up
 devices).
 
 Use `RUST_LOG` to control log output, for example
