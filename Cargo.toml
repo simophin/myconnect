@@ -68,6 +68,10 @@ russh-sftp = "3"
 # The daemon's data (`store`), with SQLite built in so no platform needs
 # a system library.
 rusqlite = { version = "0.40", features = ["bundled"] }
+# Its schema migrations (`src/store/migrations/`), embedded in the binary
+# and versioned by `PRAGMA user_version`.
+rusqlite_migration = { version = "2.6", features = ["from-directory"] }
+include_dir = "0.7"
 # The identity's certificate and key in its stored JSON; already in the tree.
 base64 = "0.22"
 # The desktop UI (`gui` feature). Upgrading iced is its own change.

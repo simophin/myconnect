@@ -1663,6 +1663,7 @@ dependencies = [
  "iced_runtime",
  "iced_test",
  "image",
+ "include_dir",
  "interprocess",
  "ksni",
  "libc",
@@ -1675,6 +1676,7 @@ dependencies = [
  "reqwest",
  "rfd",
  "rusqlite",
+ "rusqlite_migration",
  "russh",
  "russh-sftp",
  "rustls",
@@ -2772,6 +2774,25 @@ checksum = "525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3"
 dependencies = [
  "byteorder-lite",
  "quick-error",
+]
+
+[[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2",
+ "quote",
 ]
 
 [[package]]
@@ -4718,6 +4739,17 @@ dependencies = [
  "libsqlite3-sys",
  "smallvec",
  "sqlite-wasm-rs",
+]
+
+[[package]]
+name = "rusqlite_migration"
+version = "2.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03451d4dc523c0a96d9e412c574670b3f5f184c3988b77a435876be25477bbd3"
+dependencies = [
+ "include_dir",
+ "log",
+ "rusqlite",
 ]
 
 [[package]]
