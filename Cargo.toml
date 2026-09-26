@@ -122,7 +122,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 [target.'cfg(windows)'.dependencies]
 # Starting on login (`gui`): a value under `HKCU\...\Run`. From windows-rs;
 # its `windows-*` dependencies are already in the tree.
-windows-registry = { version = "0.6", optional = true }
+windows-registry = { version = "0.100", optional = true }
 
 [[bin]]
 # The command line: `ferry-cli run` is the daemon, every other command
