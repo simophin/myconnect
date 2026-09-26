@@ -8,15 +8,15 @@ use clap::{Parser, Subcommand};
 use ferry::{
     api::DEFAULT_API_PORT,
     client::{
-        API_TOKEN_ENV, ApiClient, ClipboardWatchUpdate, DeviceWatchUpdate, NotificationWatchUpdate,
-        TransferWatchUpdate,
+        API_TOKEN_ENV, API_URL_ENV, ApiClient, ClipboardWatchUpdate, DeviceWatchUpdate,
+        NotificationWatchUpdate, TransferWatchUpdate,
     },
-    config::ApiToken,
+    config::{ApiToken, StoredApi, default_config_dir},
     core::{
         CoreEvent, DeviceSnapshot, EventData, PairingSnapshot, SettingsPatch, SettingsSnapshot,
         TransferSnapshot,
     },
-    daemon::RunRequest,
+    daemon::{ApiMode, RunRequest},
     plugins::{
         battery::BatteryStatus,
         browse::{DirectoryListing, FileEntry, FileKind},
@@ -24,18 +24,30 @@ use ferry::{
         notifications::{Notification, NotificationPosted, NotificationRemoved},
         ping::ReceivedPing,
     },
+    transport::lan::DISCOVERY_PORT,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 /// Connect and communicate with your devices.
+///
+/// `run` is the daemon; every other command talks to a running one over its
+/// HTTP API: `ferry-cli run`'s, or the Ferry app's once "Command line
+/// access" is on in its Settings. The app's is found without flags: its
+/// port and token are read from its data directory.
 #[derive(Debug, Parser)]
-#[command(version, about)]
+#[command(name = "ferry-cli", version, about)]
 pub struct Cli {
     /// Emit newline-delimited JSON rather than human-readable output.
     #[arg(long, global = true)]
     json: bool,
+    /// Directory holding the daemon's data (its identity, paired devices
+    /// and settings): the daemon's for
+    /// `run`; for every other command, where to find the app's API port
+    /// and token. Defaults to the platform's configuration directory.
+    #[arg(long, global = true, env = "FERRY_DATA_DIR", value_name = "DIRECTORY")]
+    data_dir: Option<PathBuf>,
     /// Host of the local control API: listened on by `run`, connected to by
     /// every other command. Defaults to 127.0.0.1.
     #[arg(long, global = true, value_name = "HOST")]
@@ -45,8 +57,9 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "PORT")]
     api_port: Option<u16>,
     /// Bearer token for the local control API: required from clients by
-    /// `run` when set, and sent by every other command. Empty (the default)
-    /// disables API authentication.
+    /// `run` when set, and sent by every other command. For `run`, empty
+    /// (the default) disables API authentication; other commands then send
+    /// the app's token, if it has one.
     #[arg(
         long,
         global = true,
@@ -66,9 +79,6 @@ enum Command {
     Run {
         #[arg(long, value_name = "DIRECTORY")]
         download_dir: Option<PathBuf>,
-        /// Directory holding local identity and trust state.
-        #[arg(long, value_name = "DIRECTORY")]
-        data_dir: Option<PathBuf>,
         /// Name this device advertises to peers.
         #[arg(long, value_name = "NAME")]
         device_name: Option<String>,
@@ -78,8 +88,14 @@ enum Command {
         /// devices on the LAN can neither discover nor reach this one.
         #[arg(long)]
         discovery_loopback: bool,
+        /// UDP port loopback discovery uses instead of 1716. On Linux a
+        /// Ferry or KDE Connect on this machine that isn't on loopback hears
+        /// loopback announcements on 1716 and connects; another port keeps
+        /// this instance apart from it. Instances meet only on the same port.
+        #[arg(long, value_name = "PORT", requires = "discovery_loopback")]
+        discovery_port: Option<u16>,
         /// Sync the desktop clipboard instead of an in-memory one, which
-        /// only `ferry clipboard` can read and write.
+        /// only `ferry-cli clipboard` can read and write.
         #[arg(long)]
         system_clipboard: bool,
     },
@@ -226,6 +242,7 @@ impl Cli {
     pub async fn execute(self) -> Result<()> {
         let Self {
             json,
+            data_dir,
             api_host,
             api_port,
             api_token,
@@ -237,38 +254,49 @@ impl Cli {
             .context("invalid --api-token")?;
         if let Command::Run {
             download_dir,
-            data_dir,
             device_name,
             discovery_loopback,
+            discovery_port,
             system_clipboard,
         } = command
         {
-            let mut request = RunRequest {
-                api_token,
+            let host = match api_host {
+                Some(host) => host
+                    .parse::<IpAddr>()
+                    .with_context(|| format!("invalid --api-host address: {host}"))?,
+                None => IpAddr::V4(Ipv4Addr::LOCALHOST),
+            };
+            let request = RunRequest {
+                api: ApiMode::Always {
+                    host,
+                    port: api_port.unwrap_or(DEFAULT_API_PORT),
+                    token: api_token,
+                },
                 download_dir,
                 data_dir,
                 device_name,
                 discovery_loopback,
+                discovery_port: discovery_port.unwrap_or(DISCOVERY_PORT),
                 system_clipboard,
-                ..RunRequest::default()
             };
-            if let Some(host) = api_host {
-                request.api_host = host
-                    .parse::<IpAddr>()
-                    .with_context(|| format!("invalid --api-host address: {host}"))?;
-            }
-            if let Some(port) = api_port {
-                request.api_port = port;
-            }
             return ferry::daemon::run_service(request).await;
         }
 
-        let base_url_override = (api_host.is_some() || api_port.is_some()).then(|| {
+        // What the app stored, for what neither a flag nor the environment
+        // gives.
+        let stored = data_dir
+            .or_else(default_config_dir)
+            .and_then(|directory| StoredApi::read(&directory))
+            .unwrap_or_default();
+        let base_url_override = if api_host.is_some() || api_port.is_some() {
             let host = api_host.unwrap_or_else(|| "127.0.0.1".to_owned());
             let port = api_port.unwrap_or(DEFAULT_API_PORT);
-            format!("http://{}:{port}", format_host_for_url(&host))
-        });
-        let client = ApiClient::from_environment_with(base_url_override, api_token)?;
+            Some(format!("http://{}:{port}", format_host_for_url(&host)))
+        } else {
+            stored_api_url(&stored)
+        };
+        let client =
+            ApiClient::from_environment_with(base_url_override, api_token.or(stored.token()))?;
         match command {
             Command::Run { .. } => unreachable!("run handled before client configuration"),
             Command::Devices { watch: false } => print_devices(&client.devices().await?, json),
@@ -824,6 +852,17 @@ fn enum_name(value: impl serde::Serialize) -> String {
         .to_owned()
 }
 
+/// The app's API address, when it serves one and `FERRY_API_URL` doesn't
+/// name another.
+fn stored_api_url(stored: &StoredApi) -> Option<String> {
+    (stored.enabled && std::env::var_os(API_URL_ENV).is_none()).then(|| {
+        format!(
+            "http://127.0.0.1:{}",
+            stored.port.unwrap_or(DEFAULT_API_PORT)
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -833,59 +872,80 @@ mod tests {
     #[test]
     fn parses_every_command() {
         let cases = [
-            vec!["ferry", "run", "--api-port", "25000"],
-            vec!["ferry", "run", "--data-dir", "/tmp/ferry"],
-            vec!["ferry", "run", "--device-name", "My Desktop"],
-            vec!["ferry", "run", "--discovery-loopback"],
-            vec!["ferry", "run", "--system-clipboard"],
+            vec!["ferry-cli", "run", "--api-port", "25000"],
+            vec!["ferry-cli", "run", "--data-dir", "/tmp/ferry"],
+            vec!["ferry-cli", "--data-dir", "/tmp/ferry", "devices"],
+            vec!["ferry-cli", "run", "--device-name", "My Desktop"],
+            vec!["ferry-cli", "run", "--discovery-loopback"],
             vec![
-                "ferry",
+                "ferry-cli",
+                "run",
+                "--discovery-loopback",
+                "--discovery-port",
+                "25123",
+            ],
+            vec!["ferry-cli", "run", "--system-clipboard"],
+            vec![
+                "ferry-cli",
                 "--api-host",
                 "0.0.0.0",
                 "--api-port",
                 "25000",
                 "run",
             ],
-            vec!["ferry", "--api-host", "192.168.1.5", "devices"],
-            vec!["ferry", "--api-token", "secret", "run"],
-            vec!["ferry", "--api-token", "secret", "devices"],
-            vec!["ferry", "devices"],
-            vec!["ferry", "devices", "--watch"],
-            vec!["ferry", "scan"],
-            vec!["ferry", "scan", "--timeout", "5"],
-            vec!["ferry", "scan", "--watch"],
-            vec!["ferry", "scan", "--address", "192.168.1.20"],
-            vec!["ferry", "ping", "device-id"],
-            vec!["ferry", "ping", "device-id", "hello"],
-            vec!["ferry", "ring", "device-id"],
-            vec!["ferry", "pair", "device-id"],
-            vec!["ferry", "pair", "accept", ID],
-            vec!["ferry", "pair", "reject", ID],
-            vec!["ferry", "unpair", "device-id"],
-            vec!["ferry", "send", "device-id", "photo.jpg"],
-            vec!["ferry", "send", "device-id", "photo.jpg", "--watch"],
-            vec!["ferry", "files", "device-id", "ls"],
-            vec!["ferry", "files", "device-id", "ls", "/storage/emulated/0"],
-            vec!["ferry", "files", "device-id", "get", "/a/b.jpg", "--watch"],
-            vec!["ferry", "files", "device-id", "cat", "/a/b.txt"],
-            vec!["ferry", "files", "device-id", "put", "photo.jpg", "/a"],
-            vec!["ferry", "files", "device-id", "mkdir", "/a/new"],
-            vec!["ferry", "files", "device-id", "mv", "/a/x", "/a/y"],
-            vec!["ferry", "files", "device-id", "rm", "/a/x"],
-            vec!["ferry", "clipboard", "get"],
-            vec!["ferry", "clipboard", "set", "hello"],
-            vec!["ferry", "clipboard", "watch"],
-            vec!["ferry", "clipboard", "send", "device-id"],
-            vec!["ferry", "settings"],
+            vec!["ferry-cli", "--api-host", "192.168.1.5", "devices"],
+            vec!["ferry-cli", "--api-token", "secret", "run"],
+            vec!["ferry-cli", "--api-token", "secret", "devices"],
+            vec!["ferry-cli", "devices"],
+            vec!["ferry-cli", "devices", "--watch"],
+            vec!["ferry-cli", "scan"],
+            vec!["ferry-cli", "scan", "--timeout", "5"],
+            vec!["ferry-cli", "scan", "--watch"],
+            vec!["ferry-cli", "scan", "--address", "192.168.1.20"],
+            vec!["ferry-cli", "ping", "device-id"],
+            vec!["ferry-cli", "ping", "device-id", "hello"],
+            vec!["ferry-cli", "ring", "device-id"],
+            vec!["ferry-cli", "pair", "device-id"],
+            vec!["ferry-cli", "pair", "accept", ID],
+            vec!["ferry-cli", "pair", "reject", ID],
+            vec!["ferry-cli", "unpair", "device-id"],
+            vec!["ferry-cli", "send", "device-id", "photo.jpg"],
+            vec!["ferry-cli", "send", "device-id", "photo.jpg", "--watch"],
+            vec!["ferry-cli", "files", "device-id", "ls"],
             vec![
-                "ferry",
+                "ferry-cli",
+                "files",
+                "device-id",
+                "ls",
+                "/storage/emulated/0",
+            ],
+            vec![
+                "ferry-cli",
+                "files",
+                "device-id",
+                "get",
+                "/a/b.jpg",
+                "--watch",
+            ],
+            vec!["ferry-cli", "files", "device-id", "cat", "/a/b.txt"],
+            vec!["ferry-cli", "files", "device-id", "put", "photo.jpg", "/a"],
+            vec!["ferry-cli", "files", "device-id", "mkdir", "/a/new"],
+            vec!["ferry-cli", "files", "device-id", "mv", "/a/x", "/a/y"],
+            vec!["ferry-cli", "files", "device-id", "rm", "/a/x"],
+            vec!["ferry-cli", "clipboard", "get"],
+            vec!["ferry-cli", "clipboard", "set", "hello"],
+            vec!["ferry-cli", "clipboard", "watch"],
+            vec!["ferry-cli", "clipboard", "send", "device-id"],
+            vec!["ferry-cli", "settings"],
+            vec![
+                "ferry-cli",
                 "settings",
                 "--device-name",
                 "Desk",
                 "--clipboard-sync",
                 "false",
             ],
-            vec!["ferry", "--json", "devices"],
+            vec!["ferry-cli", "--json", "devices"],
         ];
         for arguments in cases {
             Cli::try_parse_from(&arguments)
@@ -894,9 +954,14 @@ mod tests {
     }
 
     #[test]
+    fn a_discovery_port_needs_loopback_discovery() {
+        assert!(Cli::try_parse_from(["ferry", "run", "--discovery-port", "25123"]).is_err());
+    }
+
+    #[test]
     fn pairing_requires_exactly_one_action() {
-        assert!(Cli::try_parse_from(["ferry", "pair"]).is_err());
-        assert!(Cli::try_parse_from(["ferry", "pair", "device", "accept", ID]).is_err());
+        assert!(Cli::try_parse_from(["ferry-cli", "pair"]).is_err());
+        assert!(Cli::try_parse_from(["ferry-cli", "pair", "device", "accept", ID]).is_err());
         assert!(parse_pair_action(&["accept".into()]).is_err());
     }
 }

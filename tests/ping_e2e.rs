@@ -10,7 +10,7 @@ use std::{
 };
 
 use ferry::{
-    config::{FilesystemTrustStore, LocalIdentity, TrustStore, TrustedDevice},
+    config::LocalIdentity,
     core::{Core, CoreError, DeviceReachability, EventData, LanCommand, LocalDeviceSnapshot},
     plugins::clipboard::InMemoryClipboard,
     plugins::{
@@ -18,6 +18,7 @@ use ferry::{
         ping::{ReceivedPing, send_ping},
     },
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
+    store::{Store, TrustedDevice},
     transport::{
         lan::{LanConfig, LanService, LocalDeviceInfo, MAX_DISCOVERY_DATAGRAM, TCP_PORT_RANGE},
         tls::{self, PeerPin, TlsMaterial, subject_public_key_info},
@@ -34,7 +35,7 @@ use tokio_util::sync::CancellationToken;
 
 struct Peer {
     identity: Arc<LocalIdentity>,
-    trust_store: Arc<dyn TrustStore + Send + Sync>,
+    store: Store,
     application: Core,
     commands: mpsc::Receiver<LanCommand>,
     _directory: tempfile::TempDir,
@@ -42,9 +43,8 @@ struct Peer {
 
 fn peer(name: &str) -> Peer {
     let directory = tempfile::tempdir().unwrap();
-    let identity = Arc::new(LocalIdentity::load_or_create(directory.path()).unwrap());
-    let trust_store: Arc<dyn TrustStore + Send + Sync> =
-        Arc::new(FilesystemTrustStore::new(directory.path()));
+    let store = Store::open(directory.path()).unwrap();
+    let identity = Arc::new(LocalIdentity::load_or_create(&store).unwrap());
     let public_key_der = subject_public_key_info(identity.certificate_der()).unwrap();
     let (application, commands) = Core::new(
         LocalDeviceSnapshot {
@@ -53,7 +53,7 @@ fn peer(name: &str) -> Peer {
         },
         8,
         public_key_der,
-        trust_store.clone(),
+        store.clone(),
         ferry::plugins::builtin(InMemoryClipboard::shared()),
         32,
         128,
@@ -64,7 +64,7 @@ fn peer(name: &str) -> Peer {
     .unwrap();
     Peer {
         identity,
-        trust_store,
+        store,
         application,
         commands,
         _directory: directory,
@@ -197,8 +197,8 @@ async fn ping_reaches_a_paired_kde_connect_peer_over_tls() {
     // The KDE Connect peer is already paired: its certificate is pinned in
     // the local trust store, as a completed pairing would have left it.
     local_peer
-        .trust_store
-        .put(&TrustedDevice {
+        .store
+        .put_device(&TrustedDevice {
             device_id: kde_id.clone(),
             certificate_der: kde.identity.certificate_der().to_vec(),
             last_trusted_protocol_version: 8,
@@ -213,7 +213,7 @@ async fn ping_reaches_a_paired_kde_connect_peer_over_tls() {
         local_peer.application.clone(),
         local_peer.commands,
         local_peer.identity.clone(),
-        local_peer.trust_store.clone(),
+        local_peer.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -307,7 +307,7 @@ async fn paired_ferry_peers_ping_each_other() {
         a.application.clone(),
         a.commands,
         a.identity.clone(),
-        a.trust_store.clone(),
+        a.store.clone(),
         CancellationToken::new(),
     )
     .await
@@ -318,7 +318,7 @@ async fn paired_ferry_peers_ping_each_other() {
         b.application.clone(),
         b.commands,
         b.identity.clone(),
-        b.trust_store.clone(),
+        b.store.clone(),
         CancellationToken::new(),
     )
     .await

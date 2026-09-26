@@ -3,13 +3,12 @@
 ; in Settings → Apps.
 ;
 ;   makensis /DVERSION=1.2.3 /DFILE_VERSION=1.2.3.0 /DAPP=path\to\ferry-gui.exe
-;            /DCLI=path\to\ferry.exe /DLICENSES=path\to\THIRD_PARTY_LICENSES.html
+;            /DCLI=path\to\ferry-cli.exe /DLICENSES=path\to\THIRD_PARTY_LICENSES.html
 ;            /DOUT=path\to\setup.exe installer.nsi
 ;
-; The app is installed as Ferry.exe and the CLI as cli\ferry.exe:
-; Windows ignores case, so the two can't share a folder (docs/adr/0001,
-; "Packaging"). LICENSES is the notices cargo-about wrote (about.toml),
-; installed next to Ferry.exe, where About opens it.
+; The app is installed as Ferry.exe and the CLI next to it as ferry-cli.exe
+; (docs/adr/0001, "Packaging"). LICENSES is the notices cargo-about wrote
+; (about.toml), installed next to Ferry.exe, where About opens it.
 
 Unicode true
 !include "MUI2.nsh"
@@ -47,9 +46,10 @@ Section "Ferry"
   SetOutPath "$INSTDIR"
   File "/oname=Ferry.exe" "${APP}"
   File "/oname=THIRD_PARTY_LICENSES.html" "${LICENSES}"
-  SetOutPath "$INSTDIR\cli"
-  File "/oname=ferry.exe" "${CLI}"
-  SetOutPath "$INSTDIR"
+  File "/oname=ferry-cli.exe" "${CLI}"
+  ; Where versions before the rename put the CLI.
+  Delete "$INSTDIR\cli\ferry.exe"
+  RMDir "$INSTDIR\cli"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
   CreateShortcut "$SMPROGRAMS\Ferry.lnk" "$INSTDIR\Ferry.exe"
@@ -75,8 +75,7 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\Ferry.lnk"
   Delete "$INSTDIR\Ferry.exe"
   Delete "$INSTDIR\THIRD_PARTY_LICENSES.html"
-  Delete "$INSTDIR\cli\ferry.exe"
-  RMDir "$INSTDIR\cli"
+  Delete "$INSTDIR\ferry-cli.exe"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
   DeleteRegKey HKCU "Software\Classes\AppUserModelId\${APP_ID}"

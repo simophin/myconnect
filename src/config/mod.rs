@@ -1,18 +1,16 @@
-//! Persistent local identity, peer trust, and user settings.
+//! The local identity and the API token.
 
+mod api;
 mod identity;
-mod settings;
 mod token;
-mod trust;
 
 use std::path::PathBuf;
 
 use directories::ProjectDirs;
 
-pub use identity::{IdentityError, LocalIdentity};
-pub use settings::{SettingsError, SettingsFile, StoredSettings};
+pub use api::{API, StoredApi};
+pub use identity::{IDENTITY, IdentityError, LocalIdentity, StoredIdentity};
 pub use token::{ApiToken, ApiTokenError};
-pub use trust::{FilesystemTrustStore, TrustError, TrustStore, TrustedDevice, TrustedIdentity};
 
 /// Return the platform-specific directory used for Ferry configuration.
 pub fn default_config_dir() -> Option<PathBuf> {
@@ -25,22 +23,6 @@ pub(crate) fn is_valid_device_id(device_id: &str) -> bool {
         && device_id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-}
-
-#[cfg(unix)]
-pub(crate) fn private_file_options() -> std::fs::OpenOptions {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true).mode(0o600);
-    options
-}
-
-#[cfg(not(unix))]
-pub(crate) fn private_file_options() -> std::fs::OpenOptions {
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    options
 }
 
 pub(crate) fn create_private_dir(path: &std::path::Path) -> std::io::Result<()> {

@@ -1,10 +1,12 @@
-//! User settings: persisted preferences, layered under the start options of
-//! the current run and over built-in defaults. Kept free of sockets and
-//! the rest of the core's state so the precedence rules can be tested on their own.
+//! User settings: preferences kept in the store, layered under the start
+//! options of the current run and over built-in defaults. Kept free of
+//! sockets and the rest of the core's state so the precedence rules can be
+//! tested on their own.
 //!
-//! The core's own settings are typed fields. Each plugin with settings owns
-//! a section under `plugins.<id>` (see [`super::PluginSettings`]); the core
-//! stores, merges and publishes sections without knowing their fields.
+//! The core's own settings are a config key each. Each plugin with settings
+//! owns a section under `plugins.<id>` (see [`super::PluginSettings`]),
+//! stored under [`PLUGIN_SETTINGS`] for its id; the core stores, merges and
+//! publishes sections without knowing their fields.
 
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -13,12 +15,53 @@ use serde_json::{Map, Value};
 
 use super::{CoreError, plugin::SettingsSection};
 use crate::{
-    config::{SettingsFile, StoredSettings},
     protocol::is_valid_device_name,
+    store::{ConfigKey, IdScope, Scope, Store, StoreError, Transaction},
 };
 
+/// The device name the user chose. What's in effect is
+/// [`super::Core::settings`], which also has start options and defaults.
+pub const DEVICE_NAME: ConfigKey<String> = ConfigKey::new("core.deviceName");
+/// The download directory the user chose.
+pub const DOWNLOAD_DIR: ConfigKey<PathBuf> = ConfigKey::new("core.downloadDir");
+/// Owned by the UI; the daemon stores it without interpreting it.
+pub const CLOSE_TO_TRAY: ConfigKey<bool> = ConfigKey::new("ui.closeToTray");
+/// Each plugin's settings section, by plugin id: only the fields the user
+/// set (see [`super::PluginSettings`]).
+pub const PLUGIN_SETTINGS: ConfigKey<Map<String, Value>, PerPlugin> =
+    ConfigKey::new("core.pluginSettings");
+
+/// A stored setting, or `None` if it can't be read.
+fn read<T>(result: Result<Option<T>, StoreError>) -> Option<T> {
+    result
+        .inspect_err(|error| tracing::warn!(%error, "ignoring unreadable settings"))
+        .ok()
+        .flatten()
+}
+
+/// A value per plugin, by plugin id.
+pub enum PerPlugin {}
+
+impl Scope for PerPlugin {
+    const NAME: &'static str = "plugin";
+}
+
+impl IdScope for PerPlugin {}
+
+/// The settings the user set, or a run's start options: `None` (or a
+/// missing section) means "not set".
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct StoredSettings {
+    pub device_name: Option<String>,
+    pub download_dir: Option<PathBuf>,
+    pub close_to_tray: Option<bool>,
+    /// Plugins' sections, by plugin id. Each holds only the fields the user
+    /// set, and none is empty.
+    pub plugins: BTreeMap<String, Map<String, Value>>,
+}
+
 /// What a setting falls back to when neither a start option nor the
-/// settings file sets it.
+/// store sets it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SettingsDefaults {
     pub device_name: String,
@@ -78,7 +121,7 @@ where
 
 /// Stored settings plus this run's start options.
 ///
-/// A start option (a flag of `ferry run` or the app) overrides the stored
+/// A start option (a flag of `ferry-cli run` or the app) overrides the stored
 /// value for the run it was given to, without being persisted. Changing a
 /// setting through [`Settings::update`] persists it and drops the override,
 /// since the user's latest choice should win.
@@ -87,7 +130,7 @@ pub(crate) struct Settings {
     defaults: SettingsDefaults,
     stored: StoredSettings,
     overrides: StoredSettings,
-    file: Option<SettingsFile>,
+    store: Option<Store>,
     sections: Vec<SettingsSection>,
 }
 
@@ -98,22 +141,46 @@ impl Settings {
             defaults,
             stored: StoredSettings::default(),
             overrides: StoredSettings::default(),
-            file: None,
+            store: None,
             sections: Vec::new(),
         }
     }
 
-    /// Hold the plugins' sections.
+    /// Hold the plugins' sections, with what the store holds for them.
     pub(crate) fn with_sections(mut self, sections: Vec<SettingsSection>) -> Self {
         self.sections = sections;
+        self.load();
         self
     }
 
-    /// Persist changes to `file`, starting from what it already holds.
-    pub(crate) fn with_file(mut self, file: SettingsFile, stored: StoredSettings) -> Self {
-        self.file = Some(file);
-        self.stored = stored;
+    /// Keep the settings in `store`, starting from what it holds.
+    pub(crate) fn with_store(mut self, store: Store) -> Self {
+        self.store = Some(store);
+        self.load();
         self
+    }
+
+    /// Read what the store holds. A value that can't be read counts as not
+    /// set, and is replaced on the next change: better defaults than not
+    /// starting.
+    fn load(&mut self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        self.stored = StoredSettings {
+            device_name: read(store.get(&DEVICE_NAME)),
+            download_dir: read(store.get(&DOWNLOAD_DIR)),
+            close_to_tray: read(store.get(&CLOSE_TO_TRAY)),
+            plugins: self
+                .sections
+                .iter()
+                .filter_map(|section| {
+                    let fields = read(store.get(&PLUGIN_SETTINGS.of(section.id)))?;
+                    Some((section.id.to_owned(), fields))
+                })
+                .filter(|(_, fields): &(String, Map<String, Value>)| !fields.is_empty())
+                .collect(),
+        };
     }
 
     pub(crate) fn with_overrides(mut self, overrides: StoredSettings) -> Self {
@@ -156,8 +223,9 @@ impl Settings {
         let empty = Map::new();
         let stored = self.stored.plugins.get(section.id).unwrap_or(&empty);
         section.resolve(stored).unwrap_or_else(|| {
-            // A hand-edited file may hold what the plugin can't read; fall
-            // back to the defaults until the user changes the section.
+            // The store may hold what the plugin can't read (an older
+            // build's fields, or a hand edit); fall back to the defaults
+            // until the user changes the section.
             tracing::warn!(section = section.id, "ignoring invalid stored settings");
             section.resolve(&empty).unwrap_or(Value::Null)
         })
@@ -224,13 +292,44 @@ impl Settings {
         }
 
         if stored != self.stored
-            && let Some(file) = &self.file
+            && let Some(store) = &self.store
         {
-            file.save(&stored).map_err(CoreError::Settings)?;
+            store
+                .transaction(|transaction| self.save(transaction, &stored))
+                .map_err(CoreError::Store)?;
         }
         self.stored = stored;
         self.overrides = overrides;
         Ok(self.snapshot())
+    }
+
+    /// Write `stored`, removing what it doesn't set.
+    fn save(
+        &self,
+        transaction: &mut Transaction<'_>,
+        stored: &StoredSettings,
+    ) -> Result<(), StoreError> {
+        fn put<T: Serialize + serde::de::DeserializeOwned>(
+            transaction: &mut Transaction<'_>,
+            key: &impl crate::store::Entry<Value = T>,
+            value: Option<&T>,
+        ) -> Result<(), StoreError> {
+            match value {
+                Some(value) => transaction.set(key, value),
+                None => transaction.remove(key).map(drop),
+            }
+        }
+        put(transaction, &DEVICE_NAME, stored.device_name.as_ref())?;
+        put(transaction, &DOWNLOAD_DIR, stored.download_dir.as_ref())?;
+        put(transaction, &CLOSE_TO_TRAY, stored.close_to_tray.as_ref())?;
+        for section in &self.sections {
+            put(
+                transaction,
+                &PLUGIN_SETTINGS.of(section.id),
+                stored.plugins.get(section.id),
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -251,14 +350,10 @@ mod tests {
 
     #[test]
     fn start_options_override_stored_values_until_the_user_changes_them() {
-        let directory = tempfile::tempdir().unwrap();
-        let file = SettingsFile::new(directory.path());
-        let stored = StoredSettings {
-            device_name: Some("Stored".into()),
-            ..Default::default()
-        };
+        let store = Store::open_in_memory().unwrap();
+        store.set(&DEVICE_NAME, &"Stored".to_owned()).unwrap();
         let mut settings = Settings::new(defaults())
-            .with_file(file.clone(), stored)
+            .with_store(store.clone())
             .with_overrides(StoredSettings {
                 device_name: Some("Flag".into()),
                 ..Default::default()
@@ -272,15 +367,42 @@ mod tests {
         // Changing another setting keeps the override and doesn't persist it.
         settings.update(patch(r#"{"closeToTray": false}"#)).unwrap();
         assert_eq!(settings.snapshot().device_name, "Flag");
-        assert_eq!(file.load().unwrap().device_name.as_deref(), Some("Stored"));
+        assert_eq!(store.get(&DEVICE_NAME).unwrap().as_deref(), Some("Stored"));
 
         let snapshot = settings
             .update(patch(r#"{"deviceName": "  Renamed "}"#))
             .unwrap();
         assert_eq!(snapshot.device_name, "Renamed");
-        let saved = file.load().unwrap();
-        assert_eq!(saved.device_name.as_deref(), Some("Renamed"));
-        assert_eq!(saved.close_to_tray, Some(false));
+        assert_eq!(store.get(&DEVICE_NAME).unwrap().as_deref(), Some("Renamed"));
+        assert_eq!(store.get(&CLOSE_TO_TRAY).unwrap(), Some(false));
+    }
+
+    #[test]
+    fn stored_settings_load_and_unreadable_ones_count_as_unset() {
+        const BAD_DIR: ConfigKey<u32> = ConfigKey::new("core.downloadDir");
+        let store = Store::open_in_memory().unwrap();
+        store.set(&DEVICE_NAME, &"Desk".to_owned()).unwrap();
+        store.set(&BAD_DIR, &7).unwrap();
+        let snapshot = Settings::new(defaults()).with_store(store).snapshot();
+        assert_eq!(snapshot.device_name, "Desk");
+        assert_eq!(snapshot.download_dir, PathBuf::from("/downloads"));
+    }
+
+    #[test]
+    fn a_change_is_saved_in_one_commit_and_resets_are_removed() {
+        let store = Store::open_in_memory().unwrap();
+        let mut settings = Settings::new(defaults()).with_store(store.clone());
+        let mut changes = store.changes();
+        settings
+            .update(patch(r#"{"deviceName": "Desk", "closeToTray": false}"#))
+            .unwrap();
+        let told: Vec<_> = std::iter::from_fn(|| changes.try_recv().ok())
+            .map(|change| change.key)
+            .collect();
+        assert_eq!(told, ["core.deviceName", "ui.closeToTray"]);
+
+        settings.update(patch(r#"{"deviceName": null}"#)).unwrap();
+        assert_eq!(store.get(&DEVICE_NAME).unwrap(), None);
     }
 
     #[test]
@@ -342,19 +464,16 @@ mod tests {
 
     #[test]
     fn plugin_sections_merge_changes_and_reset_to_their_defaults() {
-        let directory = tempfile::tempdir().unwrap();
-        let file = SettingsFile::new(directory.path());
+        let store = Store::open_in_memory().unwrap();
+        let wave = PLUGIN_SETTINGS.of("wave");
+        store
+            .set(&wave, &Map::from_iter([("enabled".into(), false.into())]))
+            .unwrap();
+        // A section no plugin of this build has is left alone.
+        let gone = PLUGIN_SETTINGS.of("gone");
+        store.set(&gone, &Map::new()).unwrap();
         let mut settings = Settings::new(defaults())
-            .with_file(
-                file.clone(),
-                StoredSettings {
-                    plugins: BTreeMap::from([(
-                        "wave".into(),
-                        Map::from_iter([("enabled".into(), false.into())]),
-                    )]),
-                    ..Default::default()
-                },
-            )
+            .with_store(store.clone())
             .with_sections(vec![SettingsSection::of::<Waving>()]);
 
         let expected = serde_json::json!({"enabled": false, "hand": "left"});
@@ -371,8 +490,8 @@ mod tests {
         );
         // Only what the user set is saved.
         assert_eq!(
-            serde_json::to_value(&file.load().unwrap().plugins).unwrap(),
-            serde_json::json!({"wave": {"enabled": false, "hand": "right"}})
+            serde_json::to_value(store.get(&wave).unwrap()).unwrap(),
+            serde_json::json!({"enabled": false, "hand": "right"})
         );
 
         let snapshot = settings
@@ -390,7 +509,8 @@ mod tests {
             snapshot.plugins["wave"],
             serde_json::json!({"enabled": true, "hand": "left"})
         );
-        assert!(file.load().unwrap().plugins.is_empty());
+        assert_eq!(store.get(&wave).unwrap(), None);
+        assert_eq!(store.get(&gone).unwrap(), Some(Map::new()));
     }
 
     #[test]

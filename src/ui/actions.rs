@@ -1,21 +1,24 @@
 //! What the shell's own pages ask of the core: scanning and adding devices
-//! by address, pairing and unpairing, transfers and received files, and
-//! settings.
+//! by address, pairing and unpairing, transfers and received files,
+//! settings, and command line access.
 
-use std::{net::Ipv4Addr, path::PathBuf, sync::Arc};
+use std::{future::Future, net::Ipv4Addr, path::PathBuf, sync::Arc};
 
 use iced::{Element, Task};
 use uuid::Uuid;
 
 use super::{
-    App, Message, Origin, Phase, context, error,
+    App, CliCopy, Message, Origin, Phase, context, error,
     overlay::{
         dialog::{Dialog, Field, Submit},
         incoming,
     },
-    pages::add_device,
+    pages::{add_device, settings},
 };
-use crate::core::{Core, CoreError, SettingsPatch};
+use crate::{
+    core::{Core, CoreError, SettingsPatch},
+    daemon::{ApiStatus, ApiSwitch},
+};
 impl App {
     /// Announce this computer so devices nearby answer, and show that the
     /// page is searching.
@@ -236,6 +239,99 @@ impl App {
         };
         let core = running.ctx.core().clone();
         self.core_task(move || core.update_settings(patch), Message::SettingsSaved)
+    }
+
+    /// Turn command line access on or off. It binds a port and writes
+    /// the store, so it runs on the daemon's runtime.
+    pub(super) fn set_api_enabled(&mut self, enabled: bool) -> Task<Message> {
+        self.change_api(move |api| async move { api.set_enabled(enabled).await })
+    }
+
+    /// Replace the API's token, so what was set up with the old one stops
+    /// working.
+    pub(super) fn new_api_token(&mut self) -> Task<Message> {
+        self.change_api(|api| async move { api.new_token().await })
+    }
+
+    /// Run `change` of the API, one at a time: a second one while the first
+    /// runs is dropped, as the switch shows the first one's outcome.
+    fn change_api<F>(&mut self, change: impl FnOnce(ApiSwitch) -> F) -> Task<Message>
+    where
+        F: Future<Output = anyhow::Result<ApiStatus>> + Send + 'static,
+    {
+        let runtime = self.options.runtime.clone();
+        let Some(running) = self.running() else {
+            return Task::none();
+        };
+        if running.api_busy {
+            return Task::none();
+        }
+        running.api_busy = true;
+        let change = change(running.api.clone());
+        context::on_runtime(&runtime, async move {
+            change.await.map_err(|error| format!("{error:#}"))
+        })
+        .map(Message::ApiChanged)
+    }
+
+    /// Read command line access as it is now.
+    pub(super) fn read_api_status(&self) -> Task<Message> {
+        let Phase::Running(running) = &self.phase else {
+            return Task::none();
+        };
+        let api = running.api.clone();
+        context::on_runtime(&self.options.runtime, async move { Ok(api.status().await) })
+            .map(Message::ApiChanged)
+    }
+
+    /// Show command line access as it is now, or say why a change failed
+    /// and read it again.
+    pub(super) fn api_changed(&mut self, result: Result<ApiStatus, String>) -> Task<Message> {
+        let Some(running) = self.running() else {
+            return Task::none();
+        };
+        running.api_busy = false;
+        match result {
+            Ok(status) => {
+                running.api_status = Some(status);
+                Task::none()
+            }
+            Err(error) => {
+                tracing::warn!(%error, "couldn't change command line access");
+                let read = self.read_api_status();
+                let toast = self.toast(
+                    format!("Couldn’t change command line access: {error}"),
+                    None,
+                );
+                Task::batch([read, toast])
+            }
+        }
+    }
+
+    /// Copy the CLI's setup or its token for pasting into a shell, while
+    /// the API listens.
+    pub(super) fn copy_cli(&mut self, what: CliCopy) -> Task<Message> {
+        let Some(status) = self
+            .running()
+            .and_then(|running| running.api_status.clone())
+            .filter(|status| status.address.is_some())
+        else {
+            return Task::none();
+        };
+        let (copied, label) = match what {
+            CliCopy::Setup => (settings::cli_setup(&status, true), "Setup copied"),
+            CliCopy::Token => (
+                status.token.map(|token| token.expose_secret().to_owned()),
+                "Token copied",
+            ),
+        };
+        let Some(copied) = copied else {
+            return Task::none();
+        };
+        Task::batch([
+            iced::clipboard::write(copied),
+            self.toast(label.into(), None),
+        ])
     }
 
     /// Have the system start the app at login, or stop, off the UI thread.
@@ -718,6 +814,78 @@ mod tests {
             app.toasts.items()[0].text,
             "Couldn’t open https://broken.example"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn command_line_access_switches_on_and_copies_its_setup() {
+        let mut app = running();
+        let store = crate::store::Store::open_in_memory().unwrap();
+        // A free port, not the default one the owner's app may hold.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        store
+            .set(
+                &crate::config::API,
+                &crate::config::StoredApi {
+                    port: Some(port),
+                    ..crate::config::StoredApi::default()
+                },
+            )
+            .unwrap();
+        let api = ApiSwitch::start(
+            crate::daemon::ApiMode::Stored {
+                port: None,
+                token: None,
+            },
+            store,
+            core(&app),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let Phase::Running(running) = &mut app.phase else {
+            panic!("the app runs");
+        };
+        running.api = api;
+
+        // The section is below the test window's fold, so by message; the
+        // page's own tests click it.
+        settle(&mut app, Message::SetApiEnabled(true)).await;
+        let status = app.running().unwrap().api_status.clone().unwrap();
+        assert_eq!(status.address.unwrap().port(), port);
+        settle(&mut app, Message::CopyCli(CliCopy::Setup)).await;
+        assert_eq!(app.toasts.items()[0].text, "Setup copied");
+
+        settle(&mut app, Message::NewApiToken).await;
+        let renewed = app.running().unwrap().api_status.clone().unwrap();
+        assert_ne!(renewed.token, status.token);
+
+        settle(&mut app, Message::SetApiEnabled(false)).await;
+        let status = app.running().unwrap().api_status.clone().unwrap();
+        assert!(!status.enabled);
+        assert_eq!(status.address, None);
+        settle(&mut app, Message::CopyCli(CliCopy::Token)).await;
+        assert_eq!(app.toasts.items().len(), 1, "nothing to copy while off");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_switch_says_why_and_stays_off() {
+        // `running` has no API file to keep the choice in.
+        let mut app = running();
+        settle(&mut app, Message::SetApiEnabled(true)).await;
+        assert!(
+            app.toasts.items()[0]
+                .text
+                .starts_with("Couldn’t change command line access"),
+            "{}",
+            app.toasts.items()[0].text
+        );
+        let running = app.running().unwrap();
+        assert!(!running.api_busy);
+        assert!(!running.api_status.as_ref().unwrap().enabled);
     }
 
     #[tokio::test(start_paused = true)]

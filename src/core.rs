@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
 
-use crate::config::{LocalIdentity, TrustStore};
+use crate::{config::LocalIdentity, store::Store};
 
 mod connections;
 mod devices;
@@ -38,7 +38,7 @@ mod transfers;
 use connections::Connection;
 use devices::paired_devices;
 use pairing::PairingRuntime;
-pub(crate) use settings::Settings;
+pub(crate) use settings::{Settings, StoredSettings};
 
 pub use connections::LanCommand;
 pub use devices::{DeviceReachability, DeviceRegistry, DeviceRegistryError, DeviceSnapshot};
@@ -52,7 +52,10 @@ pub use plugin::{
     Capabilities, Plugin, PluginContext, PluginEvent, PluginEventKind, PluginRegistry,
     PluginSettings, SettingsSection,
 };
-pub use settings::{SettingsDefaults, SettingsPatch, SettingsSnapshot};
+pub use settings::{
+    CLOSE_TO_TRAY, DEVICE_NAME, DOWNLOAD_DIR, PLUGIN_SETTINGS, PerPlugin, SettingsDefaults,
+    SettingsPatch, SettingsSnapshot,
+};
 pub use transfers::{
     DEFAULT_MAX_TRANSFER_BYTES, FileNameError, PROGRESS_EVENT_INTERVAL, Transfer, TransferConfig,
     TransferDirection, TransferHandle, TransferProgressError, TransferSnapshot, TransferStatus,
@@ -72,7 +75,7 @@ pub struct Core {
     local_device_name: Arc<watch::Sender<String>>,
     protocol_version: u8,
     local_public_key_der: Arc<Vec<u8>>,
-    trust_store: Arc<dyn TrustStore + Send + Sync>,
+    store: Store,
     identity: Arc<LocalIdentity>,
     state: Arc<RwLock<CoreState>>,
     commands: mpsc::Sender<LanCommand>,
@@ -98,7 +101,7 @@ impl Core {
         local_device: LocalDeviceSnapshot,
         protocol_version: u8,
         local_public_key_der: Vec<u8>,
-        trust_store: Arc<dyn TrustStore + Send + Sync>,
+        store: Store,
         plugins: Vec<Arc<dyn Plugin>>,
         command_capacity: usize,
         event_capacity: usize,
@@ -110,7 +113,7 @@ impl Core {
         }
         let (commands, receiver) = mpsc::channel(command_capacity);
         let events = EventBus::new(event_capacity)?;
-        let devices = paired_devices(trust_store.as_ref());
+        let devices = paired_devices(&store);
         let plugins = PluginRegistry::new(plugins);
         let settings = Settings::new(SettingsDefaults {
             device_name: local_device.device_name.clone(),
@@ -127,7 +130,7 @@ impl Core {
                 local_device_name: Arc::new(watch::Sender::new(local_device.device_name)),
                 protocol_version,
                 local_public_key_der: Arc::new(local_public_key_der),
-                trust_store,
+                store,
                 identity,
                 state: Arc::new(RwLock::new(CoreState {
                     devices,
@@ -157,6 +160,11 @@ impl Core {
 
     pub fn event_bus(&self) -> &EventBus {
         &self.events
+    }
+
+    /// The daemon's data: typed configs and paired devices.
+    pub fn store(&self) -> &Store {
+        &self.store
     }
 
     /// Events from now on, for `/events` and other clients.

@@ -5,7 +5,7 @@ members = [".", "gui"]
 name = "ferry"
 version = "0.1.0"
 edition = "2024"
-default-run = "ferry"
+default-run = "ferry-cli"
 publish = false
 
 [features]
@@ -65,6 +65,11 @@ arboard = { version = "3.6", default-features = false, features = ["wayland-data
 # aws-lc-rs needs cmake and NASM to build on Windows.
 russh = { version = "0.63", default-features = false, features = ["ring", "rsa"] }
 russh-sftp = "3"
+# The daemon's data (`store`), with SQLite built in so no platform needs
+# a system library.
+rusqlite = { version = "0.40", features = ["bundled"] }
+# The identity's certificate and key in its stored JSON; already in the tree.
+base64 = "0.22"
 # The desktop UI (`gui` feature). Upgrading iced is its own change.
 iced = { version = "0.14", features = ["advanced", "image-without-codecs"], optional = true }
 iced_fonts = { version = "0.3", features = ["lucide"], optional = true }
@@ -114,6 +119,12 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 # Starting on login (`gui`): a value under `HKCU\...\Run`. From windows-rs;
 # its `windows-*` dependencies are already in the tree.
 windows-registry = { version = "0.6", optional = true }
+
+[[bin]]
+# The command line: `ferry-cli run` is the daemon, every other command
+# its client.
+name = "ferry-cli"
+path = "src/bin/ferry-cli/main.rs"
 
 [[test]]
 name = "ui_e2e"

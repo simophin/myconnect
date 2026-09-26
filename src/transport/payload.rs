@@ -282,8 +282,8 @@ mod tests {
     }
 
     fn identity() -> crate::config::LocalIdentity {
-        let directory = tempfile::tempdir().unwrap();
-        crate::config::LocalIdentity::load_or_create(directory.path()).unwrap()
+        let store = crate::store::Store::open_in_memory().unwrap();
+        crate::config::LocalIdentity::load_or_create(&store).unwrap()
     }
 
     fn material(identity: &crate::config::LocalIdentity) -> TlsMaterial {
