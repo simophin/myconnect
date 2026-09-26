@@ -875,6 +875,7 @@ impl App {
                 about::Actions {
                     back: Message::Back,
                     open_link: Message::OpenLink,
+                    open_licenses: Message::OpenFile(desktop::licenses::path().to_owned()),
                 },
             ),
         }

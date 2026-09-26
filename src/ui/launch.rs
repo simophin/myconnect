@@ -31,7 +31,7 @@ use super::{
     features::Features,
     overlay::{dialog::Dialogs, drop::Drag, toast::Toasts},
     route::Route,
-    theme,
+    theme, widgets,
 };
 use crate::{
     config,
@@ -131,7 +131,11 @@ pub fn program(
         .title("Ferry")
         .subscription(App::subscription)
         .theme(|app: &App, _window| app.theme.clone())
+        .default_font(widgets::FONT)
         .font(iced_fonts::LUCIDE_FONT_BYTES);
+    let program = widgets::FONT_FACES
+        .into_iter()
+        .fold(program, |program, face| program.font(face));
     (program, service)
 }
 

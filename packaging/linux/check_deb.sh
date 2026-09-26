@@ -32,6 +32,7 @@ if [ -n "$problems" ]; then
   exit 1
 fi
 test -f /usr/share/icons/hicolor/256x256/apps/dev.fanchao.Ferry.png
+test -s /usr/share/doc/ferry/THIRD_PARTY_LICENSES.html
 ferry-gui --version
 ferry-cli --version
 

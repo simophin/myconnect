@@ -1,6 +1,8 @@
 //! The About page: the app's icon, name and version, what it is, who made
-//! it, and links to its source and to supporting its development. The
-//! links open in the system browser.
+//! it, links to its source and to supporting its development, and the
+//! licenses of the third-party code in it. The links open in the system
+//! browser, and so do the licenses (a page the package installs:
+//! `desktop::licenses`).
 
 use std::sync::LazyLock;
 
@@ -32,6 +34,8 @@ pub struct Actions<M> {
     pub back: M,
     /// Open a web page in the system browser.
     pub open_link: fn(&'static str) -> M,
+    /// Open the third-party licenses.
+    pub open_licenses: M,
 }
 
 /// The page, showing the app's `version`.
@@ -72,6 +76,18 @@ pub fn view<'a, M: Clone + 'a>(version: &'a str, actions: Actions<M>) -> Element
             "Sponsor on GitHub",
             SPONSOR_URL,
         ),
+        widgets::setting(
+            lucide::scroll_text,
+            "Open source licenses",
+            "The software Ferry is built on",
+            Some(
+                lucide::external_link()
+                    .size(16)
+                    .style(text::secondary)
+                    .into(),
+            ),
+            Some(actions.open_licenses),
+        ),
     ]
     .spacing(8);
     let body = column![container(app).center_x(Length::Fill), links]
@@ -92,12 +108,14 @@ mod tests {
     enum Message {
         Back,
         Open(&'static str),
+        Licenses,
     }
 
     fn actions() -> Actions<Message> {
         Actions {
             back: Message::Back,
             open_link: Message::Open,
+            open_licenses: Message::Licenses,
         }
     }
 
@@ -124,6 +142,7 @@ mod tests {
         assert_eq!(clicked("Made by Fanchao"), [Message::Open(AUTHOR_URL)]);
         assert_eq!(clicked("Source code"), [Message::Open(SOURCE_URL)]);
         assert_eq!(clicked("Support development"), [Message::Open(SPONSOR_URL)]);
+        assert_eq!(clicked("Open source licenses"), [Message::Licenses]);
         assert_eq!(clicked(iced::widget::Id::from("Back")), [Message::Back]);
     }
 

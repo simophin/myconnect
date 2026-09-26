@@ -3,10 +3,12 @@
 ; in Settings → Apps.
 ;
 ;   makensis /DVERSION=1.2.3 /DFILE_VERSION=1.2.3.0 /DAPP=path\to\ferry-gui.exe
-;            /DCLI=path\to\ferry-cli.exe /DOUT=path\to\setup.exe installer.nsi
+;            /DCLI=path\to\ferry-cli.exe /DLICENSES=path\to\THIRD_PARTY_LICENSES.html
+;            /DOUT=path\to\setup.exe installer.nsi
 ;
 ; The app is installed as Ferry.exe and the CLI next to it as ferry-cli.exe
-; (docs/adr/0001, "Packaging").
+; (docs/adr/0001, "Packaging"). LICENSES is the notices cargo-about wrote
+; (about.toml), installed next to Ferry.exe, where About opens it.
 
 Unicode true
 !include "MUI2.nsh"
@@ -43,6 +45,7 @@ VIAddVersionKey "LegalCopyright" "Copyright © 2026 Fanchao"
 Section "Ferry"
   SetOutPath "$INSTDIR"
   File "/oname=Ferry.exe" "${APP}"
+  File "/oname=THIRD_PARTY_LICENSES.html" "${LICENSES}"
   File "/oname=ferry-cli.exe" "${CLI}"
   ; Where versions before the rename put the CLI.
   Delete "$INSTDIR\cli\ferry.exe"
@@ -71,6 +74,7 @@ SectionEnd
 Section "Uninstall"
   Delete "$SMPROGRAMS\Ferry.lnk"
   Delete "$INSTDIR\Ferry.exe"
+  Delete "$INSTDIR\THIRD_PARTY_LICENSES.html"
   Delete "$INSTDIR\ferry-cli.exe"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"

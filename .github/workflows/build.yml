@@ -83,17 +83,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The third-party notices the packages ship (about.toml).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9
       - run: |
           # Separate builds for the app and the CLI, as on Linux.
           for target in aarch64-apple-darwin x86_64-apple-darwin; do
             cargo build --release --locked -p ferry-gui --target "$target"
             cargo build --release --locked -p ferry --target "$target"
           done
+          cargo about generate --locked --fail about.hbs -o target/THIRD_PARTY_LICENSES.html
       - name: Package
         run: |
           packaging/macos/build_app.sh \
             "${{ needs.version.outputs.numeric }}" "${{ github.run_number }}" \
             "dist/ferry-${{ needs.version.outputs.name }}-macos-universal.dmg" \
+            target/THIRD_PARTY_LICENSES.html \
             target/aarch64-apple-darwin/release \
             target/x86_64-apple-darwin/release
       - name: Check the bundle
@@ -107,6 +113,7 @@ jobs:
           plutil -extract CFBundleVersion raw "$app/Contents/Info.plist"
           "$app/Contents/MacOS/Ferry" --version
           "$app/Contents/MacOS/ferry-cli" --version
+          test -s "$app/Contents/Resources/THIRD_PARTY_LICENSES.html"
           rm -rf "$app"
       - uses: actions/upload-artifact@v7
         with:
@@ -131,10 +138,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The third-party notices the packages ship (about.toml).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9
       # Two builds, as on Linux.
       - run: |
           cargo build --release --locked -p ferry-gui
           cargo build --release --locked -p ferry
+          cargo about generate --locked --fail about.hbs -o target/THIRD_PARTY_LICENSES.html
       # The runner image doesn't have NSIS any more.
       - name: Install NSIS
         run: |
@@ -150,6 +162,7 @@ jobs:
             "-DFILE_VERSION=${{ needs.version.outputs.numeric }}.${{ github.run_number }}" \
             "-DAPP=$root\\target\\release\\ferry-gui.exe" \
             "-DCLI=$root\\target\\release\\ferry-cli.exe" \
+            "-DLICENSES=$root\\target\\THIRD_PARTY_LICENSES.html" \
             "-DOUT=$root\\dist\\ferry-${{ needs.version.outputs.name }}-windows-x64-setup.exe" \
             packaging/windows/installer.nsi
       - name: Check the installer
@@ -158,6 +171,7 @@ jobs:
           dir="$LOCALAPPDATA/Programs/Ferry"
           ls -R "$dir"
           "$dir/ferry-cli.exe" --version
+          test -s "$dir/THIRD_PARTY_LICENSES.html"
           reg query 'HKCU\Software\Classes\AppUserModelId\dev.fanchao.Ferry'
           # _?= runs the uninstaller in place, so this waits for it; it
           # wants a Windows path.
@@ -205,15 +219,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The third-party notices the packages ship (about.toml).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9
       # Two builds: one with both packages would turn the gui feature on for
       # the CLI too, and put iced in it.
       - run: |
           cargo build --release --locked -p ferry-gui
           cargo build --release --locked -p ferry
+          cargo about generate --locked --fail about.hbs -o target/THIRD_PARTY_LICENSES.html
       - name: Package
         run: |
           packaging/linux/build_deb.sh \
             target/release/ferry-gui target/release/ferry-cli \
+            target/THIRD_PARTY_LICENSES.html \
             "${{ needs.version.outputs.deb }}" dist
           dpkg-deb --info dist/*.deb
           dpkg-deb --contents dist/*.deb

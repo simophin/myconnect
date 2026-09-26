@@ -11,7 +11,7 @@ use ferry::{
         API_TOKEN_ENV, API_URL_ENV, ApiClient, ClipboardWatchUpdate, DeviceWatchUpdate,
         NotificationWatchUpdate, TransferWatchUpdate,
     },
-    config::{ApiFile, ApiToken, StoredApi, default_config_dir},
+    config::{ApiToken, StoredApi, default_config_dir},
     core::{
         CoreEvent, DeviceSnapshot, EventData, PairingSnapshot, SettingsPatch, SettingsSnapshot,
         TransferSnapshot,
@@ -41,7 +41,8 @@ pub struct Cli {
     /// Emit newline-delimited JSON rather than human-readable output.
     #[arg(long, global = true)]
     json: bool,
-    /// Directory holding identity, trust and settings: the daemon's for
+    /// Directory holding the daemon's data (its identity, paired devices
+    /// and settings): the daemon's for
     /// `run`; for every other command, where to find the app's API port
     /// and token. Defaults to the platform's configuration directory.
     #[arg(long, global = true, env = "FERRY_DATA_DIR", value_name = "DIRECTORY")]
@@ -276,7 +277,7 @@ impl Cli {
         // gives.
         let stored = data_dir
             .or_else(default_config_dir)
-            .and_then(|directory| ApiFile::new(directory).load().ok())
+            .and_then(|directory| StoredApi::read(&directory))
             .unwrap_or_default();
         let base_url_override = if api_host.is_some() || api_port.is_some() {
             let host = api_host.unwrap_or_else(|| "127.0.0.1".to_owned());

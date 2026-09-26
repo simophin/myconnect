@@ -10,6 +10,7 @@ pub mod core;
 pub mod daemon;
 pub mod plugins;
 pub mod protocol;
+pub mod store;
 pub mod transport;
 #[cfg(feature = "gui")]
 pub mod ui;

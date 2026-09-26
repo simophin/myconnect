@@ -76,7 +76,7 @@ Debian package as `/usr/bin/ferry-cli`, in the macOS app as
 
 `ferry-cli run` is a daemon of its own. To drive the desktop app instead,
 turn on **Settings → Command line access** in it: the app then serves its
-HTTP API on `127.0.0.1:24816` with a token it keeps in its data directory,
+HTTP API on `127.0.0.1:24816` with a token it keeps in its database,
 and `ferry-cli` on the same computer finds both without any flags. The
 setting shows the address and token, with a button to copy them as
 environment variables for a script run elsewhere.
@@ -118,7 +118,7 @@ with no token the API is unauthenticated. Prefer the environment variable
 over the flag so the token does not show up in process listings. For
 development, `FERRY_API_URL` overrides the API URL (superseded by
 `--api-host`/`--api-port` when either is given). With neither a token nor an
-address given, the other commands use the app's, read from `api.json` in
+address given, the other commands use the app's, read from `ferry.db` in
 its data directory (`--data-dir` or `FERRY_DATA_DIR`, default the
 platform's configuration directory).
 

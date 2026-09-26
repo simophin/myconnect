@@ -11,7 +11,7 @@ const MAX_TOKEN_LENGTH: usize = 256;
 ///
 /// The control API only requires authentication when the daemon was started
 /// with one. `ferry-cli run` takes one from its flags, for that run only; the
-/// app always has one, kept in `api.json` ([`super::ApiFile`]) so the CLI
+/// app always has one, kept in the store ([`super::API`]) so the CLI
 /// keeps working across its restarts.
 ///
 /// `Debug` is implemented but redacts the value; the type is intentionally not

@@ -9,7 +9,10 @@ use crate::{
     config::LocalIdentity,
     core::{Core, DeviceReachability, DeviceSnapshot, SettingsSnapshot, testing::make_identity},
     protocol::{DeviceType, Packet, PairingBody},
-    ui::store::{Snapshot, Store},
+    ui::{
+        store::{Snapshot, Store},
+        widgets,
+    },
 };
 
 /// A paired, connected phone named `name`, with no capabilities.
@@ -66,8 +69,8 @@ pub fn connect_unpaired_peer(
 ) -> (DeviceSnapshot, tokio::sync::mpsc::Receiver<Packet>) {
     core.discover_device(&make_identity(device_id, Vec::new()), false, 1)
         .expect("discovered");
-    let directory = tempfile::tempdir().expect("a temporary directory");
-    let identity = LocalIdentity::load_or_create(directory.path()).expect("an identity");
+    let store = crate::store::Store::open_in_memory().expect("a store");
+    let identity = LocalIdentity::load_or_create(&store).expect("an identity");
     let (packets, received) = tokio::sync::mpsc::channel(8);
     let device = core
         .register_connection(
@@ -135,8 +138,6 @@ pub async fn outputs<T: 'static>(task: Task<T>) -> Vec<T> {
 /// Render `view` headlessly, in light and dark, to
 /// `$SNAPSHOT_DIR/<name>-<light|dark>-<backend>.png`, to look at the UI
 /// without a display. Does nothing without the variable.
-///
-/// The snapshot font is not the app's, so judge layout, not typography.
 pub fn snapshot<'a, Message>(
     name: &str,
     size: impl Into<Size> + Copy,
@@ -153,7 +154,11 @@ pub fn snapshot<'a, Message>(
         let stem = format!("{name}-{variant}");
         remove_old_images(directory, &stem);
         let settings = Settings {
-            fonts: vec![iced_fonts::LUCIDE_FONT_BYTES.into()],
+            fonts: std::iter::once(iced_fonts::LUCIDE_FONT_BYTES)
+                .chain(widgets::FONT_FACES)
+                .map(Into::into)
+                .collect(),
+            default_font: widgets::FONT,
             ..Settings::default()
         };
         let mut ui = Simulator::with_size(settings, size, view());

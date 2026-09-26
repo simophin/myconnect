@@ -242,7 +242,7 @@ impl App {
     }
 
     /// Turn command line access on or off. It binds a port and writes
-    /// `api.json`, so it runs on the daemon's runtime.
+    /// the store, so it runs on the daemon's runtime.
     pub(super) fn set_api_enabled(&mut self, enabled: bool) -> Task<Message> {
         self.change_api(move |api| async move { api.set_enabled(enabled).await })
     }
@@ -819,25 +819,28 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn command_line_access_switches_on_and_copies_its_setup() {
         let mut app = running();
-        let directory = tempfile::tempdir().unwrap();
+        let store = crate::store::Store::open_in_memory().unwrap();
         // A free port, not the default one the owner's app may hold.
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
             .unwrap()
             .port();
-        crate::config::ApiFile::new(directory.path())
-            .save(&crate::config::StoredApi {
-                port: Some(port),
-                ..crate::config::StoredApi::default()
-            })
+        store
+            .set(
+                &crate::config::API,
+                &crate::config::StoredApi {
+                    port: Some(port),
+                    ..crate::config::StoredApi::default()
+                },
+            )
             .unwrap();
         let api = ApiSwitch::start(
             crate::daemon::ApiMode::Stored {
                 port: None,
                 token: None,
             },
-            directory.path(),
+            store,
             core(&app),
             tokio_util::sync::CancellationToken::new(),
         )

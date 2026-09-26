@@ -2,13 +2,15 @@
 # Assemble Ferry.app from the app's and the CLI's binaries and pack it into
 # a DMG.
 #
-#   build_app.sh VERSION BUILD DMG RELEASE_DIR...
+#   build_app.sh VERSION BUILD DMG LICENSES RELEASE_DIR...
 #
 # Each RELEASE_DIR is cargo's release directory for one architecture (e.g.
 # target/aarch64-apple-darwin/release), holding ferry-gui and ferry-cli; with
 # more than one, lipo joins each into a universal binary. The app is
 # Contents/MacOS/Ferry and the CLI Contents/MacOS/ferry-cli, which users
-# link onto their PATH. VERSION is MAJOR.MINOR.PATCH
+# link onto their PATH. LICENSES is the THIRD_PARTY_LICENSES.html
+# cargo-about wrote (about.toml), which goes in Resources, where About
+# opens it. VERSION is MAJOR.MINOR.PATCH
 # (macOS accepts nothing else) and BUILD a number. Writes the DMG, and leaves
 # Ferry.app next to it. Needs macOS: lipo, iconutil, codesign and
 # hdiutil.
@@ -18,14 +20,15 @@
 # System Settings → Privacy & Security.
 set -eu
 
-if [ $# -lt 4 ]; then
-  echo "usage: $0 VERSION BUILD DMG RELEASE_DIR..." >&2
+if [ $# -lt 5 ]; then
+  echo "usage: $0 VERSION BUILD DMG LICENSES RELEASE_DIR..." >&2
   exit 2
 fi
 version=$1
 build=$2
 dmg=$3
-shift 3
+licenses=$4
+shift 4
 out_dir=$(dirname "$dmg")
 
 packaging=$(cd "$(dirname "$0")" && pwd)
@@ -60,6 +63,7 @@ plutil -lint "$app/Contents/Info.plist"
 printf 'APPL????' >"$app/Contents/PkgInfo"
 iconutil -c icns -o "$app/Contents/Resources/AppIcon.icns" \
   "$assets/macos/AppIcon.iconset"
+cp "$licenses" "$app/Contents/Resources/THIRD_PARTY_LICENSES.html"
 # Nested code first: signing the bundle seals the CLI's signature into it.
 codesign --force --sign - --identifier dev.fanchao.Ferry.cli \
   "$app/Contents/MacOS/ferry-cli"

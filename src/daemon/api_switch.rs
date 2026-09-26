@@ -12,8 +12,9 @@ use tracing::{info, warn};
 
 use crate::{
     api::{ApiServer, ApiServerConfig, DEFAULT_API_PORT},
-    config::{ApiFile, ApiToken, StoredApi},
+    config::{API, ApiToken, StoredApi},
     core::Core,
+    store::Store,
 };
 
 /// How a daemon serves its HTTP API.
@@ -28,7 +29,7 @@ pub enum ApiMode {
         port: u16,
         token: Option<ApiToken>,
     },
-    /// As `api.json` in the data directory says, on loopback, and switched
+    /// As the store's [`API`] entry says, on loopback, and switched
     /// with [`ApiSwitch`]: the app's. Always with a token, the stored one
     /// (made when first needed). Failing to listen leaves it off, and
     /// [`ApiStatus::error`] says why.
@@ -79,7 +80,7 @@ struct Inner {
     /// The service's; each server stops on a child of it.
     shutdown: CancellationToken,
     /// Where the choice is kept: `None` for [`ApiMode::Always`].
-    file: Option<ApiFile>,
+    store: Option<Store>,
     state: Mutex<State>,
 }
 
@@ -94,15 +95,15 @@ struct State {
 
 impl ApiSwitch {
     /// Serve as `mode` says. With [`ApiMode::Always`], an error means it
-    /// couldn't listen; with [`ApiMode::Stored`], only that `api.json`
+    /// couldn't listen; with [`ApiMode::Stored`], only that the store
     /// couldn't be written.
     pub(crate) async fn start(
         mode: ApiMode,
-        config_dir: &std::path::Path,
+        store: Store,
         core: Core,
         shutdown: CancellationToken,
     ) -> Result<Self> {
-        let (host, file, state) = match mode {
+        let (host, store, state) = match mode {
             ApiMode::Always { host, port, token } => (
                 host,
                 None,
@@ -119,16 +120,18 @@ impl ApiSwitch {
                 },
             ),
             ApiMode::Stored { port, token } => {
-                let file = ApiFile::new(config_dir);
-                let stored = file.load().unwrap_or_else(|error| {
-                    // Off rather than not starting; the file is rewritten
-                    // when the user turns it on.
-                    warn!(%error, "ignoring unreadable API settings");
-                    StoredApi::default()
-                });
+                let stored = store
+                    .get(&API)
+                    .unwrap_or_else(|error| {
+                        // Off rather than not starting; it is rewritten
+                        // when the user turns it on.
+                        warn!(%error, "ignoring unreadable API settings");
+                        None
+                    })
+                    .unwrap_or_default();
                 (
                     IpAddr::V4(Ipv4Addr::LOCALHOST),
-                    Some(file),
+                    Some(store),
                     State {
                         stored,
                         port_override: port,
@@ -139,12 +142,12 @@ impl ApiSwitch {
                 )
             }
         };
-        let always = file.is_none();
+        let always = store.is_none();
         let switch = Self(Arc::new(Inner {
             core,
             host,
             shutdown,
-            file,
+            store,
             state: Mutex::new(state),
         }));
         {
@@ -172,7 +175,7 @@ impl ApiSwitch {
             core,
             host: IpAddr::V4(Ipv4Addr::LOCALHOST),
             shutdown: CancellationToken::new(),
-            file: None,
+            store: None,
             state: Mutex::new(State {
                 stored: StoredApi::default(),
                 port_override: None,
@@ -198,7 +201,11 @@ impl ApiSwitch {
     /// Turning it on makes a token if there is none yet. If it can't listen,
     /// nothing changes and the error says why.
     pub async fn set_enabled(&self, enabled: bool) -> Result<ApiStatus> {
-        let file = self.0.file.as_ref().context("the API is on for this run")?;
+        let store = self
+            .0
+            .store
+            .as_ref()
+            .context("the API is on for this run")?;
         let mut state = self.0.state.lock().await;
         let mut stored = state.stored.clone();
         stored.enabled = enabled;
@@ -210,12 +217,13 @@ impl ApiSwitch {
             // `ensure_token` may have stored a new token.
             stored = state.stored.clone();
             stored.enabled = true;
-            if let Err(error) = file.save(&stored) {
+            if let Err(error) = store.set(&API, &stored) {
                 self.0.stop(&mut state).await;
                 return Err(error).context("couldn't save the API settings");
             }
         } else {
-            file.save(&stored)
+            store
+                .set(&API, &stored)
                 .context("couldn't save the API settings")?;
             // Switching off also ends this run's `--api-port`.
             state.port_override = None;
@@ -230,16 +238,17 @@ impl ApiSwitch {
     /// Replace the token with a new random one and keep it, so clients set
     /// up with the old one stop working. A running server restarts with it.
     pub async fn new_token(&self) -> Result<ApiStatus> {
-        let file = self
+        let store = self
             .0
-            .file
+            .store
             .as_ref()
             .context("the API's token is fixed for this run")?;
         let mut state = self.0.state.lock().await;
         let token = ApiToken::generate();
         let mut stored = state.stored.clone();
         stored.set_token(&token);
-        file.save(&stored)
+        store
+            .set(&API, &stored)
             .context("couldn't save the API settings")?;
         state.stored = stored;
         state.token = Some(token);
@@ -280,7 +289,7 @@ impl Inner {
         let address = state.server.as_ref().map(ApiServer::local_addr);
         ApiStatus {
             enabled: state.enabled(),
-            switchable: self.file.is_some(),
+            switchable: self.store.is_some(),
             port: address.map_or_else(|| state.port(), |address| address.port()),
             address,
             token: state.token.clone(),
@@ -298,11 +307,15 @@ impl Inner {
             state.token = Some(token);
             return Ok(());
         }
-        let file = self.file.as_ref().ok_or_else(|| anyhow!("no API file"))?;
+        let store = self
+            .store
+            .as_ref()
+            .ok_or_else(|| anyhow!("nowhere to keep a token"))?;
         let token = ApiToken::generate();
         let mut stored = state.stored.clone();
         stored.set_token(&token);
-        file.save(&stored)
+        store
+            .set(&API, &stored)
             .context("couldn't save the API settings")?;
         state.stored = stored;
         state.token = Some(token);
@@ -311,7 +324,7 @@ impl Inner {
 
     async fn listen(&self, state: &mut State) -> Result<()> {
         let port = state.port();
-        if self.file.is_some() && state.token.is_none() {
+        if self.store.is_some() && state.token.is_none() {
             bail!("the API has no token");
         }
         let server = ApiServer::start(
@@ -348,13 +361,13 @@ mod tests {
 
     #[tokio::test]
     async fn the_stored_api_starts_off_and_switches_on_with_a_kept_token() {
-        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
         let switch = ApiSwitch::start(
             ApiMode::Stored {
                 port: None,
                 token: None,
             },
-            directory.path(),
+            store.clone(),
             test_core(),
             CancellationToken::new(),
         )
@@ -367,15 +380,15 @@ mod tests {
         assert_eq!(status.port, DEFAULT_API_PORT);
 
         // Not the default port, which the owner's app may hold.
-        let mut stored = ApiFile::new(directory.path()).load().unwrap();
+        let mut stored = store.get(&API).unwrap().unwrap_or_default();
         stored.port = Some(free_port());
-        ApiFile::new(directory.path()).save(&stored).unwrap();
-        let switch = restart(directory.path()).await;
+        store.set(&API, &stored).unwrap();
+        let switch = restart(&store).await;
 
         let on = switch.set_enabled(true).await.unwrap();
         let address = on.address.expect("it listens");
         let token = on.token.clone().expect("it made a token");
-        let stored = ApiFile::new(directory.path()).load().unwrap();
+        let stored = store.get(&API).unwrap().unwrap_or_default();
         assert!(stored.enabled);
         assert_eq!(stored.token(), Some(token.clone()));
         assert_eq!(get(address, None).await, 401);
@@ -383,7 +396,7 @@ mod tests {
 
         // It comes back on, with the same token, after a restart.
         switch.shutdown().await.unwrap();
-        let switch = restart(directory.path()).await;
+        let switch = restart(&store).await;
         let status = switch.status().await;
         assert!(status.enabled);
         assert_eq!(status.token, Some(token.clone()));
@@ -400,32 +413,32 @@ mod tests {
         let off = switch.set_enabled(false).await.unwrap();
         assert!(!off.enabled);
         assert_eq!(off.address, None);
-        let stored = ApiFile::new(directory.path()).load().unwrap();
+        let stored = store.get(&API).unwrap().unwrap_or_default();
         assert!(!stored.enabled);
         assert_eq!(stored.token(), Some(new_token), "the token is kept");
     }
 
     #[tokio::test]
     async fn a_port_in_use_leaves_it_off_and_says_why() {
-        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
         let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = taken.local_addr().unwrap().port();
         let stored = StoredApi {
             port: Some(port),
             ..StoredApi::default()
         };
-        ApiFile::new(directory.path()).save(&stored).unwrap();
-        let switch = restart(directory.path()).await;
+        store.set(&API, &stored).unwrap();
+        let switch = restart(&store).await;
         assert!(switch.set_enabled(true).await.is_err());
         let status = switch.status().await;
         assert!(!status.enabled);
-        assert!(!ApiFile::new(directory.path()).load().unwrap().enabled);
+        assert!(!store.get(&API).unwrap().unwrap_or_default().enabled);
 
         // Stored as on, it starts anyway, with the reason.
-        let mut stored = ApiFile::new(directory.path()).load().unwrap();
+        let mut stored = store.get(&API).unwrap().unwrap_or_default();
         stored.enabled = true;
-        ApiFile::new(directory.path()).save(&stored).unwrap();
-        let status = restart(directory.path()).await.status().await;
+        store.set(&API, &stored).unwrap();
+        let status = restart(&store).await.status().await;
         assert!(status.enabled);
         assert_eq!(status.address, None);
         assert!(
@@ -436,14 +449,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_port_for_the_run_turns_it_on_without_storing_that() {
-        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
         let token = ApiToken::from_secret("for-this-run").unwrap();
         let switch = ApiSwitch::start(
             ApiMode::Stored {
                 port: Some(0),
                 token: Some(token.clone()),
             },
-            directory.path(),
+            store.clone(),
             test_core(),
             CancellationToken::new(),
         )
@@ -453,19 +466,19 @@ mod tests {
         assert!(status.enabled);
         assert_eq!(status.token, Some(token));
         assert_ne!(status.address.unwrap().port(), 0);
-        assert!(!ApiFile::new(directory.path()).load().unwrap().enabled);
+        assert!(!store.get(&API).unwrap().unwrap_or_default().enabled);
     }
 
     #[tokio::test]
     async fn an_always_on_api_cant_be_switched() {
-        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
         let switch = ApiSwitch::start(
             ApiMode::Always {
                 host: IpAddr::V4(Ipv4Addr::LOCALHOST),
                 port: 0,
                 token: None,
             },
-            directory.path(),
+            store.clone(),
             test_core(),
             CancellationToken::new(),
         )
@@ -476,16 +489,16 @@ mod tests {
         assert_eq!(get(status.address.unwrap(), None).await, 200);
         assert!(switch.set_enabled(false).await.is_err());
         assert!(switch.new_token().await.is_err());
-        assert!(!directory.path().join("api.json").exists());
+        assert_eq!(store.get(&API).unwrap(), None);
     }
 
-    async fn restart(directory: &std::path::Path) -> ApiSwitch {
+    async fn restart(store: &Store) -> ApiSwitch {
         ApiSwitch::start(
             ApiMode::Stored {
                 port: None,
                 token: None,
             },
-            directory,
+            store.clone(),
             test_core(),
             CancellationToken::new(),
         )

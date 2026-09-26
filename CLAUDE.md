@@ -26,7 +26,7 @@ collide with another run. Do this every time, without being asked:
   `python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'`.
   The app serves no API unless given `--api-port` (pass a free one) or
   Settings → Command line access is on, which listens on 24816 unless
-  its `api.json` says otherwise: don't switch it on in a test run that
+  its store says otherwise: don't switch it on in a test run that
   wasn't given `--api-port`.
 - **Network.** Pass `--discovery-loopback` (CLI and app) so nothing
   announces on or listens to the LAN: discovery binds `127.255.255.255:1716`

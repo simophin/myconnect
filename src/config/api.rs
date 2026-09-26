@@ -1,21 +1,21 @@
-use std::{
-    fmt, fs,
-    path::{Path, PathBuf},
-};
+use std::{fmt, path::Path};
 
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
-use super::{ApiToken, write_private_file};
+use super::ApiToken;
+use crate::store::{self, ConfigKey, Store};
 
-/// The app's HTTP API as persisted in `api.json`: whether it serves it, on
+/// Where the app's HTTP API settings are kept.
+pub const API: ConfigKey<StoredApi> = ConfigKey::new("core.api");
+
+/// The app's HTTP API as stored under [`API`]: whether it serves it, on
 /// which port, and the token clients must present. The token is kept even
 /// while the API is off, so turning it back on doesn't break a CLI set up
-/// with it. `ferry-cli` reads it too: on the same machine it needs no
-/// token or port of its own.
+/// with it. `ferry-cli` reads it too ([`StoredApi::read`]): on the same
+/// machine it needs no token or port of its own.
 ///
-/// Apart from `settings.json` because it holds a secret, which must not
-/// reach `GET /settings` or the settings events.
+/// Not a setting: settings are served by `GET /settings` and sent with
+/// events, and this holds a secret.
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct StoredApi {
@@ -28,6 +28,16 @@ pub struct StoredApi {
 }
 
 impl StoredApi {
+    /// What the daemon with data directory `data_dir` stored, without
+    /// creating its database if there is none. `None` if nothing is stored
+    /// or it can't be read.
+    pub fn read(data_dir: &Path) -> Option<Self> {
+        if !data_dir.join(store::FILE_NAME).is_file() {
+            return None;
+        }
+        Store::open(data_dir).ok()?.get(&API).ok()?
+    }
+
     /// The stored token, if there is a valid one.
     pub fn token(&self) -> Option<ApiToken> {
         self.token
@@ -51,60 +61,19 @@ impl fmt::Debug for StoredApi {
     }
 }
 
-/// `api.json` under the configuration directory, readable only by this
-/// user.
-#[derive(Clone, Debug)]
-pub struct ApiFile {
-    directory: PathBuf,
-}
-
-impl ApiFile {
-    const FILE_NAME: &str = "api.json";
-
-    pub fn new(config_dir: impl AsRef<Path>) -> Self {
-        Self {
-            directory: config_dir.as_ref().to_path_buf(),
-        }
-    }
-
-    /// Read what is stored; a missing file means the API was never turned
-    /// on.
-    pub fn load(&self) -> Result<StoredApi, ApiFileError> {
-        match fs::read(self.directory.join(Self::FILE_NAME)) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| ApiFileError::Corrupt),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(StoredApi::default()),
-            Err(error) => Err(ApiFileError::Io(error)),
-        }
-    }
-
-    pub fn save(&self, api: &StoredApi) -> Result<(), ApiFileError> {
-        let bytes = serde_json::to_vec_pretty(api).map_err(|_| ApiFileError::Encoding)?;
-        write_private_file(&self.directory, Self::FILE_NAME, &bytes).map_err(ApiFileError::Io)
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum ApiFileError {
-    #[error("API settings storage operation failed")]
-    Io(#[source] std::io::Error),
-    #[error("API settings file is corrupt")]
-    Corrupt,
-    #[error("API settings could not be encoded")]
-    Encoding,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn missing_file_is_off_and_saved_settings_round_trip() {
+    fn it_round_trips_through_the_store_and_reads_without_creating_one() {
         let directory = tempfile::tempdir().unwrap();
-        let file = ApiFile::new(directory.path().join("config"));
-        let empty = file.load().unwrap();
-        assert!(!empty.enabled);
-        assert_eq!(empty.token(), None);
+        let data = directory.path().join("data");
+        assert_eq!(StoredApi::read(&data), None);
+        assert!(!data.exists(), "reading creates nothing");
 
+        let store = Store::open(&data).unwrap();
+        assert_eq!(StoredApi::read(&data), None, "nothing stored yet");
         let token = ApiToken::generate();
         let mut api = StoredApi {
             enabled: true,
@@ -112,35 +81,19 @@ mod tests {
             ..StoredApi::default()
         };
         api.set_token(&token);
-        file.save(&api).unwrap();
-        let loaded = file.load().unwrap();
-        assert_eq!(loaded, api);
-        assert_eq!(loaded.token(), Some(token.clone()));
-        assert!(!format!("{loaded:?}").contains(token.expose_secret()));
+        store.set(&API, &api).unwrap();
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(directory.path().join("config/api.json"))
-                .unwrap()
-                .permissions()
-                .mode();
-            assert_eq!(mode & 0o777, 0o600);
-        }
+        let read = StoredApi::read(&data).unwrap();
+        assert_eq!(read, api);
+        assert_eq!(read.token(), Some(token.clone()));
+        assert!(!format!("{read:?}").contains(token.expose_secret()));
     }
 
     #[test]
-    fn an_invalid_token_reads_as_none_and_garbage_is_corrupt() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("api.json");
-        let file = ApiFile::new(directory.path());
-
-        fs::write(&path, r#"{"enabled":true,"token":"has space"}"#).unwrap();
-        let loaded = file.load().unwrap();
-        assert!(loaded.enabled);
-        assert_eq!(loaded.token(), None);
-
-        fs::write(&path, "not json").unwrap();
-        assert!(matches!(file.load(), Err(ApiFileError::Corrupt)));
+    fn an_invalid_token_reads_as_none() {
+        let api: StoredApi =
+            serde_json::from_str(r#"{"enabled":true,"token":"has space"}"#).unwrap();
+        assert!(api.enabled);
+        assert_eq!(api.token(), None);
     }
 }
