@@ -111,7 +111,7 @@ first needs one adds it to the `gui` feature.
 | Running tasks in tests | `iced_runtime` 0.14 (dev) | Already in iced's tree; its `task::into_stream` lets a unit test see what a `Task` produces, which `iced` doesn't re-export. |
 | Arguments | `clap` | Already the CLI's parser; `env` reads each flag's environment variable. |
 | File and folder dialogs | `rfd` (step 9) | The standard native dialog crate: the XDG portal on Linux (zenity if there is none), AppKit, Win32. Its async dialogs need no runtime of their own. |
-| Notifications | Linux: `zbus` 5 (step 13); macOS and Windows: `notify-rust` (step 13b) | On Linux the app talks to `org.freedesktop.Notifications` itself, so it can withdraw a notification and hear its click without a thread per notification (see Desktop integration). On `async-io`, as iced's theme detection already has it: its `tokio` feature would need a tokio runtime on iced's threads. `notify-rust` gives macOS and Windows toasts. |
+| Notifications | Linux: `zbus` 5 (step 13); macOS: `mac-usernotifications` 0.3; Windows: `notify-rust` (step 13b) | On Linux the app talks to `org.freedesktop.Notifications` itself, so it can withdraw a notification and hear its click without a thread per notification (see Desktop integration). On `async-io`, as iced's theme detection already has it: its `tokio` feature would need a tokio runtime on iced's threads. On macOS, `UNUserNotificationCenter` through `mac-usernotifications`, by `notify-rust`'s author and the base of its (preview) macOS backend: its async API gives the click and withdrawal without a thread per notification, on any runtime. `notify-rust` gives Windows toasts. |
 | Opening files and folders | `opener` (step 8) | Opens with the default app and reveals in the file manager on each platform. |
 | Single instance | `interprocess` (step 13), and `libc` on Unix for the uid | Cross-platform local sockets, named from the data dir, so isolated instances never collide. |
 | Tray (Linux) | `ksni` 0.3 (step 13) | A StatusNotifierItem over D-Bus in pure Rust, with no libappindicator or GTK. Spawned with `assume_sni_available(true)`, so a tray host that starts, stops or restarts later is followed. Its `async-io` feature, not the default `tokio`, for the same reason as `zbus`. |
@@ -172,11 +172,20 @@ Decisions for steps 11 and 13:
 - **Notifications on Linux talk D-Bus themselves** (`zbus`, on the
   daemon's runtime): `Notify` with a `default` action, `CloseNotification`
   to withdraw the pairing request, and the `ActionInvoked` and
-  `NotificationClosed` signals from one subscription. `notify-rust` is a
-  macOS and Windows dependency only. **Clicking a notification shows the
-  window on Linux and Windows;** on macOS it is best effort (the
-  `NSUserNotificationCenter` wait, one thread per notification), and
-  withdrawing is Linux-only until the macOS app is a signed bundle.
+  `NotificationClosed` signals from one subscription. **On macOS** the
+  app uses `UNUserNotificationCenter` (`mac-usernotifications`, on the
+  daemon's runtime): a click on the body shows the window, and the
+  pairing request's notification is withdrawn, as on Linux. It needs the
+  app's bundle; an ad-hoc signature is enough, but macOS refuses a bundle
+  under `/tmp` ("Failed to find or validate client" in `usernoted`'s
+  log), and without a bundle (`cargo run`) nothing shows. It asks the
+  user's permission on the first launch. Not `notify-rust`'s default
+  `NSUserNotificationCenter` backend: unless it can pose as an installed
+  app, it makes the whole process report Terminal's bundle id, and it
+  hears a click only through a blocking wait per notification.
+  `notify-rust` is a Windows dependency only. **Clicking a notification
+  shows the window on Linux, macOS and Windows;** withdrawing is Linux and
+  macOS only.
 - **Single instance:** `GenericNamespaced`, named
   `myconnect-<uid>-<hash of the absolute data dir>` (short enough for
   macOS's 104-byte socket paths; the uid keeps users apart in Linux's

@@ -104,17 +104,24 @@ the CLI, and for tagged builds an Arch Linux PKGBUILD. The scripts are in
 
 ## Open work
 
-**The tray and notifications on macOS and Windows** (the plan's step
-13b). They work on Linux only; macOS and Windows get no tray, so the app
-quits when its window closes there, and no notifications. It needs a Mac
-and a Windows machine:
+**The tray on macOS and Windows, and notifications on Windows** (the
+plan's step 13b). The tray works on Linux only; macOS and Windows get
+none, so the app quits when its window closes there. Notifications work
+on Linux and macOS (ADR 0001, "Desktop integration"); Windows gets none.
+It needs a Mac and a Windows machine:
 
 - `tray-icon` + `muda` (ADR 0001), created in the first `update` on the
   main thread, with its menu and icon events forwarded into the
   `DesktopEvent` channel; a `Tray` over it, fed the same `TrayItem`s.
   macOS uses `assets/tray_icon_template.png` as a template image.
-- `notify-rust` for `Notifier`: clicks work on Windows and are best effort
-  on macOS; nothing is withdrawn (ADR 0001, "Desktop integration").
+- `notify-rust` for Windows' `Notifier`: clicks work; nothing is
+  withdrawn (ADR 0001, "Desktop integration").
+- macOS notifications were checked from an ad-hoc signed bundle with the
+  app's id, driving the real `Notifier` in an iced event loop (show, a
+  click reaching `NotificationClicked`, and withdrawal), not yet in the
+  full app with a peer: loopback discovery doesn't work on macOS (see
+  "Traps"). They need the bundle, so `cargo run` shows none; run a bundle
+  from outside `/tmp` (macOS refuses those), e.g. under `target/`.
 - macOS's menu-bar Quit and logout take the quit path.
 - Confirm single instance (the `/tmp` socket file on macOS, a named pipe
   on Windows) and placement with several monitors.
