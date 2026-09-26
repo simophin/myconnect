@@ -228,6 +228,7 @@ impl App {
             | DesktopEvent::NotificationClicked
             | DesktopEvent::ShowRequested => self.show_window(),
             DesktopEvent::TrayChose(command) => self.tray_command(command),
+            DesktopEvent::TrayDropped(paths) => self.dropped_on_tray(paths),
             DesktopEvent::TrayAvailable(available) => {
                 self.desktop.tray_available = available;
                 // Nothing else could bring a closed window back.

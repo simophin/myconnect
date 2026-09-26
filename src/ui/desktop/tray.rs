@@ -4,7 +4,8 @@
 //!
 //! Linux has a StatusNotifierItem over D-Bus (`ksni`); macOS and Windows
 //! have `tray-icon` with `muda` menus, shown once the event loop runs
-//! ([`Tray::start`]).
+//! ([`Tray::start`]). On macOS, files dropped on the icon are reported too
+//! ([`DesktopEvent::TrayDropped`](super::DesktopEvent::TrayDropped)).
 
 use std::sync::Arc;
 
@@ -288,7 +289,13 @@ mod native {
                 builder = builder.with_icon(icon);
             }
             match builder.build() {
-                Ok(tray) => ICON_ITEM.with_borrow_mut(|item| *item = Some(tray)),
+                Ok(tray) => {
+                    #[cfg(target_os = "macos")]
+                    if let Some(status_item) = tray.ns_status_item() {
+                        super::drops::accept(&status_item, self.events.clone());
+                    }
+                    ICON_ITEM.with_borrow_mut(|item| *item = Some(tray));
+                }
                 Err(error) => {
                     tracing::warn!(%error, "no tray icon");
                     let _ = self.events.send(DesktopEvent::TrayAvailable(false));
@@ -319,6 +326,157 @@ mod native {
         fn the_icon_decodes() {
             assert!(icon().is_some());
         }
+    }
+}
+
+/// Files dropped on the menu bar icon, on macOS. The status item's window
+/// takes the drag (no view in it is registered for files) and passes it to
+/// its delegate, a [`DropTarget`], which reports the files as
+/// [`DesktopEvent::TrayDropped`](super::DesktopEvent::TrayDropped).
+#[cfg(target_os = "macos")]
+mod drops {
+    use std::{cell::RefCell, path::PathBuf};
+
+    use objc2::{
+        ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
+        rc::Retained,
+        runtime::{AnyClass, AnyObject, NSObject, NSObjectProtocol, ProtocolObject},
+    };
+    use objc2_app_kit::{
+        NSDragOperation, NSDraggingDestination, NSDraggingInfo, NSPasteboard,
+        NSPasteboardTypeFileURL, NSPasteboardURLReadingFileURLsOnlyKey, NSStatusBarButton,
+        NSStatusItem, NSWindowDelegate,
+    };
+    use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString, NSURL};
+
+    use super::{super::DesktopEvent, Events};
+
+    thread_local! {
+        /// The window holds its delegate weakly.
+        static TARGET: RefCell<Option<Retained<DropTarget>>> = const { RefCell::new(None) };
+    }
+
+    /// Take files dropped on `status_item`, reporting them to `events`.
+    /// Only takes on the main thread.
+    pub fn accept(status_item: &NSStatusItem, events: Events) {
+        let Some(main_thread) = MainThreadMarker::new() else {
+            return;
+        };
+        let Some(button) = status_item.button(main_thread) else {
+            return;
+        };
+        let Some(window) = button.window() else {
+            tracing::warn!("the tray icon has no window to drop files on");
+            return;
+        };
+        let target = DropTarget::new(main_thread, button, events);
+        // SAFETY: an AppKit constant, valid for the process's lifetime.
+        let file_url = unsafe { NSPasteboardTypeFileURL };
+        window.registerForDraggedTypes(&NSArray::from_slice(&[file_url]));
+        window.setDelegate(Some(ProtocolObject::from_ref(&*target)));
+        TARGET.set(Some(target));
+    }
+
+    pub struct Ivars {
+        events: Events,
+        /// Highlighted while files hover over it, as a drop target.
+        button: Retained<NSStatusBarButton>,
+    }
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[thread_kind = MainThreadOnly]
+        #[name = "FerryTrayDropTarget"]
+        #[ivars = Ivars]
+        pub struct DropTarget;
+
+        unsafe impl NSObjectProtocol for DropTarget {}
+
+        unsafe impl NSWindowDelegate for DropTarget {}
+
+        unsafe impl NSDraggingDestination for DropTarget {
+            #[unsafe(method(draggingEntered:))]
+            fn dragging_entered(
+                &self,
+                sender: &ProtocolObject<dyn NSDraggingInfo>,
+            ) -> NSDragOperation {
+                if !has_files(&sender.draggingPasteboard()) {
+                    return NSDragOperation::None;
+                }
+                self.ivars().button.highlight(true);
+                NSDragOperation::Copy
+            }
+
+            #[unsafe(method(draggingExited:))]
+            fn dragging_exited(&self, _sender: Option<&ProtocolObject<dyn NSDraggingInfo>>) {
+                self.ivars().button.highlight(false);
+            }
+
+            #[unsafe(method(performDragOperation:))]
+            fn perform_drag_operation(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> bool {
+                self.ivars().button.highlight(false);
+                let files = files(&sender.draggingPasteboard());
+                !files.is_empty()
+                    && self
+                        .ivars()
+                        .events
+                        .send(DesktopEvent::TrayDropped(files))
+                        .is_ok()
+            }
+
+            #[unsafe(method(draggingEnded:))]
+            fn dragging_ended(&self, _sender: &ProtocolObject<dyn NSDraggingInfo>) {
+                self.ivars().button.highlight(false);
+            }
+        }
+    );
+
+    impl DropTarget {
+        fn new(
+            main_thread: MainThreadMarker,
+            button: Retained<NSStatusBarButton>,
+            events: Events,
+        ) -> Retained<Self> {
+            let this = Self::alloc(main_thread).set_ivars(Ivars { events, button });
+            // SAFETY: `NSObject`'s `init`, on a freshly allocated object.
+            unsafe { msg_send![super(this), init] }
+        }
+    }
+
+    /// What `readObjectsForClasses:options:` asks for: file URLs only.
+    fn query() -> (
+        Retained<NSArray<AnyClass>>,
+        Retained<NSDictionary<NSString, AnyObject>>,
+    ) {
+        let classes = NSArray::from_slice(&[NSURL::class()]);
+        let yes = NSNumber::new_bool(true);
+        // SAFETY: an AppKit constant, valid for the process's lifetime.
+        let key = unsafe { NSPasteboardURLReadingFileURLsOnlyKey };
+        let options = NSDictionary::from_slices(&[key], &[&*yes as &AnyObject]);
+        (classes, options)
+    }
+
+    fn has_files(pasteboard: &NSPasteboard) -> bool {
+        let (classes, options) = query();
+        // SAFETY: the classes are `NSURL`, which reads from a pasteboard,
+        // and the option's value is the boolean it expects.
+        unsafe { pasteboard.canReadObjectForClasses_options(&classes, Some(&options)) }
+    }
+
+    /// The local files on `pasteboard`, in order.
+    fn files(pasteboard: &NSPasteboard) -> Vec<PathBuf> {
+        let (classes, options) = query();
+        // SAFETY: as in `has_files`.
+        let Some(objects) =
+            (unsafe { pasteboard.readObjectsForClasses_options(&classes, Some(&options)) })
+        else {
+            return Vec::new();
+        };
+        objects
+            .iter()
+            .filter_map(|object| object.downcast::<NSURL>().ok())
+            .filter_map(|url| url.to_file_path())
+            .collect()
     }
 }
 

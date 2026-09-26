@@ -139,6 +139,13 @@ right one. It type-checks for both (below). Still to do:
   from outside `/tmp` (macOS refuses those), e.g. under `target/`. Check
   that a click brings the window (and its Dock icon) back while the app
   is in the menu bar only.
+- Files dropped on the menu bar icon (`drops` in `src/ui/desktop/tray.rs`)
+  are untested on a Mac: only type-checked, with the app's side
+  (`DesktopEvent::TrayDropped`, the chooser) covered by unit tests. Check
+  that the icon highlights while files hover, that the drop opens the
+  window on the chooser (also with the window closed and no Dock icon),
+  that a folder is refused, and that clicking the icon still opens the
+  menu.
 - macOS's menu-bar Quit and logout take the quit path. They go through
   `terminate:`, which exits after winit's `exiting`, so the daemon's
   shutdown after `program.run()` likely doesn't run.

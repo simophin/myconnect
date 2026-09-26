@@ -1,5 +1,5 @@
-//! Files dropped on the window: where they go, and the chooser that asks
-//! when the page doesn't say.
+//! Files dropped on the window or the tray icon: where they go, and the
+//! chooser that asks when the page doesn't say.
 
 use std::path::PathBuf;
 
@@ -14,21 +14,10 @@ impl App {
     /// Files were dropped on the window: send them where the page says, if
     /// a feature takes them there, or ask where. Folders are refused.
     pub(super) fn dropped(&mut self, paths: Vec<PathBuf>) -> Task<Message> {
-        if self.running().is_none() {
-            return Task::none();
-        }
-        // Folders can't be sent, and some drops aren't local files.
-        let files: Vec<_> = paths
-            .iter()
-            .filter(|path| path.is_file())
-            .cloned()
-            .collect();
-        if files.is_empty() {
-            if paths.is_empty() {
-                return Task::none();
-            }
-            return self.toast("Only files can be sent, not folders.".into(), None);
-        }
+        let files = match self.sendable(paths) {
+            Ok(files) => files,
+            Err(refused) => return refused,
+        };
         match self.drop_target_here() {
             Some(target) => Task::done(Message::Feature((target.on_drop)(files), Origin::Window)),
             None => {
@@ -36,6 +25,43 @@ impl App {
                 Task::none()
             }
         }
+    }
+
+    /// Files were dropped on the tray icon: show the window, asking which
+    /// device to send them to, whatever page it shows.
+    pub(super) fn dropped_on_tray(&mut self, paths: Vec<PathBuf>) -> Task<Message> {
+        let shown = self.show_window();
+        // The pairing prompt is modal: the chooser would open under it.
+        if self.incoming_prompt_shows() {
+            return shown;
+        }
+        match self.sendable(paths) {
+            Ok(files) => {
+                self.choosing = Some(files);
+                shown
+            }
+            Err(refused) => Task::batch([shown, refused]),
+        }
+    }
+
+    /// The files among dropped `paths`, or what to do instead if there are
+    /// none. Folders can't be sent, and some drops aren't local files.
+    fn sendable(&mut self, paths: Vec<PathBuf>) -> Result<Vec<PathBuf>, Task<Message>> {
+        if self.running().is_none() {
+            return Err(Task::none());
+        }
+        let files: Vec<_> = paths
+            .iter()
+            .filter(|path| path.is_file())
+            .cloned()
+            .collect();
+        if files.is_empty() {
+            if paths.is_empty() {
+                return Err(Task::none());
+            }
+            return Err(self.toast("Only files can be sent, not folders.".into(), None));
+        }
+        Ok(files)
     }
 
     /// The chooser's device was picked: open its page and hand it the
@@ -123,7 +149,7 @@ mod tests {
     use super::*;
     use crate::{
         core::Core,
-        ui::{KeyCommand, features::browse, testing, tests::*},
+        ui::{KeyCommand, desktop::DesktopEvent, features::browse, testing, tests::*},
     };
 
     /// An app over a core that runs share, with `photo.jpg` and `notes.txt` to send from a folder that
@@ -322,6 +348,50 @@ mod tests {
         assert_eq!(sharing.sent(), [(peer.clone(), "photo.jpg".into())]);
         // The device's page, where the transfer shows.
         assert_eq!(sharing.app.route, Route::Device(peer));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn files_dropped_on_the_tray_open_the_window_and_ask_where_to_go() {
+        let mut sharing = Sharing::new();
+        let peer = sharing.peer(testing::PEER_ID, true).await;
+        // Even from a device's page, which a drop on the window would use.
+        sharing.app.route = Route::Device(peer.clone());
+        sharing.window(window::Event::Closed).await;
+        assert!(sharing.app.window.is_none());
+
+        let (photo, album) = (sharing.file("photo.jpg"), sharing.file("album"));
+        settle(
+            &mut sharing.app,
+            Message::Desktop(DesktopEvent::TrayDropped(vec![album, photo])),
+        )
+        .await;
+        assert!(sharing.app.window.is_some());
+        assert!(shows(&sharing.app, "Send photo.jpg"));
+        assert!(sharing.sent().is_empty());
+
+        assert_eq!(sharing.app.recipients()[0].device_id, peer);
+        // The chooser's entry; the page's own "Peer" is under it.
+        settle(&mut sharing.app, Message::DropOn(peer.clone())).await;
+        assert!(sharing.app.choosing.is_none());
+        assert_eq!(sharing.sent(), [(peer, "photo.jpg".into())]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_folder_dropped_on_the_tray_is_refused() {
+        let mut sharing = Sharing::new();
+        let _peer = sharing.peer(testing::PEER_ID, true).await;
+
+        let album = sharing.file("album");
+        settle(
+            &mut sharing.app,
+            Message::Desktop(DesktopEvent::TrayDropped(vec![album])),
+        )
+        .await;
+        assert!(sharing.app.choosing.is_none());
+        assert_eq!(
+            sharing.app.toasts.items()[0].text,
+            "Only files can be sent, not folders."
+        );
     }
 
     #[tokio::test(start_paused = true)]
