@@ -941,7 +941,7 @@ pub(crate) mod tests {
         // Folders first; hidden files stay hidden.
         assert!(browser.top("DCIM") < browser.top("notes.txt"));
         assert!(browser.shows("2.0 KB"));
-        assert!(browser.shows("2026-09-24 14:03"));
+        assert!(browser.shows("Sep 24, 2026, 2:03\u{A0}PM"));
         assert!(!browser.shows(".nomedia"));
 
         browser.click("DCIM").await;

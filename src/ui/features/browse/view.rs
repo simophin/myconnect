@@ -521,7 +521,7 @@ mod tests {
         let mut browser = Browser::new();
         browser.go(Some(INTERNAL)).await;
         let narrow = Simulator::with_size(Default::default(), (500.0, 600.0), browser.page())
-            .find("2026-09-24 14:03")
+            .find("Sep 24, 2026, 2:03\u{A0}PM")
             .is_ok();
         assert!(!narrow);
         assert!(browser.shows("Modified"), "the default size is wide");

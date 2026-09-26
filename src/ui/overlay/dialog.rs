@@ -423,9 +423,13 @@ fn field_view<'a>(
         (None, None) => None,
     };
     let counter = field.max_len.map(|max| {
-        text!("{}/{max}", field.value.chars().count())
-            .size(12)
-            .style(text::secondary)
+        text(fl!(
+            "dialog-counter",
+            count = field.value.chars().count(),
+            max = max
+        ))
+        .size(12)
+        .style(text::secondary)
     });
     if note.is_some() || counter.is_some() {
         let mut under = row![].spacing(8);

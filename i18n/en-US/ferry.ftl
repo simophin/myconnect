@@ -41,6 +41,8 @@ drop-chooser-no-devices = No paired device is connected and able to receive file
 ## Dialogs (src/ui/overlay/dialog.rs; also the drop chooser)
 
 dialog-cancel = Cancel
+# Under a text field with a limit: characters typed, and how many fit.
+dialog-counter = { $count }/{ $max }
 
 ## An incoming pairing request (src/ui/overlay/incoming.rs)
 
@@ -160,6 +162,18 @@ notify-open = Open
 
 widget-back = Back
 widget-retry = Retry
+
+# File sizes (1 KB is 1024 bytes). The number is already written in the
+# language's digits and decimal separator, like "1.5" or "1,5".
+widget-size-bytes =
+    { $count ->
+        [one] { $count } byte
+       *[other] { $count } bytes
+    }
+widget-size-kb = { $size } KB
+widget-size-mb = { $size } MB
+widget-size-gb = { $size } GB
+widget-size-tb = { $size } TB
 
 ## The device list, the home page (src/ui/pages/devices.rs)
 
@@ -302,7 +316,9 @@ findmyphone-failed = Couldn’t ring { $name }
 
 ## Battery (src/ui/features/battery.rs)
 
-# A device's charge, in its status chip; `charge` is 0 to 100.
+# A device's charge, in its status chip; `charge` is 0 to 100, written in
+# the language's digits. The percent sign and any space before it (as in
+# German's "82 %") belong here.
 battery-charge = { $charge }%
 
 ## Sending files (src/ui/features/share.rs)

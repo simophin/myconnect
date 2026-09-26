@@ -70,11 +70,11 @@ Split into four commits, one per step, each passing the checks.
       `grep` `src/ui` for remaining user-visible literals
 
 ### 3. Numbers, dates, sizes
-- [ ] `format_timestamp` in the locale's date and time format (chrono's
+- [x] `format_timestamp` in the locale's date and time format (chrono's
       `unstable-locales`, or equivalent)
-- [ ] `format_bytes` with the locale's decimal separator and unit names
+- [x] `format_bytes` with the locale's decimal separator and unit names
       from the `.ftl`
-- [ ] Percentages and other numbers through Fluent
+- [x] Percentages and other numbers through Fluent
 
 ### 4. Pseudo-locale
 - [ ] A generated `en-XA` (accented, ~40% longer, bracketed) built from
@@ -214,3 +214,34 @@ Anything a later phase must know, one line each, newest last.
   Linux-only code (`desktop::notify`'s D-Bus, the SNI tray) was
   type-checked with `cargo clippy --target x86_64-unknown-linux-musl` and
   HANDOFF's fake `cc`/`ar`; the real app wasn't run (no Xvfb on macOS).
+- 3: numbers and dates come from ICU4X (`icu_decimal`, `icu_datetime`;
+  ADR 0001's table says why not chrono's `unstable-locales`), in
+  `ui::i18n::format`. Every number a message is given is written by
+  ICU4X through Fluent's `set_formatter` hook, which `i18n::select`
+  reinstalls, like isolation, after (re)loading: phase 7's switch gets it
+  by going through `select`. For fixed fraction digits pass
+  `format::decimal(value, digits)` as the argument; a plain integer gets
+  the locale's grouping ("1,023 bytes"). Units and the percent sign stay
+  in the message (`widget-size-*`, `battery-charge`), so each language
+  spaces them its own way ("82 %" in German).
+- 3: the formatting locale is the first requested one that speaks the
+  translation's language, else the translation's (`en-GB` gets British
+  dates with the en-US text; `fr` with no French gets en-US). Phase 7's
+  setting should pass the chosen language as `requested`. Dates are the
+  medium date with hours and minutes ("Sep 24, 2026, 2:03 PM",
+  "24.09.2026, 14:03", "2026年9月24日 14:03"); browse's Modified column
+  (168 px) fits en-US's; check zh-CN and de in phase 6's snapshots.
+- 3: CLDR's narrow no-break space (U+202F, before "PM" and in French
+  grouping) is turned into U+00A0, since Figtree has no glyph for it;
+  tests expecting a time use `\u{A0}`. `1 bytes` is now `1 byte`
+  (plural), and counts over 999 are grouped.
+- 3: new keys `widget-size-bytes`/`-kb`/`-mb`/`-gb`/`-tb` and
+  `dialog-counter` (`{ $count }/{ $max }`). The About page's protocol
+  version and the app's version stay strings, so they aren't grouped;
+  pass any future port or year as a string for the same reason.
+- 3 was checked on macOS, as 2d was: the same `tests/lan.rs` loopback
+  failure, `transfer_e2e` passed, `ui_e2e` doesn't run there. Snapshots
+  (browse's folder, transfers, the prompt's counter) read right in
+  en-US. The real app wasn't run (no Xvfb on macOS), and no locale but
+  en-US was seen on screen: only unit tests cover de, fr, en-GB and
+  zh-CN formats. Release binary size with ICU4X's data wasn't measured.

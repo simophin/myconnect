@@ -7,7 +7,10 @@
 //! `fl!("drop-send-to-header", count = 3)`. The language is chosen once,
 //! at start ([`select_system_language`], from `launch::run`); until then,
 //! and in tests, [`LOADER`] holds en-US, the fallback for any key a
-//! translation lacks. See `docs/PLAN_I18N.md`.
+//! translation lacks. Numbers in messages and dates are in the user's
+//! locale ([`format`]). See `docs/PLAN_I18N.md`.
+
+pub mod format;
 
 use std::sync::LazyLock;
 
@@ -34,8 +37,15 @@ pub static LOADER: LazyLock<FluentLanguageLoader> = LazyLock::new(|| {
         .expect("the en-US messages are embedded and parse");
     // Unit tests compare text with plain strings.
     loader.set_use_isolating(!cfg!(test));
+    format_numbers(&loader);
     loader
 });
+
+/// Write `loader`'s numbers in the user's locale. Like isolation, this is
+/// lost whenever the loader's languages are (re)loaded.
+fn format_numbers(loader: &FluentLanguageLoader) {
+    loader.with_bundles_mut(|bundle| bundle.set_formatter(Some(format::format_fluent_value)));
+}
 
 /// A message from the app's `.ftl` files, in the chosen language:
 /// `fl!("key")`, or `fl!("key", name = value, ...)`.
@@ -82,6 +92,8 @@ fn select(requested: &[LanguageIdentifier]) -> Vec<LanguageIdentifier> {
     match i18n_embed::select(&*LOADER, &Localizations, requested) {
         Ok(languages) => {
             tracing::info!(?requested, ?languages, "chose the UI's languages");
+            format_numbers(&LOADER);
+            format::set_locale(requested, languages.first().unwrap_or(&en_us()));
             languages
         }
         // Only if an embedded file doesn't parse; the loader keeps what it
