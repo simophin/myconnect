@@ -31,7 +31,7 @@ released, so nothing on disk has to be carried over.
 - `window.json` stays a file: it's the UI's, and the UI keeps nothing in
   the daemon's store (HANDOFF's ground rules).
 
-[`../PLAN_STORE.md`](../PLAN_STORE.md) has the schema, the API and the
+[`../archive/PLAN_STORE.md`](../archive/PLAN_STORE.md) has the schema, the API and the
 steps.
 
 ## Consequences

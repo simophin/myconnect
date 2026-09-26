@@ -115,20 +115,12 @@ the CLI, and for tagged builds an Arch Linux PKGBUILD. The scripts are in
 
 The daemon keeps its identity, paired devices and settings in one SQLite
 database, `ferry.db`, with typed, watchable configs any plugin can declare
-keys for ([`PLAN_STORE.md`](PLAN_STORE.md)). The JSON files it used to
+keys for ([`archive/PLAN_STORE.md`](archive/PLAN_STORE.md)). The JSON files it used to
 write (`identity.json`, `settings.json`, `trusted-devices/`) are ignored,
 not migrated: a data directory from before gets a new identity, and its
 devices are paired again.
 
 ## Open work
-
-**The store's live check** ([`PLAN_STORE.md`](PLAN_STORE.md) step 8).
-Its unit and integration tests pass; it hasn't been run in the real app.
-On Linux, under the isolation recipe in `CLAUDE.md`, pair the app with a
-CLI peer, rename the device and change a setting, restart both, and check
-the pairing, the name and the setting survive. Also run a CLI daemon and
-the app on one fresh data directory at once: they should end up with the
-same identity.
 
 **The tray on macOS and Windows, and notifications on Windows** (the
 plan's step 13b). Notifications work on Linux and macOS (ADR 0001,

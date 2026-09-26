@@ -1,7 +1,6 @@
 # Plan: the daemon's data in SQLite
 
-**Status:** steps 1–7 are done. Step 8's check in the real app remains
-(HANDOFF, "Open work").
+**Status:** finished.
 
 The daemon keeps its data in JSON files: `identity.json`,
 `settings.json` and one `trusted-devices/<id>.json` per paired device.
@@ -10,7 +9,7 @@ handle badly, and plugins have nowhere to keep anything but a settings
 section. This plan moves the daemon's data into one SQLite database with
 a typed, reactive key/value table any part of the daemon can use,
 plugins included. The decision is
-[`adr/0002`](adr/0002-store-the-daemons-data-in-sqlite.md).
+[`adr/0002`](../adr/0002-store-the-daemons-data-in-sqlite.md).
 
 Ferry isn't released, so nothing is migrated: the old JSON files are
 ignored, and a device paired before the change has to be paired again.
