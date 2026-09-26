@@ -6,8 +6,8 @@
 ;            /DCLI=path\to\myconnect.exe /DOUT=path\to\setup.exe installer.nsi
 ;
 ; The app is installed as myConnect.exe and the CLI as cli\myconnect.exe:
-; Windows ignores case, so the two can't share a folder (docs/PLAN_ICED_UI.md,
-; "Owner decisions").
+; Windows ignores case, so the two can't share a folder (docs/adr/0001,
+; "Packaging").
 
 Unicode true
 !include "MUI2.nsh"

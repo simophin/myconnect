@@ -3,7 +3,7 @@
 //! what was chosen as a [`DesktopEvent`](super::DesktopEvent).
 //!
 //! Linux has a StatusNotifierItem over D-Bus (`ksni`). macOS and Windows
-//! have no tray yet (plan step 13b): the window always shows and closing it
+//! have no tray yet (HANDOFF, "Open work"): the window always shows and closing it
 //! quits.
 
 use std::sync::Arc;
