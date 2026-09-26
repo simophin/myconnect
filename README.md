@@ -36,9 +36,9 @@ theme.
 
 <table>
 <tr>
-<td valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="site/img/devices-dark.webp"><img src="site/img/devices-light.webp" alt="The device list: a phone with its battery, and a desktop" width="270"></picture></td>
-<td valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="site/img/device-dark.webp"><img src="site/img/device-light.webp" alt="A desktop's page: ping, ring, send clipboard, send files, and recent transfers" width="270"></picture></td>
-<td valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="site/img/pairing-request-dark.webp"><img src="site/img/pairing-request-light.webp" alt="A pairing request with the verification code to compare" width="270"></picture></td>
+<td valign="top"><img src="site/img/devices.webp" alt="The device list: a phone with its battery, and a desktop" width="270"></td>
+<td valign="top"><img src="site/img/device.webp" alt="A desktop's page: ping, ring, send clipboard, send files, and recent transfers" width="270"></td>
+<td valign="top"><img src="site/img/pairing-request.webp" alt="A pairing request with the verification code to compare" width="270"></td>
 </tr>
 <tr>
 <td align="center">Paired devices</td>
@@ -46,9 +46,9 @@ theme.
 <td align="center">Pairing, with a code to compare</td>
 </tr>
 <tr>
-<td valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="site/img/add-device-dark.webp"><img src="site/img/add-device-light.webp" alt="Add device: devices found on the network, and add by IP address" width="270"></picture></td>
-<td valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="site/img/transfers-dark.webp"><img src="site/img/transfers-light.webp" alt="Transfers in both directions, one in progress" width="270"></picture></td>
-<td valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="site/img/settings-dark.webp"><img src="site/img/settings-light.webp" alt="Settings: device name, download folder, clipboard sync, keep running in the tray" width="270"></picture></td>
+<td valign="top"><img src="site/img/add-device.webp" alt="Add device: devices found on the network, and add by IP address" width="270"></td>
+<td valign="top"><img src="site/img/transfers.webp" alt="Transfers in both directions, one in progress" width="270"></td>
+<td valign="top"><img src="site/img/settings.webp" alt="Settings: device name, download folder, clipboard sync, keep running in the tray" width="270"></td>
 </tr>
 <tr>
 <td align="center">Finding devices</td>
@@ -62,8 +62,8 @@ upload, rename, delete, create folders, and preview images.
 
 <table>
 <tr>
-<td valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="site/img/files-dark.webp"><img src="site/img/files-light.webp" alt="A phone's camera folder, with a photo's actions open" width="420"></picture></td>
-<td valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="site/img/file-preview-dark.webp"><img src="site/img/file-preview-light.webp" alt="An image preview" width="420"></picture></td>
+<td valign="top"><img src="site/img/files.webp" alt="A phone's camera folder, with a photo's actions open" width="420"></td>
+<td valign="top"><img src="site/img/file-preview.webp" alt="An image preview" width="420"></td>
 </tr>
 </table>
 
