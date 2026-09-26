@@ -2,20 +2,18 @@
 //! transport and control API) for the CLI and embedders, and is the one
 //! place that names the built-in plugins.
 
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    path::PathBuf,
-    sync::Arc,
-    time::Duration,
-};
+mod api_switch;
 
-use anyhow::{Context, Result};
+use std::{net::Ipv4Addr, path::PathBuf, sync::Arc, time::Duration};
+
+use anyhow::{Context, Result, bail};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+pub use api_switch::{ApiMode, ApiStatus, ApiSwitch};
+
 use crate::{
-    api::{ApiServer, ApiServerConfig, DEFAULT_API_PORT},
-    config::{ApiToken, LocalIdentity, default_config_dir},
+    config::{LocalIdentity, default_config_dir},
     core::{
         Core, LocalDeviceSnapshot, Plugin, Settings, SettingsDefaults, StoredSettings,
         TransferConfig,
@@ -35,9 +33,9 @@ use crate::{
 /// Options for starting the Ferry service.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunRequest {
-    /// Bearer token API clients must present. `None` leaves the control API
-    /// unauthenticated.
-    pub api_token: Option<ApiToken>,
+    /// How the HTTP API is served: for the whole run, or as the app's
+    /// stored choice.
+    pub api: ApiMode,
     /// Directory in which received files should be stored. Overrides the
     /// stored setting for this run only.
     pub download_dir: Option<PathBuf>,
@@ -48,11 +46,6 @@ pub struct RunRequest {
     /// Name this device advertises to peers. Overrides the stored setting
     /// for this run only; with neither, the host name is used.
     pub device_name: Option<String>,
-    /// Address the local control API listens on.
-    pub api_host: IpAddr,
-    /// Port the local control API listens on; `0` picks a free port, which
-    /// [`RunningService::api_addr`] then reports.
-    pub api_port: u16,
     /// Keep discovery and every connection a device makes to this one
     /// (control and payload ports) on loopback, instead of the real
     /// network: see [`LanConfig::loopback`]. A physical switch never
@@ -62,6 +55,14 @@ pub struct RunRequest {
     /// for running multiple local instances against each other without a
     /// second machine; devices on the LAN can't see or reach this one.
     pub discovery_loopback: bool,
+    /// UDP port loopback discovery listens and announces on, 1716 by
+    /// default. Only a loopback run may change it: devices on the LAN
+    /// listen on 1716 alone. On Linux, an instance that isn't on loopback
+    /// (a real Ferry or KDE Connect) binds `0.0.0.0:1716`, which also
+    /// receives broadcasts to `127.255.255.255:1716`, so a loopback instance
+    /// on 1716 is seen and dialled by it. Another port keeps a test's or
+    /// agent's instances apart from it, and from other runs'.
+    pub discovery_port: u16,
     /// Sync the desktop clipboard rather than an in-memory one. Falls back to
     /// the in-memory clipboard, with a warning, when the session has no
     /// usable clipboard (e.g. no display server).
@@ -71,13 +72,12 @@ pub struct RunRequest {
 impl Default for RunRequest {
     fn default() -> Self {
         Self {
-            api_token: None,
+            api: ApiMode::default(),
             download_dir: None,
             data_dir: None,
             device_name: None,
-            api_host: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            api_port: DEFAULT_API_PORT,
             discovery_loopback: false,
+            discovery_port: DISCOVERY_PORT,
             system_clipboard: false,
         }
     }
@@ -91,7 +91,7 @@ impl Default for RunRequest {
 pub struct RunningService {
     core: Core,
     lan: LanService,
-    server: ApiServer,
+    api: ApiSwitch,
 }
 
 impl RunningService {
@@ -107,6 +107,12 @@ impl RunningService {
         request: RunRequest,
         plugins: impl FnOnce(Arc<dyn ClipboardService + Send + Sync>) -> Vec<Arc<dyn Plugin>>,
     ) -> Result<Self> {
+        if !request.discovery_loopback && request.discovery_port != DISCOVERY_PORT {
+            bail!(
+                "discovery port {} needs loopback discovery: devices on the network listen on {DISCOVERY_PORT}",
+                request.discovery_port
+            );
+        }
         let config_dir = request
             .data_dir
             .clone()
@@ -166,7 +172,7 @@ impl RunningService {
         let shutdown = CancellationToken::new();
         let capabilities = core.capabilities();
         let lan_config = if request.discovery_loopback {
-            LanConfig::loopback(DISCOVERY_PORT)
+            LanConfig::loopback(request.discovery_port)
         } else {
             LanConfig::default()
         };
@@ -182,28 +188,21 @@ impl RunningService {
             core.clone(),
             commands,
             identity,
-            store,
+            store.clone(),
             shutdown.clone(),
         )
         .await?;
         info!(tcp_address = %lan.tcp_addr(), "LAN transport listening");
 
-        let server = ApiServer::start(
-            ApiServerConfig::new(request.api_port)?.with_host(request.api_host),
-            core.clone(),
-            request.api_token,
-            shutdown.clone(),
-        )
-        .await?;
-        info!(address = %server.local_addr(), "local control API listening");
+        let api = ApiSwitch::start(request.api, store, core.clone(), shutdown.clone()).await?;
 
-        Ok(Self { core, lan, server })
+        Ok(Self { core, lan, api })
     }
 
-    /// The address the control API actually bound, including the port chosen
-    /// by the OS when the request asked for port `0`.
-    pub fn api_addr(&self) -> SocketAddr {
-        self.server.local_addr()
+    /// The HTTP API: where it listens, and (in the app) turning it on and
+    /// off.
+    pub fn api(&self) -> &ApiSwitch {
+        &self.api
     }
 
     /// The running core, for a frontend in the same process that reads
@@ -216,8 +215,8 @@ impl RunningService {
     /// bounded window to clean up their partial files, then stop the
     /// plugins.
     pub async fn shutdown(self) -> Result<()> {
-        let Self { core, lan, server } = self;
-        let server_result = server.shutdown().await;
+        let Self { core, lan, api } = self;
+        let server_result = api.shutdown().await;
         let lan_result = lan.shutdown().await;
         core.shutdown_transfers(Duration::from_secs(5)).await;
         core.shutdown_plugins().await;
@@ -266,6 +265,18 @@ fn default_download_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn only_loopback_discovery_takes_another_port() {
+        let error = RunningService::start(RunRequest {
+            discovery_port: 25123,
+            ..RunRequest::default()
+        })
+        .await
+        .err()
+        .expect("a LAN run on another port is refused");
+        assert!(error.to_string().contains("needs loopback discovery"));
+    }
 
     #[test]
     fn device_names_from_host_names_fit_the_identity_schema() {

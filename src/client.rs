@@ -920,9 +920,15 @@ struct Problem {
 
 #[derive(Debug, Error)]
 pub enum ClientError {
-    #[error("the Ferry daemon is unavailable; start it with `ferry run`")]
+    #[error(
+        "the Ferry daemon is unavailable; start it with `ferry-cli run`, or turn on \
+         Command line access in the Ferry app's Settings"
+    )]
     DaemonUnavailable,
-    #[error("the daemon requires a valid API token; pass --api-token or set {API_TOKEN_ENV}")]
+    #[error(
+        "the daemon requires a valid API token; pass --api-token or set {API_TOKEN_ENV} \
+         (the Ferry app's Settings show its token under Command line access)"
+    )]
     Unauthorized,
     #[error("the requested {0} was not found")]
     NotFound(&'static str),

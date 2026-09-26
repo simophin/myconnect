@@ -245,3 +245,10 @@ Anything a later phase must know, one line each, newest last.
   en-US. The real app wasn't run (no Xvfb on macOS), and no locale but
   en-US was seen on screen: only unit tests cover de, fr, en-GB and
   zh-CN formats. Release binary size with ICU4X's data wasn't measured.
+- Merged main after phase 3. It brought the Settings page's "Command
+  line access" section (`src/ui/pages/settings.rs`, `CliCopy` in
+  `src/ui/actions.rs`: "Setup copied", "Token copied", "Copy setup",
+  "Copy token", "New token", "Let ferry-cli control this app",
+  "Couldn’t change command line access: …") in English. Phase 4 must
+  extract these first, then use the pseudo-locale to catch anything else.
+  The CLI binary is now `ferry-cli` (`src/bin/ferry-cli`).

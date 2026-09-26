@@ -221,6 +221,7 @@ impl App {
             choosing: None,
             tray_dropped: None,
             start_on_login: desktop_login_enabled,
+            cli_path: installed_cli(),
             theme: theme::for_mode(iced::theme::Mode::None),
         };
         // Hidden if it was quit from the tray or started at login, unless
@@ -259,21 +260,36 @@ impl App {
 
     pub(super) fn started(&mut self, started: Started) -> Task<Message> {
         let core = started.service.core().clone();
+        let api = started.service.api().clone();
         self.service.set(started.service);
         let mut ctx = UiContext::new(core, self.options.runtime.clone());
         ctx.set_window_focused(self.focused());
         self.phase = Phase::Running(Box::new(Running {
             ctx,
             features: Features::new(started.clipboard, started.browse, started.notifications),
+            api,
+            api_status: None,
+            api_busy: false,
         }));
+        let api = self.read_api_status();
         if self.options.demo
             && let Phase::Running(running) = &self.phase
         {
             demo::start(running.ctx.core());
-            return Task::done(Message::DemoTick(0));
+            return Task::batch([api, Task::done(Message::DemoTick(0))]);
         }
-        Task::none()
+        api
     }
+}
+
+/// `ferry-cli` next to the app's own executable, where the macOS bundle,
+/// the Windows installer and the Linux packages put it.
+fn installed_cli() -> Option<PathBuf> {
+    let app = std::env::current_exe().ok()?;
+    let cli = app
+        .parent()?
+        .join(format!("ferry-cli{}", std::env::consts::EXE_SUFFIX));
+    cli.is_file().then_some(cli)
 }
 
 #[cfg(test)]

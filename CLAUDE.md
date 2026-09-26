@@ -24,13 +24,23 @@ collide with another run. Do this every time, without being asked:
 - **Ports.** Don't use the default API port 24816 or a port from the docs
   (25011). Pick a free one, e.g.
   `python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'`.
-  The app's embedded daemon already picks a free port.
+  The app serves no API unless given `--api-port` (pass a free one) or
+  Settings → Command line access is on, which listens on 24816 unless
+  its store says otherwise: don't switch it on in a test run that
+  wasn't given `--api-port`.
 - **Network.** Pass `--discovery-loopback` (CLI and app) so nothing
-  announces on or listens to the LAN: discovery binds `127.255.255.255:1716`
-  and the control and payload ports bind `127.0.0.1`, so real devices can
-  neither find nor dial the instance (`ss -lunpt` shows only loopback
-  addresses for its PID). Loopback instances from other sessions can still
-  see yours in a scan, so pair only with the device id you started, never by
+  announces on or listens to the LAN: discovery binds `127.255.255.255`
+  and the control and payload ports bind `127.0.0.1`, so remote devices
+  can neither find nor dial the instance (`ss -lunpt` shows only loopback
+  addresses for its PID). That alone doesn't hide it from this machine: the
+  owner's real Ferry or KDE Connect binds UDP `0.0.0.0:1716`, and on Linux
+  that socket also receives broadcasts to `127.255.255.255:1716`, so it
+  would list your instance and dial it. So also pass `--discovery-port`
+  with a free UDP port (CLI and app; `FERRY_DISCOVERY_PORT` for the app and
+  `examples/fake_phone.rs`), the same one for every instance of your run:
+  instances meet only on the same port. `tests/ui_e2e.rs` picks its own.
+  Loopback instances from other sessions on the same port can still see
+  yours in a scan, so pair only with the device id you started, never by
   name alone. Don't pair with or send to real devices without asking.
 - **Display and D-Bus.** Run the app under
   `dbus-run-session -- xvfb-run --auto-servernum ...`, or on an `Xvfb`
@@ -46,14 +56,16 @@ collide with another run. Do this every time, without being asked:
 
   ```sh
   dir=$(mktemp -d -p "$scratchpad")
+  udp=$(python3 -c 'import socket; s=socket.socket(type=socket.SOCK_DGRAM); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
   env -u WAYLAND_DISPLAY ICED_BACKEND=tiny-skia \
     dbus-run-session -- xvfb-run --auto-servernum \
-    cargo run -p ferry-gui -- --discovery-loopback \
+    cargo run -p ferry-gui -- --discovery-loopback --discovery-port "$udp" \
       --data-dir "$dir/data" --download-dir "$dir/downloads"
   ```
 
   Add `--demo` for made-up devices, and `--api-port`/`--api-token` to
-  drive the app's daemon from the CLI.
+  drive the app's daemon from the CLI (`ferry-cli`; with `--data-dir
+  "$dir/data"` it reads the app's token from there).
 - **Processes.** Keep the PIDs you start and kill those, not
   `pkill -f <pattern>`, which can hit another session's processes.
 

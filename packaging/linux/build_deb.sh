@@ -4,10 +4,10 @@
 #   build_deb.sh APP CLI LICENSES VERSION OUT_DIR
 #
 # APP is cargo's ferry-gui, installed under that name as /usr/bin/ferry-gui;
-# CLI is the ferry command line, installed next to it as /usr/bin/ferry
-# (docs/adr/0001, "Packaging"). LICENSES is the THIRD_PARTY_LICENSES.html
-# cargo-about wrote (about.toml), installed in /usr/share/doc/ferry, where
-# About opens it.
+# CLI is cargo's ferry-cli, the command line, installed next to it as
+# /usr/bin/ferry-cli (docs/adr/0001, "Packaging"). LICENSES is the
+# THIRD_PARTY_LICENSES.html cargo-about wrote (about.toml), installed in
+# /usr/share/doc/ferry, where About opens it.
 # The menu entry and icons go to /usr/share. Runs on Debian or
 # Ubuntu: it needs dpkg-deb, and dpkg-shlibdeps to work out the dependencies
 # from the ELF files. Build on the oldest release you want to support, since
@@ -43,7 +43,7 @@ root=$work/root
 mkdir -p "$root/usr/bin" "$root/usr/share/applications" \
   "$root/usr/share/icons" "$root/usr/share/doc/ferry" "$root/DEBIAN"
 install -m 755 -s "$app" "$root/usr/bin/ferry-gui"
-install -m 755 -s "$cli" "$root/usr/bin/ferry"
+install -m 755 -s "$cli" "$root/usr/bin/ferry-cli"
 install -m 644 "$packaging/$app_id.desktop" "$root/usr/share/applications/"
 cp -R "$assets/linux/hicolor" "$root/usr/share/icons/"
 install -m 644 "$licenses" "$root/usr/share/doc/ferry/THIRD_PARTY_LICENSES.html"
@@ -55,7 +55,7 @@ printf 'Source: ferry\n\nPackage: ferry\nArchitecture: any\n' \
   >"$work/src/debian/control"
 depends=$(
   cd "$work/src" &&
-    dpkg-shlibdeps -O "$root/usr/bin/ferry-gui" "$root/usr/bin/ferry" \
+    dpkg-shlibdeps -O "$root/usr/bin/ferry-gui" "$root/usr/bin/ferry-cli" \
       2>"$work/shlibdeps.log" |
     sed -n 's/^shlibs:Depends=//p'
 ) || {
@@ -86,7 +86,8 @@ Description: Pair with your devices and share files and the clipboard
  Ferry connects your computer with your phone and other devices on the
  local network, using the KDE Connect protocol: send files, share the
  clipboard and ping devices you have paired with. It comes with the
- ferry command line, which drives the running app.
+ ferry-cli command line, which drives the app once its Command line
+ access setting is on.
 CONTROL
 
 mkdir -p "$out_dir"

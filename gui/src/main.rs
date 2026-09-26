@@ -7,19 +7,16 @@
 // where it shows the logs.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-use std::{
-    net::{IpAddr, Ipv4Addr},
-    path::PathBuf,
-    time::Duration,
-};
+use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::{Parser, builder::BoolishValueParser};
 use ferry::{
     client::API_TOKEN_ENV,
     config::ApiToken,
-    daemon::{RunRequest, RunningService},
+    daemon::{ApiMode, RunRequest, RunningService},
     plugins,
+    transport::lan::DISCOVERY_PORT,
     ui::{self, UiOptions},
 };
 
@@ -40,13 +37,25 @@ struct Args {
     /// Keep discovery and connections on loopback, off the LAN.
     #[arg(long, env = "FERRY_DISCOVERY_LOOPBACK", value_parser = BoolishValueParser::new())]
     discovery_loopback: bool,
+    /// UDP port loopback discovery uses instead of 1716, to keep this
+    /// instance apart from a Ferry or KDE Connect on this machine that
+    /// isn't on loopback (on Linux it hears loopback announcements on 1716).
+    #[arg(
+        long,
+        env = "FERRY_DISCOVERY_PORT",
+        value_name = "PORT",
+        requires = "discovery_loopback"
+    )]
+    discovery_port: Option<u16>,
     /// Sync an in-memory clipboard instead of the desktop's.
     #[arg(long, env = "FERRY_NO_SYSTEM_CLIPBOARD", value_parser = BoolishValueParser::new())]
     no_system_clipboard: bool,
-    /// Port of the HTTP API the CLI uses; 0 picks a free one.
-    #[arg(long, env = "FERRY_API_PORT", value_name = "PORT", default_value_t = 0)]
-    api_port: u16,
-    /// Token the CLI must present; a random one by default.
+    /// Serve the HTTP API the CLI uses on this port for this run, whether or
+    /// not "Command line access" is on in Settings; 0 picks a free one.
+    #[arg(long, env = "FERRY_API_PORT", value_name = "PORT")]
+    api_port: Option<u16>,
+    /// Token the CLI must present, for this run, instead of the one kept in
+    /// the data directory.
     #[arg(long, env = API_TOKEN_ENV, value_name = "TOKEN", hide_env_values = true)]
     api_token: Option<String>,
     /// Start in the tray without opening the window, as when started on
@@ -73,20 +82,19 @@ fn main() -> Result<()> {
         .thread_name("ferry")
         .build()
         .context("could not start async runtime")?;
-    let api_token = match args.api_token {
-        Some(secret) => ApiToken::from_secret(secret)?,
-        None => ApiToken::generate(),
-    };
+    let api_token = args.api_token.map(ApiToken::from_secret).transpose()?;
     let data_dir = args.data_dir.clone();
     let request = RunRequest {
-        api_token: Some(api_token),
+        api: ApiMode::Stored {
+            port: args.api_port,
+            token: api_token,
+        },
         data_dir: args.data_dir,
         download_dir: args.download_dir,
         device_name: args.device_name,
         discovery_loopback: args.discovery_loopback,
+        discovery_port: args.discovery_port.unwrap_or(DISCOVERY_PORT),
         system_clipboard: !args.no_system_clipboard,
-        api_host: IpAddr::V4(Ipv4Addr::LOCALHOST),
-        api_port: args.api_port,
     };
     let start = move || -> ui::StartFuture {
         let request = request.clone();
@@ -100,9 +108,10 @@ fn main() -> Result<()> {
             .await?;
             let (clipboard, browse, notifications) =
                 ui_plugins.expect("the daemon built its plugins");
+            let api = service.api().address().await;
             tracing::info!(
                 device_id = service.core().local_device_id(),
-                api = %service.api_addr(),
+                api = ?api,
                 "daemon started"
             );
             Ok(ui::Started {

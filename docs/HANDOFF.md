@@ -64,8 +64,9 @@ cargo feature.
   other: what two features share belongs in the core (or, for UI
   helpers, `src/ui/`).
 - **Token auth is optional.** It is enforced only when the daemon was
-  started with one. The app always sets one (random unless given
-  `--api-token`); the CLI defaults to none.
+  started with one. The app's API is off until Settings → Command line
+  access turns it on, and always has a token, kept in the store as `core.api` (or
+  `--api-token` for one run); `ferry-cli run` defaults to none.
 - **`cargo build -p ferry` has no iced in it.** UI code and its
   dependencies stay behind the `gui` feature.
 - Use reputable dependencies, and record new ones in `adr/0001`'s library
@@ -78,7 +79,7 @@ Done means all of these pass:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --all-targets     # also builds and tests the UI
-cargo build -p ferry                     # the CLI alone, without iced
+cargo build -p ferry                     # ferry-cli alone, without iced
 cargo tree -p ferry -e normal --prefix none | grep -c '^iced'   # prints 0
 git diff --check
 ```
@@ -214,11 +215,11 @@ installer installed in CI, but neither was used on a real desktop yet.
 
 **Smaller follow-ups.**
 
-- Ringing a device (`kdeconnect.findmyphone.request`: `ferry ring`,
+- Ringing a device (`kdeconnect.findmyphone.request`: `ferry-cli ring`,
   the details page and the tray) was checked against the fake phone only,
   not a real one. This machine doesn't ring when a peer asks it to.
 
-- Notifications (`kdeconnect.notification`: `ferry notifications`, the
+- Notifications (`kdeconnect.notification`: `ferry-cli notifications`, the
   device page's Notifications page, a desktop notification for each new
   one) were checked against the fake phone only, not a real one. Worth
   checking on the phone: that it sends what it already shows once paired
@@ -248,7 +249,7 @@ installer installed in CI, but neither was used on a real desktop yet.
   responses (e.g. a header) and drop older events.
 - The reconnecting banner and the startup error screen have not been
   exercised in the real app, only in unit tests.
-- `ferry send` prints only the upload's response, which is taken once
+- `ferry-cli send` prints only the upload's response, which is taken once
   the last byte has been forwarded, so it ends on `transferring (N/N)`
   rather than `completed`. Waiting for the terminal state (or watching
   `/events`) would make the CLI report the real outcome.
@@ -299,29 +300,32 @@ The UI's traps. Those about driving the app under Xvfb are in
 
 Isolate every run as [`../CLAUDE.md`](../CLAUDE.md) describes: fresh
 temporary data and download dirs, a free port, loopback discovery, and a
-private display and D-Bus session.
+private display and D-Bus session. `$udp` is a free UDP port (CLAUDE.md,
+"Network"), the same for the app and its peers, so the owner's own Ferry
+or KDE Connect doesn't see them.
 
 ```sh
 dir=$(mktemp -d -p "$scratchpad")
 # peer
-cargo run -- --api-port "$port" run --discovery-loopback \
+cargo run -- --api-port "$port" run --discovery-loopback --discovery-port "$udp" \
   --data-dir "$dir/peer" --download-dir "$dir/peer-downloads" \
   --device-name "CLI Peer"
 # app (separate identity, loopback only), on a private display and bus
 env -u WAYLAND_DISPLAY ICED_BACKEND=tiny-skia \
   dbus-run-session -- xvfb-run --auto-servernum \
-  cargo run -p ferry-gui -- --discovery-loopback \
+  cargo run -p ferry-gui -- --discovery-loopback --discovery-port "$udp" \
     --data-dir "$dir/app" --download-dir "$dir/app-downloads" \
     --device-name "UI Desktop" --api-port "$app_port"
 ```
 
 The app's own daemon serves the API on `--api-port` (with `--api-token`,
-or the random token it logs otherwise), so the CLI can drive it: `pair`
+or the token kept in its data dir's `ferry.db`, which `ferry-cli
+--data-dir "$dir/app"` reads by itself), so the CLI can drive it: `pair`
 with the peer, `send` to it, list its transfers. `--demo` fills the app
 with made-up paired devices, for looking at the UI without a peer.
 
 To try file browsing without a phone, run
-`cargo run --example fake_phone -- <DATA_DIR> <STORAGE_DIR> <DESKTOP_ID> [NAME]`
+`FERRY_DISCOVERY_PORT="$udp" cargo run --example fake_phone -- <DATA_DIR> <STORAGE_DIR> <DESKTOP_ID> [NAME]`
 as the peer instead. It dials the desktop once, on the first
 announcement it hears, so restart it (same data dir) after the desktop
 restarts. It trusts the desktop's key only after a pairing request in the
@@ -336,9 +340,9 @@ the user's own session, and don't pair with or send to real devices on
 their network without asking.
 
 The README and the website share one set of screenshots,
-`site/img/<page>-<light|dark>.webp`, taken at 2x
-(`WINIT_X11_SCALE_FACTOR=2`) and saved 880 px wide. `ICED_THEME=Light` or
-`Dark` forces the app's theme, for taking both.
+`site/img/<page>.webp`, taken in the light theme at 2x
+(`WINIT_X11_SCALE_FACTOR=2`) and saved 880 px wide. `ICED_THEME=Light`
+forces the light theme whatever the system's.
 
 - Launch the app under `env -u WAYLAND_DISPLAY DISPLAY=:NN
   GDK_BACKEND=x11 ICED_BACKEND=tiny-skia dbus-run-session -- ...`, with
