@@ -294,6 +294,7 @@ fn browses_the_fake_phone() {
     test.picker.answer(vec![upload]);
     let mut app = test.launch();
     let phone = test.runtime.block_on(FakePhone::start(FakePhoneConfig {
+        name: PHONE_NAME.into(),
         data_dir: test.directory.path().join("phone"),
         storage,
         reply: BrowseReply::Serve(vec![("/storage/emulated/0".into(), "All files".into())]),

@@ -215,7 +215,7 @@ with the peer, `send` to it, list its transfers. `--demo` fills the app
 with made-up paired devices, for looking at the UI without a peer.
 
 To try file browsing without a phone, run
-`cargo run --example fake_phone -- <DATA_DIR> <STORAGE_DIR> <DESKTOP_ID>`
+`cargo run --example fake_phone -- <DATA_DIR> <STORAGE_DIR> <DESKTOP_ID> [NAME]`
 as the peer instead. It dials the desktop once, on the first
 announcement it hears, so restart it (same data dir) after the desktop
 restarts. It trusts the desktop's key only after a pairing request in the

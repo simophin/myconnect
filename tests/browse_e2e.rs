@@ -36,7 +36,7 @@ use myconnect::{
         tls::subject_public_key_info,
     },
 };
-use support::fake_phone::{BrowseReply, FakePhone, FakePhoneConfig, PHONE_BATTERY};
+use support::fake_phone::{BrowseReply, FakePhone, FakePhoneConfig, PHONE_BATTERY, PHONE_NAME};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -166,6 +166,7 @@ async fn harness(reply: BrowseReply, wrong_host_key: bool) -> Harness {
     .unwrap();
 
     let phone = FakePhone::start(FakePhoneConfig {
+        name: PHONE_NAME.into(),
         data_dir: phone_dir.path().join("identity"),
         storage: storage.clone(),
         reply,

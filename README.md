@@ -24,6 +24,47 @@ KDE Connect for Android, but not yet against KDE Connect on desktop; see
 list of gaps, and [`docs/HANDOFF.md`](docs/HANDOFF.md) for what to build
 next.
 
+### Desktop app
+
+The app lists your paired devices with their battery, pairs with a code
+both sides confirm, sends files (from a picker or dropped on the window),
+pings and rings devices, shares the clipboard, browses a phone's files,
+and keeps running in the tray. It follows the system's light or dark
+theme.
+
+<table>
+<tr>
+<td valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dark/devices.png"><img src="docs/screenshots/light/devices.png" alt="The device list: a phone with its battery, and a desktop" width="270"></picture></td>
+<td valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dark/device.png"><img src="docs/screenshots/light/device.png" alt="A desktop's page: ping, ring, send clipboard, send files, and recent transfers" width="270"></picture></td>
+<td valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dark/pairing-request.png"><img src="docs/screenshots/light/pairing-request.png" alt="A pairing request with the verification code to compare" width="270"></picture></td>
+</tr>
+<tr>
+<td align="center">Paired devices</td>
+<td align="center">Actions for one device</td>
+<td align="center">Pairing, with a code to compare</td>
+</tr>
+<tr>
+<td valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dark/add-device.png"><img src="docs/screenshots/light/add-device.png" alt="Add device: devices found on the network, and add by IP address" width="270"></picture></td>
+<td valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dark/transfers.png"><img src="docs/screenshots/light/transfers.png" alt="Transfers in both directions, one in progress" width="270"></picture></td>
+<td valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dark/settings.png"><img src="docs/screenshots/light/settings.png" alt="Settings: device name, download folder, clipboard sync, keep running in the tray" width="270"></picture></td>
+</tr>
+<tr>
+<td align="center">Finding devices</td>
+<td align="center">Transfers</td>
+<td align="center">Settings</td>
+</tr>
+</table>
+
+Browsing a phone's files (KDE Connect for Android shares them): download,
+upload, rename, delete, create folders, and preview images.
+
+<table>
+<tr>
+<td valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dark/files.png"><img src="docs/screenshots/light/files.png" alt="A phone's camera folder, with a photo's actions open" width="420"></picture></td>
+<td valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dark/file-preview.png"><img src="docs/screenshots/light/file-preview.png" alt="An image preview" width="420"></picture></td>
+</tr>
+</table>
+
 ### CLI interface
 
 The CLI interface is command based, allowing users to interact with MyConnect through terminal commands.
