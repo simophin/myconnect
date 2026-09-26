@@ -43,9 +43,9 @@ ABI. Boundaries are kept by module visibility and review, in one crate.
 
 ```text
 binary (src/bin/myconnect) → daemon, client
-gui (myconnect-gui) → daemon, ui, plugins::builtin_with_ui   [feature "gui"]
+gui (myconnect-gui) → daemon, ui, plugins::builtin_parts    [feature "gui"]
 ui → core (snapshots, events), protocol (types only)         [feature "gui"]
-plugins/*/ui.rs → ui (UiPlugin, widgets), their own plugin, core   [feature "gui"]
+ui::features → ui (shell messages, widgets), plugins/* (typed APIs), core   [feature "gui"]
 daemon → core, plugins::builtin, api, transport (the composition root)
 api → core (core routes, plugin routes merged in)
 plugins/* → core (Plugin, PluginContext), api (ApiProblem, upload helpers), protocol
@@ -58,8 +58,10 @@ client → core (snapshot and event types), plugins/* (their types)
 types. The core never names a plugin: it calls them only through
 `dyn Plugin`, and `daemon` is the one place that picks them. Plugins never
 import each other; what two features need (transfers, payload connections)
-is a core service. The same holds in the UI: `ui` never names a feature and
-never imports `plugins`, and `core` never imports `ui`.
+is a core service. The UI is the one place that names features, and only
+in `ui::features`: the rest of `ui` (the shell) calls `Features`, and
+imports `plugins` only to carry the two instances it hands to them. `core`
+and `plugins` never import `ui`.
 
 | Module | File(s) | Responsibility |
 | --- | --- | --- |
@@ -73,13 +75,13 @@ never imports `plugins`, and `core` never imports `ui`.
 | | `src/core/transfers.rs`, `src/core/payload.rs` | The transfers service (`Transfers`, `TransferHandle`: the state machine, progress throttling, cancellation and cleanup, for every feature that moves a file, §5), and payload connections for plugins (`PayloadPeer`: listen or dial with this device's certificate, or sign in to an SSH server on the device with its key, without handing out the key). |
 | | `src/core/{plugin,events,settings,error}.rs` | The plugin API (`Plugin`, `PluginContext`, `PluginRegistry`, `Capabilities`, plugin events and settings sections), the bounded event bus (plugin events travel as `EventData::Plugin` with the same `{type, data}` shape), user settings with a section per plugin that has settings (§7), and `CoreError`. |
 | | `src/core/testing.rs` | A real core for unit tests: in-memory trust store, no plugins or just the one under test, no LAN. |
-| `plugins` | `src/plugins/mod.rs`, `src/plugins/{ping,findmyphone}/{mod,packet,http}.rs`, `src/plugins/battery/{mod,packet}.rs`, `src/plugins/clipboard/{mod,packet,http,backend}.rs`, `src/plugins/clipboard/backend/system.rs`, `src/plugins/share/{mod,packet,http}.rs`, `src/plugins/browse/{mod,packet,http,session,ssh,files}.rs`, and each one's `ui.rs` (`gui`) | The features, each a `core::Plugin`; `builtin()` lists them, and `builtin_with_ui()` (`gui`) the same plugins with their UI halves. Ping owns its packet handling, `ping.received` event and `POST /devices/{id}/ping`. Find my phone only sends, and owns `POST /devices/{id}/ring`. Battery adds `plugins.battery` to device snapshots and clears it through the `disconnected`/`unpaired` hooks. Clipboard owns the synced text and `/clipboard`, the `plugins.clipboard` settings section, and its backends (the `ClipboardService` trait, the desktop clipboard `SystemClipboard` over `arboard`, an in-memory one); it follows the desktop clipboard from its `started` hook and releases it in `shutdown` (§6). Share sends files through its streaming route `POST /devices/{id}/share` and saves files peers send, both as core transfers (§5). Browse owns the per-device SFTP sessions with peers' file servers and the `/devices/{id}/files` routes (the upload as a streaming route), and closes its sessions through the `disconnected`/`unpaired`/`shutdown` hooks (§12). Capabilities advertised in the identity packet are the union over the plugins: ping, clipboard and share in both directions; `kdeconnect.sftp.request` outgoing and `kdeconnect.sftp` incoming only, since this build browses peers but serves no files; `kdeconnect.battery` incoming only, since it reads peers' batteries but reports none; `kdeconnect.findmyphone.request` outgoing only, since this build asks peers to ring but doesn't ring itself. |
+| `plugins` | `src/plugins/mod.rs`, `src/plugins/{ping,findmyphone}/{mod,packet,http}.rs`, `src/plugins/battery/{mod,packet}.rs`, `src/plugins/clipboard/{mod,packet,http,backend}.rs`, `src/plugins/clipboard/backend/system.rs`, `src/plugins/share/{mod,packet,http}.rs`, `src/plugins/browse/{mod,packet,http,session,ssh,files}.rs` | The features, each a `core::Plugin`; `builtin()` lists them, and `builtin_parts()` builds the same list and also returns the clipboard and browse instances the UI keeps. Nothing here is behind `gui`. Ping owns its packet handling, `ping.received` event and `POST /devices/{id}/ping`. Find my phone only sends, and owns `POST /devices/{id}/ring`. Battery adds `plugins.battery` to device snapshots and clears it through the `disconnected`/`unpaired` hooks. Clipboard owns the synced text and `/clipboard`, the `plugins.clipboard` settings section, and its backends (the `ClipboardService` trait, the desktop clipboard `SystemClipboard` over `arboard`, an in-memory one); it follows the desktop clipboard from its `started` hook and releases it in `shutdown` (§6). Share sends files through its streaming route `POST /devices/{id}/share` and saves files peers send, both as core transfers (§5). Browse owns the per-device SFTP sessions with peers' file servers and the `/devices/{id}/files` routes (the upload as a streaming route), and closes its sessions through the `disconnected`/`unpaired`/`shutdown` hooks (§12). Capabilities advertised in the identity packet are the union over the plugins: ping, clipboard and share in both directions; `kdeconnect.sftp.request` outgoing and `kdeconnect.sftp` incoming only, since this build browses peers but serves no files; `kdeconnect.battery` incoming only, since it reads peers' batteries but reports none; `kdeconnect.findmyphone.request` outgoing only, since this build asks peers to ring but doesn't ring itself. |
 | `daemon` | `src/daemon.rs` | The composition root: `RunningService` builds the core with `plugins::builtin()`, applies the stored settings, starts the plugins, the LAN transport (advertising the core's capabilities) and the API, and stops them in order. Used by the CLI's `run` and by the desktop app. `start_with` takes the plugin list from the caller (the desktop app, which keeps each plugin's UI half), and `core()` hands the running core to a frontend in the same process. |
 | `api` | `src/api.rs`, `src/api/upload.rs` | The Axum server: the core's routes (`/status`, `/discovery`, `/devices`, `/pairings`, `/transfers`, `/settings`, `/events`), every plugin's routes merged in, `ApiProblem` (the `application/problem+json` error every handler returns, with `From<CoreError>`), optional bearer-token auth, body-size limits, request deadline and SSE. Streaming routes (every plugin's `streaming_routes`) get the transfer-sized body limit and no request deadline; `upload` has the helpers they share (idle timeout, forwarding a multipart file part into a transfer until the part or the transfer ends, and the lingering close that drains an upload a handler answered before reading to its end). |
 | `client` | `src/client.rs` | Typed HTTP client used by the CLI (and any future frontend) to talk to `api`. |
 | `src/bin/myconnect` | `cli.rs`, `main.rs` | Argument parsing and daemon bootstrap only. |
-| `ui` | `src/ui/{mod,plugin,route,store,sync,background,activity,demo,error,widgets,testing}.rs`, `src/ui/pages/*.rs`, `src/ui/overlay/*.rs`, `src/ui/desktop/*.rs` | The desktop UI in iced, behind the `gui` feature ([`adr/0001`](adr/0001-native-ui-in-iced.md)). It runs in the daemon's process and reads the core directly (§9): `sync` subscribes to the event bus, then takes a snapshot into `store`, and takes a fresh one after a lag. It never names a feature: each feature's UI half lives in `src/plugins/<name>/ui.rs`, implements `ui::plugin::UiPlugin` with its own message type, and is listed by `plugins::builtin_with_ui()`. The shell stores them erased, routes their messages back by plugin id, fills its slots from them (the device card's status chips, the device page's and the tray's actions, drop targets, plugin pages such as the file browser, the settings page's sections), and does what they ask through `ShellRequest` (toast, notify, navigate, pick files, confirm, prompt). The pages the core owns are shell code: devices, device, Add device, pairing (and the incoming pairing prompt, drawn over every page while a request waits), transfers, settings, and the startup and error screens. `background` is the tray, close-to-tray, quit and notifications; `desktop` holds the platform glue behind small traits (the tray, notifications, dialogs with `rfd`, opening files with `opener`, the saved window placement, the single-instance socket), so tests swap in fakes. `demo` fills the core with made-up devices for `--demo`. |
-| `myconnect-gui` | `gui/src/main.rs` | The desktop app's composition root: flags (each also an environment variable), starting the daemon through `RunningService::start_with` and `plugins::builtin_with_ui()`, running `ui::run`, and shutting the daemon down after. |
+| `ui` | `src/ui/{mod,launch,shell,background,drops,actions,context,route,store,sync,activity,demo,error,widgets,testing,tests}.rs`, `src/ui/pages/*.rs`, `src/ui/overlay/*.rs`, `src/ui/desktop/*.rs`, `src/ui/features/{mod,ping,findmyphone,battery,clipboard,share}.rs`, `src/ui/features/browse/{mod,view,preview,files,describe}.rs` | The desktop UI in iced, behind the `gui` feature ([`adr/0001`](adr/0001-native-ui-in-iced.md)). It runs in the daemon's process and reads the core directly (§9): `sync` subscribes to the event bus, then takes a snapshot into `store`, and takes a fresh one after a lag. `mod` holds `App`, the one app `Message`, `update`'s dispatch, `view` and `subscription`; `launch` the entry points (`run`, `UiOptions`, `Started`), booting and Retry; `route` the typed routes. Each feature's UI is a module under `features/`, and `features/mod.rs` is the one place that lists them: the `Feature` message enum, and `Features`, whose functions the shell calls to fill its slots (the device card's status chips, the device page's and the tray's actions, drop targets, the file browser's page, the settings page's sections) and to pass on route changes and core events, calling each feature by name in `builtin()` order. Features ask the shell for things through plain `Message`s built by `shell`'s helpers (toast, report, notify, navigate, pick files, confirm, prompt), carrying the `Origin` (window or tray) of the action that caused them; `shell` also holds the `App` side of those requests. The pages the core owns are shell code: devices, device, Add device, pairing (and the incoming pairing prompt, drawn over every page while a request waits), transfers, settings, and the startup and error screens; `actions` is what they ask of the core. `drops` routes dropped files and the recipient chooser. `background` is the window's life (show, close to the tray, quit, placement), the tray and notifications; `desktop` holds the platform glue behind small traits (the tray, notifications, dialogs with `rfd`, opening files with `opener`, the saved window placement, the single-instance socket), so tests swap in fakes. `demo` fills the core with made-up devices for `--demo`; `tests` is the shell's shared test harness. |
+| `myconnect-gui` | `gui/src/main.rs` | The desktop app's composition root: flags (each also an environment variable), starting the daemon through `RunningService::start_with` and `plugins::builtin_parts()`, running `ui::run`, and shutting the daemon down after. |
 
 ### The `Plugin` trait
 
@@ -143,12 +145,13 @@ connections and SSH sign-in without the private key.
 
 A new feature is a module under `plugins/`: `mod.rs` implementing
 `core::Plugin` with the feature's typed Rust API and its unit tests against
-`core::testing::handle_with_plugin`, `http.rs` for its routes, and `ui.rs`
-(behind `gui`) implementing `ui::plugin::UiPlugin` over the same API; plus
-one line in `plugins::builtin()` and one in `plugins::builtin_with_ui()`,
-and the CLI's commands in `client.rs` and `cli.rs`. The UI calls the typed
-API, never the routes, so anything the UI does the CLI can do too. This
-document follows it by hand. [`research/feature-modules.md`](research/feature-modules.md)
+`core::testing::handle_with_plugin`, and `http.rs` for its routes; one line
+in `plugins::builtin()`; its UI in `src/ui/features/<name>.rs` over the
+same API, plus its lines in `ui/features/mod.rs` (a `Feature` variant if
+it has messages, a line in each `Features` function that applies, maybe a
+`Route` variant); and the CLI's commands in `client.rs` and `cli.rs`. The
+UI calls the typed API, never the routes, so anything the UI does the CLI
+can do too. This document follows it by hand. [`research/feature-modules.md`](research/feature-modules.md)
 records how the daemon was moved to this shape, feature by feature, and
 what each step taught.
 
@@ -394,9 +397,11 @@ besides the device errors (`device_not_paired`, `device_not_connected`,
 ## 9. Embedding: the UI runs the daemon in-process
 
 The desktop app (`gui/src/main.rs`) builds a tokio runtime, starts a
-`RunningService` with `start_with(request, plugins::builtin_with_ui)`,
-which builds each plugin once and its UI half from the same instance, and
-hands the running core and the UI halves to `ui::run`. There is no FFI and
+`RunningService` with `start_with`, passing a closure that calls
+`plugins::builtin_parts`, which builds each plugin once and keeps the
+clipboard and browse instances, and hands the running core and those two
+instances to `ui::run` (`ui::Started`), which builds the feature UIs from
+them. There is no FFI and
 no HTTP between them:
 
 - **Reads.** `ui::sync` subscribes to the event bus, then takes snapshots

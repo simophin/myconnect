@@ -1,5 +1,9 @@
 # Research: one module per feature
 
+> The UI half of this (each feature's `ui.rs` next to its plugin, behind a
+> `UiPlugin` seam) was replaced on 2026-09-26: all UI code now lives in
+> `src/ui/`. See [`adr/0001`](../adr/0001-native-ui-in-iced.md).
+
 Status: done (2026-09-25). Every phase is implemented: 0 (ping, §7), 0b
 (find my phone), 1 (battery), 2 (clipboard), 3 (share), 4 (browse) and 5
 (core cleanup). The shape as built is described in
