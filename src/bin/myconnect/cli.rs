@@ -143,6 +143,10 @@ enum Command {
         /// Whether to sync the clipboard with paired devices.
         #[arg(long, value_name = "BOOL")]
         clipboard_sync: Option<bool>,
+        /// Whether the desktop app keeps running in the tray when its
+        /// window is closed.
+        #[arg(long, value_name = "BOOL")]
+        close_to_tray: Option<bool>,
     },
 }
 
@@ -432,10 +436,12 @@ impl Cli {
                 device_name,
                 download_dir,
                 clipboard_sync,
+                close_to_tray,
             } => {
                 let patch = SettingsPatch {
                     device_name: device_name.map(Some),
                     download_dir: download_dir.map(Some),
+                    close_to_tray: close_to_tray.map(Some),
                     ..clipboard_sync
                         .map(ClipboardSettings::sync_enabled_patch)
                         .unwrap_or_default()
@@ -637,6 +643,7 @@ fn print_settings(settings: &SettingsSnapshot, json_output: bool) {
             "Clipboard sync: {}",
             ClipboardSettings::of(settings).sync_enabled
         );
+        println!("Close to tray: {}", settings.close_to_tray);
     }
 }
 

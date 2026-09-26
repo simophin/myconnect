@@ -1,8 +1,9 @@
 # Builds the desktop app when a release is published and attaches the
-# packages to the release: a universal macOS .app in a DMG, Debian packages
-# for amd64 and arm64, and a PKGBUILD that repackages those for Arch Linux.
-# It can also be run by hand (Actions → Build → Run workflow), leaving the
-# packages as run artifacts.
+# packages to the release: a universal macOS .app in a DMG, a Windows
+# installer, Debian packages for amd64 and arm64 (the app and the CLI), and a
+# PKGBUILD that repackages those for Arch Linux. It can also be run by hand
+# (Actions → Build → Run workflow), leaving the packages as run artifacts.
+# The scripts it runs are in packaging/.
 name: Build
 
 on:
@@ -19,7 +20,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  FLUTTER_VERSION: 3.47.1
 
 jobs:
   # The app's version comes from the release tag (or the manual run's input)
@@ -29,82 +29,141 @@ jobs:
     name: Version
     runs-on: ubuntu-24.04
     outputs:
+      # In file names.
       name: ${{ steps.version.outputs.name }}
+      # What Settings shows (MYCONNECT_VERSION; empty: the crate's version
+      # and git describe).
+      app: ${{ steps.version.outputs.app }}
+      # Numeric, for macOS's Info.plist and Windows's file version.
+      numeric: ${{ steps.version.outputs.numeric }}
       deb: ${{ steps.version.outputs.deb }}
       tag: ${{ steps.version.outputs.tag }}
-      flutter-args: ${{ steps.version.outputs.flutter-args }}
     steps:
       - id: version
         env:
           TAG: ${{ github.event.release.tag_name || inputs.version }}
           SHA: ${{ github.sha }}
-          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          args="--build-number=$RUN_NUMBER"
           if [ -n "$TAG" ]; then
             version="${TAG#v}"
-            # macOS only accepts numeric versions.
+            # macOS and Windows only accept numeric versions.
             if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "::error::Version '$TAG' isn't MAJOR.MINOR.PATCH (optionally prefixed with v)"
               exit 1
             fi
             echo "name=$version" >> "$GITHUB_OUTPUT"
+            echo "app=$version" >> "$GITHUB_OUTPUT"
+            echo "numeric=$version" >> "$GITHUB_OUTPUT"
             echo "deb=$version" >> "$GITHUB_OUTPUT"
             echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-            # --build-name sets the Info.plist version; the define is what
-            # Settings shows (the Dart side reads it on every platform).
-            args="$args --build-name=$version --dart-define=MYCONNECT_VERSION=$version"
           else
             echo "name=dev-${SHA::7}" >> "$GITHUB_OUTPUT"
+            echo "numeric=0.0.0" >> "$GITHUB_OUTPUT"
             # Sorts before any release.
             echo "deb=0.0.0~dev+${SHA::7}" >> "$GITHUB_OUTPUT"
           fi
-          echo "flutter-args=$args" >> "$GITHUB_OUTPUT"
 
   macos:
     name: macOS (universal)
     needs: version
     runs-on: macos-15
-    defaults:
-      run:
-        working-directory: ui
+    env:
+      MYCONNECT_VERSION: ${{ needs.version.outputs.app }}
+      # Keep in step with packaging/macos/build_app.sh.
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
     steps:
       - uses: actions/checkout@v7
+        with:
+          # git describe, for a dev build's version.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: ./.github/actions/setup-flutter
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-      - run: flutter pub get --enforce-lockfile
-      - run: flutter build macos --release ${{ needs.version.outputs.flutter-args }}
-      - name: Check the bundled core
+      - run: |
+          cargo build --release --locked -p myconnect-gui --target aarch64-apple-darwin
+          cargo build --release --locked -p myconnect-gui --target x86_64-apple-darwin
+      - name: Package
         run: |
-          app=build/macos/Build/Products/Release/myconnect_ui.app
-          dylib="$app/Contents/Frameworks/libmyconnect_ffi.dylib"
-          lipo "$dylib" -verify_arch arm64 x86_64
-          otool -D "$dylib"
+          packaging/macos/build_app.sh \
+            "${{ needs.version.outputs.numeric }}" "${{ github.run_number }}" \
+            "dist/myconnect-${{ needs.version.outputs.name }}-macos-universal.dmg" \
+            target/aarch64-apple-darwin/release/myconnect-gui \
+            target/x86_64-apple-darwin/release/myconnect-gui
+      - name: Check the bundle
+        run: |
+          app=dist/MyConnect.app
+          lipo "$app/Contents/MacOS/myConnect" -verify_arch arm64 x86_64
           codesign --verify --deep --strict --verbose=2 "$app"
-          codesign --display --entitlements - "$app"
+          plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist"
           plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist"
           plutil -extract CFBundleVersion raw "$app/Contents/Info.plist"
-      # Unsigned for now (ad-hoc signature only): Gatekeeper blocks it until
-      # the user allows it in System Settings → Privacy & Security.
-      - name: Package
-        env:
-          PACKAGE: myconnect-${{ needs.version.outputs.name }}-macos-universal.dmg
-        run: |
-          mkdir -p ../dist staging
-          cp -R build/macos/Build/Products/Release/myconnect_ui.app staging/MyConnect.app
-          ln -s /Applications staging/Applications
-          hdiutil create -volname MyConnect -srcfolder staging -format UDZO \
-            "../dist/$PACKAGE"
+          "$app/Contents/MacOS/myConnect" --version
+          rm -rf "$app"
       - uses: actions/upload-artifact@v7
         with:
           name: macos
+          path: dist/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows (x64)
+    needs: version
+    runs-on: windows-2025
+    env:
+      MYCONNECT_VERSION: ${{ needs.version.outputs.app }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Two builds, as on Linux.
+      - run: |
+          cargo build --release --locked -p myconnect-gui
+          cargo build --release --locked -p myconnect
+      # The runner image doesn't have NSIS any more.
+      - name: Install NSIS
+        run: |
+          choco install nsis --no-progress -y
+          echo "C:\Program Files (x86)\NSIS" >> "$GITHUB_PATH"
+      - name: Package
+        run: |
+          mkdir dist
+          # makensis wants Windows paths.
+          root=$(cygpath -w "$PWD")
+          makensis -V3 \
+            "-DVERSION=${{ needs.version.outputs.name }}" \
+            "-DFILE_VERSION=${{ needs.version.outputs.numeric }}.${{ github.run_number }}" \
+            "-DAPP=$root\\target\\release\\myconnect-gui.exe" \
+            "-DCLI=$root\\target\\release\\myconnect.exe" \
+            "-DOUT=$root\\dist\\myconnect-${{ needs.version.outputs.name }}-windows-x64-setup.exe" \
+            packaging/windows/installer.nsi
+      - name: Check the installer
+        run: |
+          ./dist/*-setup.exe //S
+          dir="$LOCALAPPDATA/Programs/MyConnect"
+          ls -R "$dir"
+          "$dir/cli/myconnect.exe" --version
+          reg query 'HKCU\Software\Classes\AppUserModelId\org.myconnect.MyConnect'
+          # _?= runs the uninstaller in place, so this waits for it; it
+          # wants a Windows path.
+          "$dir/uninstall.exe" //S "_?=$(cygpath -w "$dir")"
+          test ! -e "$dir/myConnect.exe"
+          if reg query 'HKCU\Software\Classes\AppUserModelId\org.myconnect.MyConnect'; then
+            echo "the uninstaller left the notification id registered"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
           path: dist/*
           if-no-files-found: error
 
@@ -115,57 +174,70 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            flutter-arch: x64
             runner: ubuntu-24.04
-            flutter-channel: stable
-          # Flutter publishes no Linux arm64 SDK archive, so the action clones
-          # the SDK at the version's tag instead (the master channel's way).
           - arch: arm64
-            flutter-arch: arm64
             runner: ubuntu-24.04-arm
-            flutter-channel: master
     runs-on: ${{ matrix.runner }}
-    # The packages need the glibc and libraries they were built against, so
-    # build on an old system: Debian 12 is the oldest with the GLib (2.74)
-    # the tray plugin needs. The result installs on Debian 12+ and Ubuntu
-    # 22.04+.
+    # The packages need the glibc they were built against, so build on an old
+    # system. The result installs on Debian 12+ and Ubuntu 22.04+.
     container: debian:12
-    defaults:
-      run:
-        working-directory: ui
+    env:
+      MYCONNECT_VERSION: ${{ needs.version.outputs.app }}
     steps:
       - name: Install Linux build dependencies
-        working-directory: /
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            ca-certificates curl git jq unzip xz-utils \
-            clang cmake ninja-build pkg-config libgtk-3-dev dpkg-dev
-          # The job runs as root, but the Flutter SDK the action unpacks or
-          # clones is owned by another user, so git (which flutter runs on
-          # its own SDK) refuses it as "dubious ownership".
+            ca-certificates curl git gcc libc6-dev pkg-config libxcb1-dev dpkg-dev
+          # The checkout belongs to another user than the job's root, so git
+          # (git describe, in gui/build.rs) refuses it as "dubious ownership".
           git config --global --add safe.directory '*'
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: subosito/flutter-action@v2
         with:
-          channel: ${{ matrix.flutter-channel }}
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          cache: true
-      - run: flutter pub get --enforce-lockfile
-      - run: flutter build linux --release ${{ needs.version.outputs.flutter-args }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Two builds: one with both packages would turn the gui feature on for
+      # the CLI too, and put iced in it.
+      - run: |
+          cargo build --release --locked -p myconnect-gui
+          cargo build --release --locked -p myconnect
       - name: Package
         run: |
-          linux/packaging/build_deb.sh \
-            build/linux/${{ matrix.flutter-arch }}/release/bundle \
-            "${{ needs.version.outputs.deb }}" ../dist
-          dpkg-deb --info ../dist/*.deb
-      - uses: actions/upload-artifact@v4
+          packaging/linux/build_deb.sh \
+            target/release/myconnect-gui target/release/myconnect \
+            "${{ needs.version.outputs.deb }}" dist
+          dpkg-deb --info dist/*.deb
+          dpkg-deb --contents dist/*.deb
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
+
+  # Installs the .deb on a clean Debian 12 and starts the app under Xvfb: it
+  # must come up, open its window and serve the API the CLI talks to.
+  linux-check:
+    name: Linux (${{ matrix.arch }}) installs and starts
+    needs: linux
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: debian:12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist
+      - run: packaging/linux/check_deb.sh dist/*.deb
 
   arch:
     name: Arch Linux PKGBUILD
@@ -174,8 +246,8 @@ jobs:
     needs: [version, linux]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: linux-*
           path: debs
@@ -185,11 +257,11 @@ jobs:
           DEB: ${{ needs.version.outputs.deb }}
         run: |
           mkdir dist
-          ui/linux/packaging/pkgbuild.sh "$TAG" \
+          packaging/linux/pkgbuild.sh "$TAG" \
             "debs/myconnect_${DEB}_amd64.deb" "debs/myconnect_${DEB}_arm64.deb" \
             > dist/PKGBUILD
           cat dist/PKGBUILD
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: arch
           path: dist/*
@@ -198,7 +270,7 @@ jobs:
   release:
     name: Attach to release
     if: github.event_name == 'release'
-    needs: [macos, linux, arch]
+    needs: [macos, windows, linux, linux-check, arch]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

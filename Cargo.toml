@@ -1,11 +1,28 @@
 [workspace]
-members = [".", "ffi", "gui"]
+members = [".", "gui"]
 
 [package]
 name = "myconnect"
 version = "0.1.0"
 edition = "2024"
 default-run = "myconnect"
+
+[features]
+# The desktop UI: `src/ui/` and each plugin's `ui.rs`. Off by default so the
+# CLI and daemon build without iced; the `gui` crate turns it on.
+gui = [
+    "dep:chrono",
+    "dep:display-info",
+    "dep:iced",
+    "dep:iced_fonts",
+    "dep:image",
+    "dep:interprocess",
+    "dep:ksni",
+    "dep:libc",
+    "dep:opener",
+    "dep:rfd",
+    "dep:zbus",
+]
 
 [dependencies]
 anyhow = "1"
@@ -40,7 +57,39 @@ arboard = { version = "3.6", default-features = false, features = ["wayland-data
 # aws-lc-rs needs cmake and NASM to build on Windows.
 russh = { version = "0.63", default-features = false, features = ["ring", "rsa"] }
 russh-sftp = "3"
+# The desktop UI (`gui` feature). Upgrading iced is its own change.
+iced = { version = "0.14", features = ["advanced", "image-without-codecs"], optional = true }
+iced_fonts = { version = "0.3", features = ["lucide"], optional = true }
+opener = { version = "0.8", features = ["reveal"], optional = true }
+rfd = { version = "0.17", optional = true }
+# Decodes previews, so one that can't be shown says so. iced renders
+# images through the same crate; only the codecs the preview offers are on.
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"], optional = true }
+# Local time for file dates; already in the tree through russh-sftp.
+chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
+# Every monitor's bounds, for the saved window placement's fits-on-screen
+# check; iced knows only the current monitor's size.
+display-info = { version = "0.5", optional = true }
+# The single-instance socket, named from the data dir.
+interprocess = { version = "2.4", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+# The uid in the single-instance socket's name (`gui`).
+libc = { version = "0.2", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The tray (`gui`), over D-Bus. Both on async-io, as iced's theme detection
+# already has zbus: its `tokio` feature would need a runtime on iced's
+# threads.
+ksni = { version = "0.3", default-features = false, features = ["async-io"], optional = true }
+zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }
+
+[[test]]
+name = "ui_e2e"
+required-features = ["gui"]
 
 [dev-dependencies]
+iced_runtime = "0.14"
+iced_test = "0.14"
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }

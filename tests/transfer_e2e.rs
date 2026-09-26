@@ -344,6 +344,37 @@ async fn zero_byte_small_and_larger_than_buffer_files_transfer_without_full_buff
 }
 
 #[tokio::test]
+async fn a_local_file_is_sent_from_disk_under_its_own_name() {
+    let harness = connected_and_paired("Sender", "Receiver").await;
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("holiday photo.jpg");
+    // Several read chunks long.
+    let data = (0..=255_u8).cycle().take(200_000).collect::<Vec<u8>>();
+    std::fs::write(&path, &data).unwrap();
+
+    let sent = share::send_path(&harness.a.plugin_context(), &harness.b_id, &path)
+        .await
+        .unwrap();
+    assert_eq!(sent.file_name, "holiday photo.jpg");
+    assert_eq!(sent.total_bytes, data.len() as u64);
+    wait_for_transfer_status(&harness.a, sent.id, TransferStatus::Completed).await;
+
+    let destination = harness.b_download_dir.join("holiday photo.jpg");
+    let mut written = Vec::new();
+    for _ in 0..50 {
+        written = tokio::fs::read(&destination).await.unwrap_or_default();
+        if written.len() == data.len() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(written, data);
+
+    harness.a_service.shutdown().await.unwrap();
+    harness.b_service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn unpaired_device_cannot_initiate_a_transfer() {
     let a_dir = tempfile::tempdir().unwrap();
     let a_identity = Arc::new(LocalIdentity::load_or_create(a_dir.path()).unwrap());

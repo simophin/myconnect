@@ -20,7 +20,7 @@ use crate::{
     config::ApiToken,
     core::{
         CoreEvent, DeviceSnapshot, EventData, PairingSnapshot, PluginEventKind, SettingsPatch,
-        SettingsSnapshot, TransferSnapshot, TransferStatus,
+        SettingsSnapshot, TransferSnapshot,
     },
     plugins::{
         browse::{DirectoryListing, FileEntry},
@@ -35,10 +35,18 @@ pub type EventStream = Pin<Box<dyn Stream<Item = Result<CoreEvent, ClientError>>
 pub type ByteStream =
     Pin<Box<dyn Stream<Item = Result<bytes::Bytes, ClientError>> + Send + 'static>>;
 
+/// How long a request may wait for the next bytes from the daemon.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct ApiClient {
     base_url: Url,
     token: Option<ApiToken>,
     http: Client,
+    /// For streaming uploads: [`ApiClient::http`] without its read timeout.
+    /// The daemon answers an upload only once the whole file has been
+    /// forwarded, so a read timeout would fail every upload that takes
+    /// longer than it. The daemon ends an upload that stalls (`408`).
+    upload_http: Client,
 }
 
 impl ApiClient {
@@ -70,6 +78,14 @@ impl ApiClient {
     }
 
     pub fn new(base_url: &str, token: Option<ApiToken>) -> Result<Self, ClientError> {
+        Self::with_read_timeout(base_url, token, READ_TIMEOUT)
+    }
+
+    fn with_read_timeout(
+        base_url: &str,
+        token: Option<ApiToken>,
+        read_timeout: Duration,
+    ) -> Result<Self, ClientError> {
         let mut base_url = Url::parse(base_url).map_err(|_| ClientError::InvalidApiUrl)?;
         if base_url.scheme() != "http" {
             return Err(ClientError::UnsupportedScheme);
@@ -85,7 +101,11 @@ impl ApiClient {
                 // The server emits SSE keepalives every 15 seconds, so a read
                 // deadline detects a dead daemon without imposing a total
                 // lifetime on watch connections.
-                .read_timeout(Duration::from_secs(30))
+                .read_timeout(read_timeout)
+                .build()
+                .map_err(ClientError::Build)?,
+            upload_http: Client::builder()
+                .connect_timeout(Duration::from_secs(3))
                 .build()
                 .map_err(ClientError::Build)?,
         })
@@ -236,7 +256,7 @@ impl ApiClient {
         let form = Form::new().part("file", part.file_name(file_name));
         let response = self
             .authorized(
-                self.http
+                self.upload_http
                     .post(self.url(&format!("api/v1/devices/{device_id}/share"))?),
             )
             .multipart(form)
@@ -319,7 +339,7 @@ impl ApiClient {
             .part("file", part.file_name(file_name));
         let response = self
             .authorized(
-                self.http
+                self.upload_http
                     .post(self.url(&format!("api/v1/devices/{device_id}/files/upload"))?),
             )
             .multipart(form)
@@ -524,7 +544,7 @@ impl ApiClient {
             || self.transfer(transfer_id),
             |update| match update {
                 Watched::Snapshot(transfer) => {
-                    let terminal = transfer_is_terminal(transfer.status);
+                    let terminal = transfer.status.is_terminal();
                     on_update(TransferWatchUpdate::Snapshot(transfer));
                     terminal
                 }
@@ -534,7 +554,7 @@ impl ApiClient {
                     else {
                         return false;
                     };
-                    let terminal = transfer_is_terminal(transfer.status);
+                    let terminal = transfer.status.is_terminal();
                     on_update(TransferWatchUpdate::Event(event));
                     terminal
                 }
@@ -692,13 +712,6 @@ fn transfer_from_event(event: &EventData) -> Option<&TransferSnapshot> {
     }
 }
 
-fn transfer_is_terminal(status: TransferStatus) -> bool {
-    matches!(
-        status,
-        TransferStatus::Completed | TransferStatus::Cancelled | TransferStatus::Failed
-    )
-}
-
 fn find_sse_frame(bytes: &[u8]) -> Option<(usize, usize)> {
     let lf = bytes
         .windows(2)
@@ -815,4 +828,51 @@ pub enum ClientError {
     Transport(#[source] reqwest::Error),
     #[error("the API token is invalid")]
     Token(#[from] crate::config::ApiTokenError),
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    use super::*;
+
+    /// An upload that takes longer than the read timeout still gets its
+    /// answer: the daemon says nothing until the whole file is in.
+    #[tokio::test]
+    async fn an_upload_outlasts_the_read_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            // Longer than the client's read timeout, as a slow upload is.
+            sleep(Duration::from_millis(600)).await;
+            let mut buffer = [0; 4096];
+            let _ = socket.read(&mut buffer).await.unwrap();
+            socket
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+        });
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), b"hello").unwrap();
+        let client = ApiClient::with_read_timeout(
+            &format!("http://{address}"),
+            None,
+            Duration::from_millis(200),
+        )
+        .unwrap();
+
+        let result = client.send_file("peer", file.path()).await;
+
+        assert!(
+            matches!(result, Err(ClientError::NotFound(_))),
+            "unexpected result: {result:?}"
+        );
+        server.await.unwrap();
+    }
 }

@@ -63,6 +63,8 @@ pub enum BrowseReply {
 }
 
 pub struct FakePhoneConfig {
+    /// The name the phone announces; the tests use [`PHONE_NAME`].
+    pub name: String,
     /// Holds the phone's identity.
     pub data_dir: PathBuf,
     /// Served as `/` over SFTP.
@@ -89,6 +91,7 @@ pub struct PhoneLog {
 }
 
 struct Shared {
+    name: String,
     config_reply: BrowseReply,
     desktop_certificate: Mutex<Option<Vec<u8>>>,
     password: Mutex<Option<String>>,
@@ -120,6 +123,7 @@ impl FakePhone {
         let sftp_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let log = Arc::new(PhoneLog::default());
         let shared = Arc::new(Shared {
+            name: config.name,
             config_reply: config.reply,
             desktop_certificate: Mutex::new(None),
             password: Mutex::new(None),
@@ -207,10 +211,10 @@ fn bind_discovery(address: SocketAddr) -> UdpSocket {
     UdpSocket::from_std(socket.into()).unwrap()
 }
 
-fn identity_packet(device_id: &str, extra: Map<String, Value>) -> Vec<u8> {
+fn identity_packet(device_id: &str, name: &str, extra: Map<String, Value>) -> Vec<u8> {
     let identity = IdentityBody {
         device_id: device_id.into(),
-        device_name: PHONE_NAME.into(),
+        device_name: name.into(),
         device_type: DeviceType::Phone,
         incoming_capabilities: vec![
             REQUEST_PACKET_TYPE.into(),
@@ -271,7 +275,11 @@ async fn connect_to_desktop(
     dial_extra.insert("targetDeviceId".into(), json!(desktop_id));
     dial_extra.insert("targetProtocolVersion".into(), json!(8));
     stream
-        .write_all(&identity_packet(identity.device_id(), dial_extra))
+        .write_all(&identity_packet(
+            identity.device_id(),
+            &shared.name,
+            dial_extra,
+        ))
         .await
         .unwrap();
     let material = TlsMaterial::new(identity.certificate_der(), identity.private_key_der());
@@ -281,7 +289,11 @@ async fn connect_to_desktop(
     let desktop_certificate = tls::server_peer_certificate(&tls_stream).unwrap();
     let (mut reader, mut writer) = tokio::io::split(tls_stream);
     writer
-        .write_all(&identity_packet(identity.device_id(), Map::new()))
+        .write_all(&identity_packet(
+            identity.device_id(),
+            &shared.name,
+            Map::new(),
+        ))
         .await
         .unwrap();
     eprintln!("fake phone: connected");

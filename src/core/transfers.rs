@@ -149,6 +149,31 @@ pub fn upload_channel() -> (mpsc::Sender<Bytes>, mpsc::Receiver<Bytes>) {
     mpsc::channel(UPLOAD_CHANNEL_CAPACITY)
 }
 
+/// Size of the chunks [`forward_reader`] reads.
+const READ_CHUNK_BYTES: usize = 64 * 1024;
+
+/// Stream what `reader` yields into an upload channel (see
+/// [`upload_channel`]) until it ends, or until the transfer stops taking
+/// chunks because it ended. Dropping the sender at the end tells the
+/// transfer the upload is over, so a reader that fails part-way fails the
+/// transfer as short.
+pub async fn forward_reader<R>(mut reader: R, sender: mpsc::Sender<Bytes>) -> std::io::Result<()>
+where
+    R: AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+
+    loop {
+        let mut chunk = bytes::BytesMut::with_capacity(READ_CHUNK_BYTES);
+        if reader.read_buf(&mut chunk).await? == 0 {
+            return Ok(());
+        }
+        if sender.send(chunk.freeze()).await.is_err() {
+            return Ok(());
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransferDirection {
@@ -168,6 +193,11 @@ pub enum TransferStatus {
 }
 
 impl TransferStatus {
+    /// Whether the transfer has ended, one way or another.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Cancelled | Self::Failed)
+    }
+
     fn can_transition_to(self, next: Self) -> bool {
         matches!(
             (self, next),
@@ -456,7 +486,7 @@ impl Transfers {
             .get(&id)
             .map(Transfer::snapshot)
             .ok_or(CoreError::UnknownTransfer)?;
-        if is_terminal(snapshot.status) {
+        if snapshot.status.is_terminal() {
             return Err(CoreError::InvalidTransferState);
         }
         if let Some(active) = state.active.get(&id) {
@@ -726,7 +756,7 @@ impl TransferHandle {
             };
             match ended {
                 Ok(snapshot) => snapshot,
-                Err(_) if !is_terminal(record.snapshot().status) => {
+                Err(_) if !record.snapshot().status.is_terminal() => {
                     match record.transition(
                         TransferStatus::Failed,
                         now,
@@ -764,13 +794,6 @@ impl Drop for TransferHandle {
             );
         }
     }
-}
-
-fn is_terminal(status: TransferStatus) -> bool {
-    matches!(
-        status,
-        TransferStatus::Completed | TransferStatus::Cancelled | TransferStatus::Failed
-    )
 }
 
 fn unix_millis() -> u64 {

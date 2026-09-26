@@ -5,6 +5,8 @@
 
 mod http;
 pub mod packet;
+#[cfg(feature = "gui")]
+pub mod ui;
 
 use std::{
     sync::Arc,
@@ -21,11 +23,14 @@ use crate::{
     protocol::Packet,
 };
 
+/// The plugin\'s id, as the core and the UI know it.
+pub const ID: &str = "ping";
+
 pub struct PingPlugin;
 
 impl Plugin for PingPlugin {
     fn id(&self) -> &'static str {
-        "ping"
+        ID
     }
 
     fn incoming(&self) -> &'static [&'static str] {

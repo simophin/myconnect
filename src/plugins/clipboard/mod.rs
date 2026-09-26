@@ -21,6 +21,8 @@
 mod backend;
 mod http;
 pub mod packet;
+#[cfg(feature = "gui")]
+pub mod ui;
 
 use std::{
     sync::{Arc, Mutex, PoisonError},
@@ -126,6 +128,17 @@ pub enum ClipboardSyncError {
     Empty,
     #[error(transparent)]
     Core(#[from] CoreError),
+}
+
+impl ClipboardSyncError {
+    /// The code clients see for this error, as [`CoreError::code`].
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::TextTooLarge { .. } => "clipboard_text_too_large",
+            Self::Empty => "clipboard_empty",
+            Self::Core(error) => error.code(),
+        }
+    }
 }
 
 pub struct ClipboardPlugin {

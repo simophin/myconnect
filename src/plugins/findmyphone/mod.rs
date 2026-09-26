@@ -4,6 +4,8 @@
 
 mod http;
 pub mod packet;
+#[cfg(feature = "gui")]
+pub mod ui;
 
 use std::{
     sync::Arc,
@@ -16,11 +18,14 @@ pub use packet::{REQUEST_PACKET_TYPE, build_request_packet};
 
 use crate::core::{CoreError, Plugin, PluginContext};
 
+/// The plugin\'s id, as the core and the UI know it.
+pub const ID: &str = "findmyphone";
+
 pub struct FindMyPhonePlugin;
 
 impl Plugin for FindMyPhonePlugin {
     fn id(&self) -> &'static str {
-        "findmyphone"
+        ID
     }
 
     fn outgoing(&self) -> &'static [&'static str] {

@@ -18,8 +18,12 @@ mod http;
 pub mod packet;
 mod session;
 mod ssh;
+#[cfg(feature = "gui")]
+pub mod ui;
 
 use std::{
+    io,
+    path::Path,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -32,7 +36,10 @@ use russh_sftp::{
     protocol::{FileType, OpenFlags, StatusCode},
 };
 use thiserror::Error;
-use tokio::{io::AsyncWriteExt, sync::mpsc};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::mpsc,
+};
 use uuid::Uuid;
 
 pub use files::{DirectoryListing, FileEntry, FileKind};
@@ -50,11 +57,14 @@ use session::{RemoteSession, Sessions};
 use crate::{
     core::{
         CoreError, DeviceSnapshot, OperationErrorCode, Plugin, PluginContext, TransferDirection,
-        TransferHandle, TransferSnapshot, sanitize_file_name, upload_channel,
+        TransferHandle, TransferSnapshot, forward_reader, sanitize_file_name, upload_channel,
     },
     protocol::Packet,
     transport::payload::PayloadError,
 };
+
+/// The plugin's id.
+pub const ID: &str = "browse";
 
 /// Browsing a device's files, and the session open with each device.
 #[derive(Default)]
@@ -64,7 +74,7 @@ pub struct BrowsePlugin {
 
 impl Plugin for BrowsePlugin {
     fn id(&self) -> &'static str {
-        "browse"
+        ID
     }
 
     fn incoming(&self) -> &'static [&'static str] {
@@ -108,6 +118,17 @@ impl Plugin for BrowsePlugin {
     }
 }
 
+/// Why a local file couldn't be uploaded to a device.
+#[derive(Debug, Error)]
+pub enum UploadPathError {
+    /// The device or the core refused the upload.
+    #[error(transparent)]
+    Browse(#[from] BrowseError),
+    /// The file couldn't be opened, or isn't a regular file.
+    #[error("the file couldn't be read")]
+    File(#[source] io::Error),
+}
+
 /// Why a request to browse a device's files failed.
 #[derive(Debug, Error)]
 pub enum BrowseError {
@@ -133,6 +154,25 @@ pub enum BrowseError {
     Failed,
     #[error("the device took too long to answer")]
     TimedOut,
+}
+
+impl BrowseError {
+    /// The code clients see for this error, as [`CoreError::code`].
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Core(error) => error.code(),
+            Self::InvalidPath => "invalid_path",
+            Self::Unavailable { .. } => "files_unavailable",
+            Self::NotFound => "file_not_found",
+            Self::Exists => "file_exists",
+            Self::PermissionDenied => "file_permission_denied",
+            Self::NotADirectory => "not_a_directory",
+            Self::IsADirectory => "is_a_directory",
+            Self::HostKeyMismatch => "files_host_key_mismatch",
+            Self::Failed => "files_failed",
+            Self::TimedOut => "files_timed_out",
+        }
+    }
 }
 
 impl BrowsePlugin {
@@ -311,6 +351,45 @@ impl BrowsePlugin {
         let (chunk_tx, chunk_rx) = upload_channel();
         transfer.spawn(move |transfer| run_upload(transfer, session, path, remote, chunk_rx));
         Ok((started, chunk_tx))
+    }
+
+    /// Upload the local file at `path` into `directory` on a device, under
+    /// its own name: an [`upload`](Self::upload) of its size, streamed from
+    /// disk. Resolves once the whole file has gone into the transfer, or the
+    /// transfer has ended first, with the transfer as it is then, as
+    /// `POST /devices/{id}/files/upload` answers. Run it on the daemon's
+    /// runtime.
+    pub async fn upload_path(
+        &self,
+        ctx: &PluginContext,
+        device_id: &str,
+        directory: &str,
+        path: &Path,
+    ) -> Result<TransferSnapshot, UploadPathError> {
+        let file = tokio::fs::File::open(path)
+            .await
+            .map_err(UploadPathError::File)?;
+        let metadata = file.metadata().await.map_err(UploadPathError::File)?;
+        if !metadata.is_file() {
+            return Err(UploadPathError::File(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a regular file",
+            )));
+        }
+        let file_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let size = metadata.len();
+        let (started, sender) = self
+            .upload(ctx, device_id, directory, &file_name, size, None)
+            .await?;
+        // A file that grows meanwhile uploads what it had; one that shrinks,
+        // or fails part-way, fails the transfer as short.
+        if let Err(error) = forward_reader(file.take(size), sender).await {
+            tracing::debug!(device_id, %error, "reading a file to upload failed");
+        }
+        Ok(ctx.transfers().get(started.id).unwrap_or(started))
     }
 
     /// Create `name` in `directory` without replacing anything: on a

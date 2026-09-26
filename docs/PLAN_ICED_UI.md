@@ -6,9 +6,38 @@ early steps build the ground the later ones stand on. Steps marked
 *independent* can run in parallel worktrees once their prerequisites have
 landed.
 
-Status (2026-09-25): decided by the owner. A spike of the device list exists
-in `gui/src/main.rs` and `gui/src/demo.rs`. Step 1 replaces it with the
-structure below.
+Status (2026-09-26): decided by the owner. Steps 1 to 9 are done: `gui/`
+is the thin composition root, the spike's device list lives in
+`src/ui/`, features plug in through the `UiPlugin` seam (battery first),
+the shell has routing, toasts, dialogs, startup screens and error
+wording, the store caches devices, pairings, transfers and settings for
+the pages, the devices page is finished, the device page has ping, ring,
+send clipboard, recent transfers and unpair, and Add device, the pairing
+page and the incoming pairing prompt pair in both directions, and the
+Transfers page shows progress, cancels, and opens received files, and
+Settings renames this computer, picks the download folder and flips its
+switches, the clipboard plugin's included. Step 10's desktop spike is
+done too: its findings and decisions for drops, the tray, notifications,
+placement and single instance are in ADR 0001's "Desktop integration".
+Step 11 is done: the device page sends files through a picker, and files
+dropped on the window go to the page's device or to a chooser. Step 12
+is done: *Browse files* opens a file browser that lists, previews,
+downloads, uploads (picked or dropped on the open folder), renames,
+creates folders and deletes. Step 13 is done on Linux: the tray and its
+menu, close-to-tray, quit, notifications, the saved window placement and
+a single instance; macOS and Windows get their tray and notifications in
+step 13b, on those machines. Step 14 is done: `tests/ui_e2e.rs` runs the
+whole UI headless in `iced_test`'s emulator against a second daemon (the
+seven Flutter scenarios) and the fake phone (browsing). Step 15 is done:
+`packaging/` builds the `.deb`s (the app as `myConnect` and the CLI),
+the Arch PKGBUILD, a universal macOS DMG and a Windows installer, the
+Build workflow checks the `.deb` on a clean Debian 12, and CI dropped
+Flutter; macOS and Windows are built only by the Build workflow. Step 16 is done: `ui/`
+(the Flutter app) and `ffi/` are deleted, the Flutter records are in
+`docs/archive/flutter-adr/`, and ARCHITECTURE, HANDOFF, README and
+CLAUDE.md describe the iced app only. What's left is 13b, given a Mac and
+a Windows machine (it also owes step 15's Finder check). Each finished
+step says so under its heading, with what differs from the plan.
 
 ## Read first
 
@@ -17,8 +46,9 @@ structure below.
 2. [`ARCHITECTURE.md`](ARCHITECTURE.md) §2: the core, the `Plugin` trait,
    and the rule that the core never names a feature. The UI copies that
    shape.
-3. The Flutter app is the **spec**. [`../ui/lib/src/`](../ui/lib/src/) is
-   what parity means, and [Appendix A](#appendix-a-parity-checklist) lists
+3. The Flutter app was the **spec**. `ui/lib/src/` (deleted in step 16;
+   read it in the git history before that step's commit) is what parity
+   means, and [Appendix A](#appendix-a-parity-checklist) lists
    every behaviour to carry over, with file references. When this plan and
    the Flutter code disagree about a detail, the Flutter code wins, unless
    the difference is listed in [Deliberate differences](#deliberate-differences).
@@ -29,9 +59,12 @@ structure below.
 
 ## Decisions (made by the owner)
 
-- **The UI is Rust and iced.** The Flutter app stays in the tree and keeps
-  working until the last step deletes it. Both apps build side by side
-  until then.
+- **The UI is Rust and iced.** The Flutter app stays in the tree as the
+  spec until the last step deletes it.
+- **The Flutter app is no longer maintained** (owner, 2026-09-25: nobody
+  relies on it). Its checks aren't run any more, and a step may break it.
+  The same goes for `ffi/`: if it gets in a step's way, drop it from the
+  workspace early rather than keep it building.
 - **The UI runs the daemon in-process and talks to the core directly:**
   snapshots from `Core`, events from `core.subscribe()`, and actions through
   typed Rust functions. It does **not** go through HTTP.
@@ -190,7 +223,7 @@ Rust function or method that `http.rs` also calls. Most already exist:
 | battery | device state only | — |
 | clipboard | `ClipboardPlugin::send_to(&self, ctx, id)`, `set_text`, `ClipboardSettings::sync_enabled_patch` | — |
 | share | `share::send_file(ctx, id, name, size, transfer_id)`, which returns a byte `Sender` the HTTP handler streams multipart into | `share::send_path(ctx, id, path)`: opens the file, calls `send_file` with its size, and spawns the copy from disk into the sender on the daemon runtime |
-| browse | `BrowsePlugin::{list_files, open_file, download, upload, create_directory, move_file, delete}` (async) | an upload from a local path, like share's |
+| browse | `BrowsePlugin::{list_files, open_file, download, upload, create_directory, move_file, delete}` (async) | an upload from a local path, like share's: `BrowsePlugin::upload_path` (step 12) |
 
 When a step needs something that isn't there, add it to the plugin's
 `mod.rs` and make `http.rs` call it, without changing behaviour. The HTTP
@@ -291,9 +324,8 @@ git diff --check
 
 Also look at the result. Render snapshots headlessly (see *Seeing the UI*)
 and read the PNGs, and for anything involving windows, the tray, drops or
-notifications, run the real app. Until step 16, the Flutter checks in
-HANDOFF still have to pass too, because nothing may break the Flutter app
-before then.
+notifications, run the real app. The Flutter checks in HANDOFF are not
+part of "done" any more (see Decisions).
 
 ### Seeing the UI
 
@@ -323,6 +355,31 @@ before then.
 ## Steps
 
 ### 1. Foundation: the feature, the crates, the ADR
+
+**Done (2026-09-25).** Where it differs from the text below:
+- The `gui` feature turns on only `iced` and `iced_fonts` for now. The
+  other UI crates are chosen in [`adr/0001`](adr/0001-native-ui-in-iced.md)'s
+  library table, and each is added to the feature by the step that first
+  uses it (rfd: 9, opener: 8, notify-rust, interprocess, ksni and
+  tray-icon: 13). `iced_test` is a dev-dependency of `myconnect`.
+- `ui::run(&RunningService, UiOptions, plugins)` borrows the service; the
+  `gui` binary shuts it down after the UI exits. `UiOptions` carries the
+  daemon's runtime handle (for `UiContext` in step 2) and `demo`.
+- `ui/plugin.rs` has a placeholder `ErasedUiPlugin` (just `id()`) so
+  `builtin_with_ui` has a type to return; step 2 replaces it with the full
+  seam.
+- `ui/testing.rs` has `snapshot(name, size, view)`, which writes
+  `$SNAPSHOT_DIR/<name>-<light|dark>-<backend>.png`, replacing old images
+  first (`matches_image` would otherwise compare against them).
+- Boolean env vars accept `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off`.
+- The `cargo tree` check is
+  `cargo tree -p myconnect -e normal --prefix none | grep -c '^iced'`: a bare
+  `grep iced` also matches a checkout path containing "iced".
+- Checked in the real app on Linux (Xvfb, private bus, tiny-skia): `--demo`
+  shows the list with live updates, only loopback sockets with
+  `--discovery-loopback`, the CLI lists the app's devices through
+  `--api-port`/`--api-token`, and closing the window quits and stops the
+  daemon.
 
 **Why:** everything after this assumes the layout above.
 
@@ -361,7 +418,7 @@ before then.
 **Done when:**
 - `cargo run -p myconnect-gui -- --demo` shows the device list, as the
   spike did.
-- `cargo tree -p myconnect -e normal | grep -c iced` prints 0.
+- `cargo tree -p myconnect -e normal --prefix none | grep -c '^iced'` prints 0.
 - CI is green.
 
 **Traps:**
@@ -373,6 +430,45 @@ before then.
   a second runtime.
 
 ### 2. The UI plugin seam, with battery as the pilot
+
+**Done (2026-09-25).** Where it differs from the text below and the seam
+above:
+- `UiPlugin::Message` must also be `Sync`: `PluginMessage` holds it in an
+  `Arc`. `ErasedUiPlugin::update` asserts the message's plugin id before it
+  downcasts.
+- There are no `PluginPage` and `SettingsSection` types: `view_page` and
+  `view_settings` return elements. `DropTarget` is `{ label, on_drop }`.
+  Callbacks in `ShellRequest` and `DropTarget` are `Arc<dyn Fn>`
+  (`Callback`), so they map through the erasure; `Prompt`'s `validate` is
+  a `Validator` returning the error text, if any.
+- `ui/route.rs` has the whole `Route` enum. Step 3 adds parents and the
+  header. Until then `view` draws only the devices page and plugin pages;
+  the other routes fall back to the devices page.
+- The shell handles `Toast` (stacked at the bottom, gone after 4 s, the
+  action button navigates; step 3 finishes them) and `Navigate`. `Notify`
+  is a toast until step 13, `ShowWindow` focuses the window, and
+  `PickFiles`, `Confirm` and `Prompt` log a warning until their steps.
+- `UiContext::device` and `transfers` read the core until the store
+  (step 4). Window focus is tracked from `window::events()`.
+- Timers (toasts, `--demo`) run on the daemon's runtime, because iced has
+  no timer without its `tokio` feature. A tokio future such as `sleep`
+  needs the runtime when it is *made*, not only when polled, so
+  `UiContext::spawn` takes an `async move` block. The real app caught this
+  (`#[tokio::test]` hides it); `timers_work_off_the_daemon_runtime` now
+  covers it.
+- New slot `demo_packets(device, tick)`: `--demo` devices advertise every
+  capability this build has, and each plugin makes up what its feature
+  reports (battery: the phone drains, the tablet charges). That keeps
+  `src/ui/demo.rs` free of feature names too.
+- `builtin_with_ui` lists the core plugins itself, one line each, and a
+  test checks it runs the same plugins as `builtin()` in the same order,
+  with the UI halves in that order too.
+- `ui::testing` gained `device(name)` and `outputs(task)`, which runs a
+  `Task` and returns what it produced (through `iced_runtime`, a new
+  dev-dependency).
+- Snapshots: `devices` (a fake status plugin), `devices-battery` and
+  `toasts`. Checked in the real app with `--demo`: the phone's battery
+  drains through the slot.
 
 **Why:** every feature step after this plugs in through the seam, so it
 must exist and be proven on the smallest feature first. That is how the
@@ -398,6 +494,45 @@ daemon's module split started (research/feature-modules.md, phase 0).
 - There's a unit test of the erased plugin round trip.
 
 ### 3. Shell foundations
+
+**Done (2026-09-25).** Where it differs from the text below:
+- `gui/` hands `ui::run(options, start)` a start function that returns
+  `ui::Started { service, plugins }`. The UI runs it on the daemon's
+  runtime, keeps the service, and shuts it down after the UI exits.
+  `RunRequest` is `Clone` so each attempt gets its own; `UiPlugin` must be
+  `Send`, since the UI halves are built inside the start future.
+- Error codes have one source: `CoreError::code()`, `BrowseError::code()`
+  and `ClipboardSyncError::code()`, which `api.rs` and the plugins'
+  `http.rs` now use. `ui::error::describe_code` words the core's codes; a
+  plugin words its own in its `ui.rs` (`browse::ui::describe_error`,
+  `clipboard::ui::describe_error`) and hands the rest to the core. Unknown
+  codes read "Something went wrong ({code})."
+- Dialogs (`ui/overlay/dialog.rs`) submit one of two ways:
+  `Submit::Close` closes at once and sends the message (what plugins'
+  `Confirm` and `Prompt` get, as Flutter's file dialogs did);
+  `Submit::Run` stays open and busy while its task runs and shows its
+  error in the dialog (for rename and add by IP, steps 7 and 9). Others
+  queue behind the one showing. A click outside or Escape cancels.
+  `ShellRequest::Prompt` gained `confirm_label`. The field has a label,
+  hint, helper text, a length limit with a counter, and a validator.
+- Toasts (`ui/overlay/toast.rs`) show at most three; the action button
+  navigates and dismisses its toast.
+- Routes whose page isn't ported yet show a header with Back and "Not here
+  yet".
+- Shortcuts: Escape cancels the dialog, Ctrl/Cmd+W closes the window,
+  Ctrl/Cmd+Q quits.
+- `ui/widgets.rs`: `page_header`, `icon_button`, `page`, `card`,
+  `empty_state`, `error_view`, `loading`, `verification_code` (hair spaces
+  stand in for letter spacing; selectable text is step 7's call) and
+  `format_bytes` (halves round away from zero, as Dart's did).
+  `format_timestamp` moves to step 12: local time needs a time-zone crate,
+  to be chosen there.
+- Snapshots: `header`, `toasts`, `dialog-confirm`, `dialog-prompt-error`,
+  `error-view`, `empty-state`, `startup-starting`, `startup-failed`.
+- Checked in the real app: an unusable data dir shows the error screen,
+  fixing it and pressing Retry starts the daemon, and Ctrl+Q exits after
+  shutting it down. Under Xvfb with no window manager the window gets no
+  keyboard focus until something calls `XSetInputFocus` on it.
 
 **Why:** pages need navigation, dialogs, toasts and error handling before
 they can be ported faithfully.
@@ -437,6 +572,37 @@ dialog, prompt with an error, and the startup error screen; and there are
 unit tests of `describe_error` for every code in `api_exception.dart`.
 
 ### 4. The store: devices, pairings, transfers, settings
+
+**Done (2026-09-25).** Where it differs from the text below:
+- The store lives in `UiContext`: plugins read it with `ctx.store()`, and
+  `ctx.device(id)` and `ctx.transfers(device)` (newest first, optionally
+  for one device) read it rather than the core. Only the shell changes
+  it. Plugins don't need to yet: in-process, a mutation's event arrives
+  right behind its answer. If a plugin page ever needs its answer applied
+  sooner, add a `ShellRequest` for it.
+- Each resource is a `Load<T>`: `Loading`, `Failed(words)` or `Loaded`.
+  A failed read keeps what was loaded, as Flutter's refresh did. The sync
+  message is `Update::Snapshot(Box<store::Snapshot>)`;
+  `Snapshot::take(core)` reads all four. `Message::Reload` takes one in
+  `update` (the devices page's Retry); events already queued apply after
+  it, as after the subscription's own snapshot.
+- Events go to the store first, then to every plugin's `on_event`, so
+  plugins see them applied. Resources not loaded yet ignore events.
+- "This computer" comes from the settings snapshot (shown once loaded), not
+  `Core::local_device_name`.
+- `PairingStatus::is_terminal` and `TransferStatus::is_terminal` are now
+  public in the core; `client.rs` and `core::transfers` use them.
+- A transfer answer with the same `updated_at` as the held one replaces it
+  unless the held one has ended, as in `transfers_controller.dart`.
+- Tests (`ui::store`, `ui::sync`) port the controller scenarios with
+  hand-fed snapshots and events, plus two against a real core: events
+  around a snapshot (one it includes, one it misses) and a settings patch
+  with its event. `core::testing::handle_with_event_capacity` gives a core
+  whose bus holds more than one event. The sync test drives the real
+  stream: snapshot, event, and a fresh snapshot after a lag. Flutter's
+  "refetch on reconnect" is that lag test.
+- Checked in the real app with `--demo`: renaming and unpairing through
+  the CLI (`--api-port`) show up live.
 
 **Why:** all pages read from it. Getting the sync rules right once is
 cheaper than per page.
@@ -482,6 +648,28 @@ the event.
 
 ### 5. Devices page, finished
 
+**Done (2026-09-25).** Where it differs from the text below:
+- `devices::view(store, plugins, drop_target, navigate, retry)`: the page
+  makes its messages with the shell's `navigate` (`Message::Navigate(Route)`,
+  new), and `drop_target` names the card to highlight (upload icon, "Drop
+  to send" instead of the status, primary colours). The shell passes `None`
+  until step 11.
+- "Add device" is a primary button beside "This computer: {name}" under
+  the title, not a floating button, so toasts at the bottom never cover it.
+- Cards are buttons with hover and pressed backgrounds and a trailing
+  chevron. Connected devices still come first, then by name. The status
+  label reads "Not reachable" (was "Offline"), as in Flutter.
+- `widgets::empty_state` takes an optional text button, drawn by the new
+  `widgets::link_button`. `widgets::icon_button` gives its button the
+  tooltip as a widget id, so simulator tests click header buttons with
+  `widget::Id::from("Settings")`.
+- Tests: simulator clicks on a card, Settings, Transfers, Add device, "Find
+  a device to pair" and Retry; paired devices only; order; the drop
+  highlight. Snapshots `devices`, `devices-drop`, `devices-loading`,
+  `devices-empty`, `devices-failed`.
+- Checked in the real app with `--demo` under Xvfb: cards open the device,
+  the header buttons open Settings and Transfers, hover shows.
+
 **Build:** everything in Appendix A §2 that the spike lacks:
 - the header actions (Settings, Transfers);
 - "This computer: {name}";
@@ -496,6 +684,52 @@ the event.
 dark.
 
 ### 6. Device detail, with ping, ring and clipboard
+
+**Done (2026-09-25).** Where it differs from the text below:
+- `pages::device::view(store, plugins, id, unpairing, navigate, plugin,
+  unpair)`. Back goes to the device list. The header card has a large
+  type icon, the name, and `devices::status_row` (reachability plus every
+  plugin's status chip), now shared with the device cards. The actions
+  are tonal buttons in a wrapping row; a disabled one is drawn but can't
+  be pressed.
+- The facts are selectable through `widgets::selectable_text`, a
+  read-only `text_input` drawn as plain text: iced's `text` can't be
+  selected, but a text field without `on_input` still selects and copies.
+- Unpair is shell code: `Message::Unpair` opens the danger confirm
+  ("Unpair {name}?"), `Forget` runs `Core::forget_device` on the daemon's
+  runtime (it writes the trust store) while the button is disabled, and
+  `Forgotten` removes the device from the store and goes home if the
+  window still shows that device's pages (`Route::device`), or toasts the
+  error.
+- Plugin UIs: `PingUi`, `FindMyPhoneUi` and `ClipboardUi` (built from the
+  same `Arc<ClipboardPlugin>` the core runs, in `builtin_with_ui`). Ping
+  and ring queue their packet synchronously in `update`; send clipboard
+  reads the clipboard in `spawn_blocking` on the daemon's runtime. Each
+  message carries the device id and name, so the toast doesn't need the
+  device any more. `ping` and `findmyphone` gained an `ID` constant.
+- Recent transfers use `pages::transfers::transfer_row` (direction icon,
+  name, status in `transfer_tile.dart`'s words, a progress bar while not
+  terminal) and `status_label`. Step 8 adds Cancel, Open file and Open
+  folder to the row, and the page. iced's progress bar has no
+  indeterminate mode: before `transferring` it shows empty; step 8 may
+  animate it.
+- *Send file* and *Browse files* are the share and browse plugins'
+  actions; they appear with steps 11 and 12. Dropping on the page is
+  step 11.
+- Tests: each plugin's gating, toast and error (against a real core with
+  `ui::testing::connect_peer`), the ping notification, the page with a
+  fake plugin (listed/enabled actions, "no longer known", five newest
+  transfers and "See all", Unpair disabled while it runs), and the shell's
+  unpair (cancel keeps the device; confirm forgets it, empties the store
+  and goes home; a failure toasts and stays). Snapshots `device`,
+  `device-offline`, `device-gone`.
+- Checked in the real app against a CLI peer (loopback, Xvfb): Ping
+  toasts "Pinged CLI Peer.", Ring is disabled (a desktop doesn't ring), a
+  ping from the peer toasts "CLI Peer: Hello from the peer" (a desktop
+  notification once step 13 lands), Send clipboard says why when empty
+  and sends otherwise, a file the peer sent is listed under Recent
+  transfers, the Device ID selects, and Unpair returns home and unpairs
+  both sides.
 
 **Build:**
 - **The page** (Appendix A §3): header with icon, name and status (status
@@ -529,6 +763,65 @@ dark.
 
 ### 7. Add device, scanning, pairing, incoming prompt
 
+**Done (2026-09-25).** Where it differs from the text below:
+- `pages::add_device::view(store, searching, starting, Actions)` and
+  `pages::pairing::view(store, id, busy, Actions)`; `Actions` are structs
+  of `fn` message constructors. All the state is the shell's: `searching`
+  (with a scan counter, so an older scan's 4 s timer doesn't hide a newer
+  one's bar), `starting` (the device a start runs for), `cancelling`,
+  `answering` and `answer_error` (keyed by pairing id).
+- Every route change goes through `App::go`, which scans when Add device
+  is entered from elsewhere; coming back from a pairing page doesn't, as
+  the Flutter page stayed mounted under it. "Scan again" is a header icon
+  button, disabled while searching.
+- Start, cancel, accept and reject run on the daemon's runtime
+  (`App::core_task`): a start schedules the core's timeout with
+  `tokio::spawn`, and accepting writes the trust store. Answers go through
+  `Store::apply_pairing`. A started pairing opens its page only if the
+  window is still on Add device or a pairing page. Try again reuses
+  `Message::Pair`; the pairing page's buttons are disabled while a start
+  or its own cancel runs.
+- `ui::activity::activity_bar`, a custom widget (iced's `advanced`
+  feature, now on): a segment sweeping a track, redrawing itself while
+  shown. It stands in for Flutter's indeterminate indicators: the
+  searching bar, the Pair button of the pairing being started, and the
+  pairing page while pending. Step 8 can use it for queued transfers.
+- `widgets::verification_code` is now a read-only text field, so the code
+  selects and copies; the hair spaces that faked letter spacing are gone,
+  since they would be copied too.
+- "Add by IP address" is a shell `Dialog` with `Submit::Run`: the address
+  is parsed in the UI (worded as `invalid_address`), then
+  `Core::announce_to`. The new `Dialog::on_success` message
+  (`ShowSearching`) restarts the searching bar once it closes (step 9
+  made it the work's result instead).
+- The incoming prompt is `overlay::incoming::view`, drawn over the page,
+  toasts and dialogs by `dialog::modal`, whose click-outside message is
+  now optional (none here). Escape does nothing while it shows. Drops are
+  step 11's; the prompt must disable them then (`incoming_prompt_shows`).
+  The desktop notification for a request is step 13's.
+- `widgets::tonal`, `filled` and `outlined` are the shared button styles.
+  `dialog::surface` is the dialog card, also used by the prompt; it has a
+  border, not a shadow (see Traps).
+- Tests: the pages (candidates and blockers, Pair gating, "No devices
+  found" only after the search, Scan again, every pairing status with its
+  buttons, the prompt's queue count, busy and error) and the shell against
+  a real core (`ui::testing::connect_unpaired_peer` has a real
+  certificate, `request_pairing` sends the peer's request): scan on open
+  and not on the way back, add by IP refusing then announcing, pair then
+  cancel then Try again, a start that fails, the prompt on every page
+  until resolved elsewhere or accepted, and a failed answer keeping the
+  prompt with its reason. Snapshots `add-device`, `add-device-empty`,
+  `pairing-waiting`, `pairing-accepted`, `pairing-expired`,
+  `incoming-pairing`.
+- Checked in the real app against a CLI peer (loopback, Xvfb): Add device
+  scans and lists the peer, Pair opens the code, `myconnect pair accept`
+  on the peer shows "Paired with CLI Peer" and Done opens the device; after
+  Unpair, `myconnect pair <app>` from the peer raises the prompt, Accept
+  pairs both sides, and a request rejected through the app's API
+  (`myconnect --api-port … pair reject`) takes the prompt away. Add by IP
+  shows the parse error under the field and, for `127.0.0.1`, closes and
+  searches again.
+
 **Build:**
 - **Add device** (Appendix A §4):
   - scan on open (`core.announce()`), a 4 s "searching" progress bar, and
@@ -559,6 +852,51 @@ dark.
 
 ### 8. Transfers
 
+**Done (2026-09-25).** Where it differs from the text below:
+- `pages::transfers::view(store, actions, back, retry)` and
+  `transfer_row(transfer, show_device, actions)`, where
+  `transfers::Actions` holds `fn` constructors for Cancel, Open file and
+  Open folder. Each row is a card on the page; the device page's recent
+  transfers get the same buttons. `pages::device::view` now takes a
+  `device::Actions` struct too (navigate, plugin, unpair, transfer), which
+  also keeps it under clippy's argument limit.
+- Before `transferring` the bar is `activity_bar`, the sweep from step 7.
+  `format_bytes` and the status wording were already ported in step 6.
+- Cancel calls `Core::cancel_transfer` directly in `update` (a lock, no
+  I/O) and applies the snapshot through `Store::apply_transfer`; the
+  transfer's task marks it cancelled and the event updates the row. An
+  error (already ended, unknown) toasts in the core's words. Cancel isn't
+  disabled while it runs: it answers at once.
+- Opening is `ui::desktop::open`: an `Open` trait with `open` and `reveal`,
+  the `System` one through `opener` (the `reveal` feature; its `zbus` was
+  already in the tree), and a fake in tests. The shell runs it in
+  `spawn_blocking` on the daemon's runtime and toasts only a failure,
+  "Couldn’t open {path}". Open folder *reveals* the file (FileManager1
+  over D-Bus on Linux, falling back to opening the folder), where Flutter
+  opened the parent folder. On Linux `xdg-open` isn't waited for, so a
+  missing file would fail silently; `System` checks the path exists
+  first.
+- The transfers page's loading and failed states are drawn, but the core's
+  transfer list can't fail, so only Loading and Loaded occur.
+- Tests: the page (devices named, newest first, Cancel only while running,
+  Open file/folder only on completed with a saved path, empty and loading,
+  Back) and the shell against a real core: a transfer at 50 of 100 bytes,
+  Cancel reaches the core, the ended transfer reads "Cancelled" with no
+  Cancel button, and cancelling it again toasts why; opening reports only
+  failures. Snapshots `transfers`, `transfers-empty`.
+- Checked in the real app against a CLI peer (loopback, Xvfb, private
+  bus): a 1.5 GB send shows live progress on the Transfers page, Cancel
+  at about 870 MB turns the row "Cancelled" and removes the partial file,
+  and the sender reports it failed. Open file launched the default app
+  with the file; with the file deleted it toasts "Couldn’t open {path}".
+  Open folder activated Thunar through FileManager1, which under Xvfb
+  answers but maps no window (a `gdbus` call does the same).
+- Trap found: start a private `dbus-daemon` with the virtual display's
+  environment (`env -u WAYLAND_DISPLAY DISPLAY=:NN dbus-daemon --session
+  --fork …`). Services it activates (Thunar for Open folder, portals)
+  inherit *its* environment, and would otherwise open on the owner's
+  desktop.
+
 **Build:**
 - The Transfers page and a `transfer_row` widget (Appendix A §7):
   - direction icon, name, "From/To {device} · status";
@@ -580,6 +918,55 @@ dark.
 
 ### 9. Settings
 
+**Done (2026-09-26).** Where it differs from the text below:
+- `pages::settings::view(store, plugins, version, Actions)`. Each setting
+  is a card from the new `widgets::setting` (icon, name, value, a trailing
+  widget, the whole card pressable) or `widgets::switch_setting` (a
+  switch, toggled by the switch or anywhere on the card); plugins use the
+  same two, so their sections look like the shell's. Plugin sections go
+  after the download folder, as Flutter's clipboard switch did. The
+  device cards' hover style is now `widgets::card_button`.
+- Rename is a shell `Dialog` with `Submit::Run`. `Submit::Run` work now
+  returns the message to send on success (`Work<M>`, `Result<M, String>`),
+  which replaced `Dialog::on_success`: rename sends the settings the core
+  answered, so the page shows the new name without waiting for the event;
+  add by IP sends `ShowSearching`. The daemon's objection shows under the
+  field, as in Flutter.
+- Download folder, close-to-tray and rename run `Core::update_settings` on
+  the daemon's runtime (it writes `settings.json`) and apply the answer
+  through `Store::apply_settings`; a failure toasts in the core's words.
+  The clipboard plugin's switch patches its own section from its `ui.rs`
+  and relies on the `settings.changed` event, since plugins don't change
+  the store.
+- The picker is `ui::desktop::dialogs`: a `Pick` trait (`pick_folder`,
+  step 11 adds files), the `System` one through `rfd`'s
+  `AsyncFileDialog` (it needs no runtime: its portal backend blocks on a
+  thread of its own), and a fake in tests. rfd can't relabel the confirm
+  button, so Flutter's "Choose" is the platform's own word. The row isn't
+  disabled while the picker is open (Flutter didn't either): a portal that
+  never answers would otherwise lock the setting until a restart.
+- The version is built by `gui/build.rs`: `MYCONNECT_VERSION` if the build
+  sets it (for step 15's releases), otherwise
+  `CARGO_PKG_VERSION (git describe --tags --always)`, e.g.
+  `0.1.0 (v1.1.0-19-geeba428)`. `UiOptions` carries it.
+- The CLI couldn't set `closeToTray`, which the page now does: `myconnect
+  settings --close-to-tray <BOOL>` sets it, and `settings` prints it.
+- Tests: the page (every setting and its value, each control's message,
+  loading and Retry) and the shell against a real core: renaming with a
+  bad name keeps the dialog open with the daemon's reason, a good one
+  shows on the page and as "This computer: …" at home; the clipboard
+  switch and close-to-tray save; the version shows; the picker starts at
+  the current folder, a cancel changes nothing, a chosen folder is saved,
+  and a refused one toasts. The clipboard plugin's switch is also tested
+  on its own. Snapshot `settings`.
+- Checked in the real app (loopback, Xvfb, private bus): a bad name shows
+  the reason under the field, a good one saves and the CLI reads it; the
+  switches save; `myconnect settings --device-name … --clipboard-sync …`
+  from the CLI shows on the page live. The folder picker could not be
+  shown there: `xdg-desktop-portal-gtk` on the private bus never answered,
+  not even a direct `gdbus` call to it, so the real picker still needs a
+  look on a desktop session (steps 10 or 11).
+
 **Build:** the page from Appendix A §9:
 - **Device name:** the name dialog with max 32, a counter, the helper text,
   and the daemon's validation error shown in the field.
@@ -597,6 +984,38 @@ dark.
 **Done when:** the settings widget tests in Appendix B are ported.
 
 ### 10. Desktop integration spike (do this before 11 and 13)
+
+**Done (2026-09-26).** The table and the decisions are in
+[`adr/0001`](adr/0001-native-ui-in-iced.md), "Desktop integration". In
+short, and where it differs from the text below:
+- Tested on Linux only: X11 under Xvfb and Wayland under a headless labwc
+  (`WLR_BACKENDS=headless WLR_RENDERER=pixman`, its own
+  `XDG_RUNTIME_DIR`), each on a private bus with a fake
+  `StatusNotifierWatcher` and notification server written in dbus-python,
+  and a GTK drag source moved with XTest. macOS and Windows are from the
+  crates' sources; step 13 confirms them on those machines. The spike
+  code was thrown away.
+- **Drops:** no platform gives a position while a drag hovers, so there is
+  no per-card highlight. Drops are routed: device page → that device,
+  browse folder → upload there, anywhere else → the chooser (the DnD
+  fallback below). Folders arrive as drops too; the shell refuses them.
+- **Tray:** `ksni` works as hoped (activate, submenus, enabled flags, live
+  updates). Spawn it with `assume_sni_available(true)` and follow
+  `watcher_online`/`watcher_offline`; with no tray host, the window
+  always shows and closing it quits.
+- **Window:** close and reopen with `window::close`/`window::open` works
+  under `iced::daemon`. On Wayland the position can be neither read nor
+  set; placement restores size and maximized there.
+- **Notifications:** on Linux the shell talks to
+  `org.freedesktop.Notifications` over `zbus` itself (`notify-rust` can't
+  withdraw a notification it is waiting on); `notify-rust` only on macOS
+  and Windows. A click shows the window on Linux (tested) and Windows;
+  macOS is best effort.
+- **Single instance:** `interprocess`'s `GenericNamespaced`, an abstract
+  socket on Linux (nothing stale after a crash, tested), a `/tmp` file on
+  macOS (`try_overwrite`), a named pipe on Windows.
+- **Monitors:** `display-info` (new in the library table) for
+  fits-on-screen; iced only has the current monitor's size.
 
 **Why:** these are the parts where Rust GUI crates are weakest, and a
 surprise here changes the design of steps 11 and 13. Keep this spike
@@ -651,6 +1070,69 @@ each gap.
 
 ### 11. Share: send files, drag and drop, the chooser
 
+**Done (2026-09-26).** Where it differs from the text below:
+- `share::send_path(ctx, device_id, path)` opens the file, calls
+  `send_file` with its name and size, and streams it in with the new
+  `core::forward_reader` (browse's upload from a path can use it too). It
+  doesn't spawn the copy: it resolves once the whole file has gone into
+  the transfer, or the transfer ended first, as `POST
+  /devices/{id}/share` answers, so the UI's "one at a time" waits for
+  each file like Flutter's did. A path that isn't a readable regular file
+  is `SendPathError::File` ("The file couldn’t be read."), before any
+  transfer is recorded. `http.rs` is unchanged: it streams multipart, not
+  a path.
+- `plugins/share/ui.rs`: *Send files* (listed always, enabled while the
+  device is connected and takes `kdeconnect.share.request`, in the tray
+  too) asks the shell for `PickFiles` titled "Send files to {name}"; the
+  files go one at a time and failures are summed up once by the new
+  `ui::error::describe_file_failures` ("Couldn’t send {name}: …" /
+  "Couldn’t send N files: …"), which browse's uploads will share.
+  `drop_target` takes files for such a device, labelled "Drop to send to
+  {name}".
+- The shell's `PickFiles` goes through `Pick::pick_files` (rfd's
+  `pick_files`). rfd can't relabel the confirm button, so "Send" is the
+  platform's "Open".
+- Drops (`ui::overlay::drop`): winit sends a `FileHovered` per file, then a
+  `FileDropped` per file. `Drag` counts them and hands over the whole drop
+  once as many have dropped as hovered, or 200 ms after the first if the
+  count doesn't come (a timer, so macOS or Windows can differ harmlessly).
+  While files hover, the window is outlined and a pill says what a drop
+  does: the target's label on a page whose device takes them, otherwise
+  "Drop anywhere to choose a device" (not Flutter's "Drop on a device, or
+  anywhere to choose one": cards aren't targets any more).
+- The shell routes a drop to the page's device (`Route::device()`), asking
+  the plugin whose page it is first, then the others in
+  `builtin_with_ui()` order. Anywhere else, or when no plugin takes it,
+  the chooser opens: a modal over dialogs, "Send {file}" / "Send N files",
+  the paired devices a plugin's `drop_target` accepts for
+  `Route::Device`, drawn from the store so it follows devices live, and
+  "No paired device is connected and able to receive files." Choosing
+  opens the device's page and hands it the files; Escape, Cancel or a
+  click outside close it. Folders (anything not a regular file) are left
+  out, and a drop of only folders toasts "Only files can be sent, not
+  folders." Drops and the hint are ignored while the pairing prompt shows.
+- Step 5's per-card highlight ("Drop to send" on the card) is gone, with
+  its snapshot `devices-drop`.
+- Tests: the share UI half (gating, the picker request, failures summed
+  up once), `Drag` (counted, timed, a stale timer), the chooser widget,
+  and the shell over a real core running share: a drop on the device page
+  sends both files there, a drop away asks and choosing sends and opens
+  the device, a drop on a device that can't take files asks with only
+  the capable one listed, the chooser follows devices and says when none
+  can, a folder is refused and left out among files, a drop without hover
+  events still arrives whole, drops are ignored under the pairing prompt,
+  and *Send files* picks (a cancel sends nothing) and reports a file that
+  can't be read. `tests/transfer_e2e.rs` sends a local file from disk
+  between two real daemons. Snapshots `drop-chooser`, `drop-hint`.
+- Checked in the real app on X11 (Xvfb, private bus, a GTK drag source
+  moved with XTest, a CLI peer on loopback): the outline and pill show
+  while hovering; two files dropped on the home page open "Send 2 files"
+  listing the peer, and choosing it opens its page and both arrive
+  byte-identical; a drop on the device page says "Drop to send to Peer"
+  and sends straight away; a folder toasts; a drop under the pairing
+  prompt does nothing; *Send files* opened the portal's GTK chooser
+  (titled "Send files to Peer"), and a typed path was sent.
+
 **Build:**
 - Add `share::send_path(ctx, device_id, path)` in the daemon first (see
   the typed API table).
@@ -661,7 +1143,9 @@ each gap.
     reason}");
   - `drop_target` for a device that `acceptsFiles`.
 - **Shell drop handling:**
-  - hover state (per-card highlight if step 10 made that possible);
+  - hover state: the whole window (step 10: no position while hovering,
+    so no per-card highlight: remove step 5's `drop_target` highlight
+    from `devices::view`);
   - the window border and the "Drop on a device, or anywhere to choose one"
     pill;
   - only regular files are accepted ("Only files can be sent, not
@@ -677,6 +1161,81 @@ the tray ones, which come in step 13) are ported, and a real drop has been
 checked on Linux X11.
 
 ### 12. Browse: the file browser
+
+**Done (2026-09-26).** Where it differs from the text below:
+- The open folder is in the route: `browse::ui::route(device, folder)` is
+  `Route::Plugin` with page `files` (the storage) or `files:{path}`, so
+  Back, the drop target and the shell all see it. Folders, crumbs and Up
+  navigate through the shell.
+- New slot `UiPlugin::on_route(ctx, route)`: the shell's `App::go` tells
+  every plugin about each route change. Browse lists the folder there
+  (and the storage, if a folder opens without it, for the crumbs), and
+  lets go of everything when the route isn't its page, as Flutter's
+  auto-disposed providers did. `show hidden` and the sort reset when
+  another device's files open.
+- A device's files have no events, so a listing is refetched when its
+  folder opens, after every change (whether it worked or not), on
+  Refresh, and when the device can share its files again (`on_event`
+  compares `sharesFiles` before and after). An older answer for the same
+  folder is dropped. While a folder is listed again the old listing stays
+  on show.
+- `browse::ui::Files` is the seam for tests: `BrowsePlugin` implements it
+  (the shared instance, from `builtin_with_ui`), and the tests use an
+  in-memory phone. `BrowsePlugin::upload_path(ctx, device, folder, path)`
+  is new in the daemon, like `share::send_path`: it resolves once the
+  file has gone into the transfer, and refuses a path that isn't a
+  regular file (`UploadPathError::File`) before creating anything on the
+  device. `tests/browse_e2e.rs` covers it against the fake phone.
+- iced has no popup menu. *More* on a row opens the row's actions under
+  it (Preview, Download, Rename, Delete, as tonal buttons that wrap), and
+  closes them again; *Show hidden files* is a header toggle (an eye, its
+  tooltip says which way it goes).
+- The preview is the plugin's own modal over its page (`dialog::modal`,
+  `dialog::surface_style`), with `image::viewer` for pan and zoom; Close,
+  a click outside or Escape (a keyboard subscription while it shows)
+  close it. The image is decoded with the `image` crate on the daemon's
+  blocking pool, so one that can't be decoded says "This image can’t be
+  shown." (iced decodes at draw time and drops the error). At most 32 MiB
+  is read. New dependencies: iced's `image-without-codecs` feature, `image`
+  (five codecs) and `chrono` (ADR 0001's table).
+- `widgets::format_timestamp` (local `YYYY-MM-DD HH:MM`, through
+  `chrono`), moved here from step 3.
+- The name dialog pre-selects the name without its extension:
+  `ShellRequest::Prompt` and `dialog::Field` gained `selection`, which
+  `Dialogs::focus` applies with `select_range`. Renaming to the same name
+  does nothing.
+- A plugin page whose device is gone says "This device is no longer
+  known." (the shell's fallback), not the plugin.
+- `widgets::link_button` takes any text fragment, for the crumbs.
+- Tests (`plugins::browse::ui`): storage → folders → crumb and Up back
+  (and Back leaves the files), a folder opened directly still names its
+  root, hidden toggle, sorting both ways with folders first, Modified
+  only when wide, opening downloads with the Transfers toast, a small
+  image previews (a broken one says so), rename within the folder with
+  the pre-selection, slash refused locally, new folder, delete confirms
+  with folder wording, a failed change reported and listed again, drop
+  into a folder uploads (failures summed up once; none on the storage),
+  Upload files picks for the open folder, a refusing device says why with
+  Retry, browsing needs `sharesFiles`, relisting on reconnect, a stale
+  answer ignored. In the shell: the device page's *Browse files* opens
+  it, a drop on a folder uploads and on the storage sends. Snapshots
+  `files-storage`, `files-folder`, `files-folder-narrow` (a row's
+  actions), `files-empty`, `files-preview`, `files-not-shared`.
+- Checked in the real app against `examples/fake_phone.rs` (loopback,
+  Xvfb, private bus, the phone paired through the CLI): *Browse files*
+  lists the storage, a folder lists, a PNG previews and zooms with the
+  wheel, Escape closes it, a broken JPEG says it can't be shown, opening
+  a file downloads it into the download dir with the toast, New folder
+  creates one, Rename pre-selects `notes` and saves `todo.txt`, Delete
+  asks with the folder wording and deletes, a file dragged from a GTK
+  source onto the folder shows "Drop to upload to Internal storage" and
+  uploads, and stopping the phone shows "Connect Fake Phone to browse its
+  files." until it is back, when the folder is listed again.
+- Trap found: the app activates `xdg-desktop-portal` (which starts
+  `xdg-document-portal`) on the private bus as it starts, not only when a
+  picker opens; `iced_winit` reads the system theme through `mundy`, which
+  asks the settings portal. Stop them with the rest (see Traps, "Portals
+  on a private bus").
 
 The largest feature. It is all `plugins/browse/ui.rs`, over the shared
 `BrowsePlugin` instance's methods (list, content, download, mkdir, move,
@@ -716,11 +1275,118 @@ they run with `UiContext::spawn`.
 
 ### 13. Background: tray, close-to-tray, notifications, window placement, single instance
 
+**Done on Linux (2026-09-26).** macOS and Windows are step 13b. Where it
+differs from the text below:
+- **Linux only.** No macOS or Windows machine was available, and the UI
+  can't even be cross-checked for macOS here (`ring` needs Apple's C
+  toolchain). Rather than land uncompiled code, those platforms get no
+  tray (`tray::NoTray`: the window always shows and closing it quits)
+  and no notifications (`notify::NoNotifier` logs them) until step 13b.
+  Single instance, placement and monitors are the same code everywhere.
+- **Desktop glue** in `src/ui/desktop/`, each behind a trait with a fake
+  in the shell's tests: `tray` (`Tray`, `TrayItem`, `TrayCommand`; `ksni`
+  on Linux), `notify` (`Notifier`; `org.freedesktop.Notifications` over
+  `zbus` on Linux), `window` (`Windows`: open, close, raise and read the
+  window, and list the monitors, since iced's window tasks only run in a
+  real event loop), `placement` (`window.json`) and `instance` (single
+  instance). They report through one channel of `DesktopEvent`s (tray
+  click and choice, tray host up or down, notification click, second
+  launch, quit signal), read by one subscription. `src/ui/background.rs`
+  builds the tray menu and keeps the notifications.
+- `ksni` and `zbus` run on `async-io`, not tokio: iced's theme detection
+  already has `zbus` on `async-io`, and turning on `zbus/tokio` would
+  need a tokio runtime on iced's threads. The tray and notifications are
+  set up in `ui::run` before iced starts, so the tray works even if the
+  daemon doesn't (Flutter's `BackgroundHost` sat above everything for the
+  same reason). The icon is `assets/tray_icon.png` (copied from
+  `ui/assets/`, with the macOS template image for step 13b).
+- **Reports.** New `ShellRequest::Report { text, failure }`
+  (`ShellRequest::done`/`failed`): the window shows `text` as a toast;
+  from the tray, only a failure is shown, as a notification titled
+  `failure` ("Couldn’t ping Pixel"). Ping, ring, send clipboard and
+  send files report this way. The shell tags each plugin message with
+  where it came from (`Message::Plugin` / `Message::TrayPlugin`), and the
+  tag follows the plugin's own messages, a picker's answer included, so
+  *Send files…* from the tray reports a failure after the picker too. A
+  tray action that navigates (*Browse files*) or asks something shows
+  the window; its toasts are dropped.
+- *Send files* re-checks the device in `share::ui` itself, from the core,
+  whether picked from the tray or the window ("Couldn’t send to {name}:
+  The device is not connected right now."). As the plan says, and unlike
+  Flutter, a send from the tray reports only a failure, not "Sending
+  photo.jpg.".
+- The tray lists *Ring* and *Browse files* only for a device that says
+  it can (as Flutter did): `DeviceAction::visible_in_tray` follows the
+  capability in `findmyphone::ui` and `browse::ui`; the detail page
+  still lists them disabled. Tray labels are the actions' own ("Send
+  files", no ellipsis). Underscores are doubled for D-Bus menus. The
+  device label takes the first plugin's status ("Pixel · 82%"). The menu
+  is rebuilt after every message, but only sent to the tray when what it
+  shows changes, so transfer progress doesn't redraw it.
+- **Close and quit.** The window opens with `exit_on_close_request:
+  false`. Close (button or Ctrl+W) reads the window's placement, then
+  closes it to the tray if a tray host shows the icon and `closeToTray`
+  is on (or settings are unknown); otherwise it quits. Quit (tray, Ctrl+Q,
+  SIGTERM/SIGINT/SIGHUP) reads the placement, saves it, and ends iced;
+  `ui::run` then shuts the daemon down. It runs once; if the window can't
+  be read within a second it quits anyway. A tray host going away while
+  the window is closed shows it. macOS's menu-bar Quit is step 13b.
+- **Notifications.** The pairing request, the file received (an incoming
+  transfer completing that the store had seen before, on any snapshot or
+  event) and the ping (through `Notify`) are notifications while the
+  window is closed or unfocused; `Notify` over a focused window is a
+  toast. Resolving a request withdraws its notification. A click shows
+  the window (Linux: the `default` action).
+- **Placement** (`window.json`, the Flutter app's file and format, in
+  `$XDG_STATE_HOME/myconnect`, Application Support or `%LOCALAPPDATA%`,
+  or the data dir when `--data-dir` is given): saved 500 ms after the last
+  move or resize, and on close and quit, written through a temporary
+  file. Bounds come only from a normal window; a position the platform
+  can't tell (Wayland) keeps the old one. The window reopens there if
+  it fits a monitor from `display-info`, otherwise centred at that size.
+  It starts closed if it was quit from the tray, unless there is no
+  tray. The file is written in `update`: a few bytes, at most every half
+  second.
+- **Single instance:** `interprocess`, named from the uid and the hash of
+  the *absolute* data dir (not canonical: a first launch may run before
+  the directory exists, and the second must get the same name). A second
+  launch sends `show` and exits before starting anything.
+- Tests (in `ui::tests`, against fake tray, notifier and windows): Flutter's
+  `background_host_test.dart` scenarios (close to the tray and back,
+  close quits with close-to-tray off, tray Quit, pairing notification
+  shown/clicked/withdrawn, none over a focused window, file received,
+  ping as toast or notification, the menu's devices, "No paired devices"
+  and "No devices connected", Show details and Settings, ping from the
+  tray reporting only a failure), plus: no tray host (closing quits, the
+  window always shows), the host going away, quitting saves and the next
+  launch starts closed, the placement saved once the window stays put, a
+  navigating tray action shows the window, sending files from the tray
+  re-checks the device, the tray with a failed daemon, and the menu sent
+  only on change. `window_placement_test.dart` in `desktop::placement`;
+  the single instance in `desktop::instance`.
+- Real check on Linux (Xvfb, a private bus with a fake
+  `StatusNotifierWatcher` and notification server in dbus-python, a CLI
+  peer), all passing: the window shows at start and the item registers;
+  the close button (a `WM_DELETE_WINDOW` sent with Xlib) closes it to the
+  tray with `"visible":false` saved, and the item's `Activate` brings it
+  back; a second launch with the same (relative) `--data-dir` exits and
+  shows the window; a peer's pairing request while closed notifies ("E2E
+  Peer wants to pair with this computer."), the notification's `default`
+  action shows the window, and rejecting or accepting withdraws it; the
+  menu (`/MenuBar`, `com.canonical.dbusmenu.GetLayout -- 0 -1 '[]'`)
+  lists the paired peer with Ping, Send clipboard, Send files and Show
+  details; Ping from it leaves the window closed and notifies nothing;
+  the window moved with Xlib is saved, the menu's Quit exits with
+  `"visible":true`, and the next launch opens at the same spot; with
+  close-to-tray off (set from the CLI), the close button quits. The first
+  run found the single-instance name bug above.
+
 Use the decisions from step 10.
 
 **Build:**
 - **Close:** if `closeToTray` (or settings are unavailable), close the
-  window and keep running; otherwise quit.
+  window and keep running; otherwise quit. With no tray host (step 10:
+  `ksni`'s `watcher_offline`), always quit.
 - **Quit:** save the placement, shut down the service, exit. Guard against
   running twice. OS-requested quits (macOS menu bar, logout) take the same
   path.
@@ -763,7 +1429,64 @@ Use the decisions from step 10.
   without a tray host), a second launch shows the window, and placement
   survives a restart.
 
+### 13b. Tray and notifications on macOS and Windows
+
+On a Mac and a Windows machine (step 13 had neither):
+- `tray-icon` + `muda` (ADR 0001): created in the first `update` on the
+  main thread, its menu and icon events forwarded into the
+  `DesktopEvent` channel; a `Tray` over it, fed the same `TrayItem`s.
+  macOS uses `assets/tray_icon_template.png` as a template image.
+- `notify-rust` for `Notifier` (clicks as step 10 found: Windows yes,
+  macOS best effort; no withdrawal).
+- macOS's menu-bar Quit and logout take the quit path.
+- Confirm single instance (the `/tmp` socket file on macOS, a named pipe
+  on Windows) and placement with several monitors.
+
+**Done when:** the step 13 real check passes on both, and Appendix A §10's
+tray icon item is ticked. Also check what step 15 couldn't: the DMG's app
+launches from Finder with its tray icon, and the installed Windows app's
+notifications carry its name and icon.
+
 ### 14. End-to-end tests
+
+**Done (2026-09-26).** Where it differs from the text below:
+- `iced_test::Emulator` is good enough, driven from Rust rather than
+  `.ice` scripts. It runs the whole program as the event loop would, the
+  sync subscription and every task included, so the UI sees its daemon
+  only through the core's events, as in the app. `.ice` scripts can't
+  wait for something outside the program or act as the peer, and their
+  `expect` fails at once, so they don't fit a test that waits on the
+  network. The emulator's own findings match whole texts only; the tests
+  find texts, text fields (the verification code) and widget ids with an
+  `iced_test::Simulator` over the emulator's current view, then click
+  the point found through the emulator (`Mode::Immediate`), and poll
+  until what they wait for shows (20 s at most).
+- The tests can't reach `App`, which is private, so `ui::run` is split:
+  `ui::program(options, start, desktop)` builds the iced program on a
+  `ui::Desktop` (now public: tray, notifier, windows, placements, the
+  desktop's events, and the picker and file opener, which moved into it
+  from `App`) and returns it with a `ui::Service`, the daemon it started,
+  to shut down after. `run` builds the real desktop and calls it.
+- `tests/ui_e2e.rs` (`required-features = ["gui"]`, which a workspace
+  run satisfies): the app with its embedded daemon on loopback, against
+  a second `RunningService` in the same process, both in temporary
+  directories. The peer is driven through its core (and its HTTP client
+  for the clipboard), not a `myconnect run` process. The seven Flutter
+  scenarios, plus browsing: the fake phone (`tests/support/fake_phone.rs`)
+  binds `127.255.255.255:1716` and dials only the app's id; the test pairs
+  with it through Add device, opens *All files*, downloads `notes.txt`
+  and uploads a file through the (fake) picker.
+- The tray, notifier, windows, picker and opener are fakes, so the suite
+  needs no display or session bus, and runs in the existing `Rust` CI job
+  (`cargo test --workspace --all-targets`, with `ICED_BACKEND=tiny-skia`).
+  The Flutter integration job stays until step 15 replaces it. The
+  scenarios run one at a time (a lock), about 15 s in all. Peers get a
+  random name, and pair buttons are picked by the row naming the peer, so
+  other loopback instances in a scan don't matter.
+- Found on the way, not fixed (core, not UI): a device that hears an
+  announcement dials again even when already connected, and the new
+  connection replaces the old one, failing a pairing request sent on it.
+  The tests announce only while the peer isn't connected yet.
 
 **Why:** unit tests with fakes missed real bugs in the first milestone
 (HANDOFF).
@@ -791,6 +1514,72 @@ Use the decisions from step 10.
 **Done when:** the suite passes in CI.
 
 ### 15. Packaging and CI
+
+**Done (2026-09-26), except the macOS Finder check.** Where it differs
+from the text below:
+- **Hand-written scripts in `packaging/`**, not `cargo-packager` (ADR
+  0001's "Packaging" says why): `linux/build_deb.sh`,
+  `linux/check_deb.sh`, `linux/pkgbuild.sh` with `PKGBUILD.in`,
+  `macos/build_app.sh` with `Info.plist.in`, and
+  `windows/installer.nsi`. The Flutter `install.sh` (for unpacked
+  bundles) is gone: nothing ships a bundle any more.
+- **App id `org.myconnect.MyConnect` everywhere** (`ui::desktop::APP_ID`):
+  the window's Linux app id and X11 class (`StartupWMClass`), the
+  `.desktop` file and icon names, the notifications' `desktop-entry`
+  hint, the macOS bundle id and the Windows AUMID. The window got an icon
+  (`assets/window_icon.png`) for X11 and Windows. Flutter's was
+  `org.myconnect.myconnect_ui`, so a Linux dock pin of the old app
+  doesn't carry over.
+- **The `.deb`** holds `/usr/bin/myConnect` and `/usr/bin/myconnect`
+  (stripped), the `.desktop` file and the hicolor icons. Depends:
+  `dpkg-shlibdeps` (libc6, libgcc-s1, libxcb1) plus what winit loads at
+  runtime (xkbcommon, Wayland, X11 libraries), fontconfig and a font;
+  the GPU (Vulkan, EGL) and `xdg-desktop-portal` are Recommends, since
+  the app falls back to tiny-skia. Still built in a `debian:12`
+  container. The PKGBUILD's depends follow, under Arch's names.
+- **Two cargo builds, not one**: `cargo build -p myconnect-gui -p
+  myconnect` turns `gui` on for the CLI too (feature unification), which
+  put iced in it. `build_deb.sh` refuses a CLI with iced in it.
+- **macOS**: `MyConnect.app` from `lipo` of both architectures'
+  `myconnect-gui`, `AppIcon.icns` from `assets/macos/AppIcon.iconset`,
+  `LSMinimumSystemVersion` 12.0 (`MACOSX_DEPLOYMENT_TARGET`), a local
+  network usage string, ad-hoc signed, in a DMG. No CLI: it would need a
+  folder of its own in the bundle, and nobody asked for it there. A dev
+  build's bundle version is 0.0.0.
+- **Windows**: NSIS (from Chocolatey; the runner image has none), per
+  user into `%LOCALAPPDATA%\Programs\MyConnect` without administrator
+  rights: `myConnect.exe`, `cli\myconnect.exe`, a Start menu shortcut,
+  an uninstaller in Settings → Apps, and the AUMID registered under
+  `HKCU\Software\Classes\AppUserModelId\org.myconnect.MyConnect`.
+  `gui/build.rs` embeds the icon and names in the exe (`winresource`),
+  and release builds have no console window.
+- **Icons**: `assets/icon/*.svg` and `assets/generate_icons.sh`, which
+  now writes `assets/linux/hicolor/`, `assets/macos/AppIcon.iconset/`,
+  `assets/windows/app_icon.ico`, `assets/window_icon.png` and the tray
+  icons. The Flutter app's copies aren't regenerated (its Linux build
+  now misses its packaging files; it isn't maintained).
+- **CI** (`ci.yml`): the Flutter and Flutter-integration jobs are gone
+  (and `.github/actions/setup-flutter`); the Rust job gained
+  `libxcb1-dev` (`display-info` links it). A job running clippy on macOS
+  and Windows (it found an import unused off Linux) was dropped again at
+  the owner's request: pull requests check Linux only, and macOS and
+  Windows are built only for releases (and manual runs). `build.yml`
+  builds the Linux packages, the macOS DMG and the Windows installer,
+  then installs each `.deb` on a clean Debian 12 (`check_deb.sh`: Depends
+  only, so no GPU driver; the window opens with its class and icon; the
+  installed CLI reaches the app's API), and installs, checks and
+  uninstalls the Windows installer silently. Settings shows the release
+  version (`MYCONNECT_VERSION` from the tag).
+- Checked: manual runs of `build.yml`
+  (https://github.com/simophin/myconnect/actions/runs/36201273616) and
+  `ci.yml` (https://github.com/simophin/myconnect/actions/runs/36200250059)
+  on this work passed: every artifact built, both `.deb`s passed
+  `check_deb.sh`, and the Windows installer installed, registered its
+  AUMID and uninstalled cleanly; the `.deb` built here in `debian:12` installs
+  on a clean `debian:12` and draws its devices page in software; the
+  PKGBUILD, pointed at that `.deb`, installs with `makepkg -si` on Arch.
+  Not checked: launching the app from Finder (no Mac; step 13b's real
+  check covers it, with the tray).
 
 **Build:**
 - Release builds of `myconnect-gui` for:
@@ -830,6 +1619,37 @@ launches from Finder with its tray icon.
 **Only after** Appendix A is fully ticked and the owner has used the new
 app.
 
+**Done (2026-09-26).** The owner asked for it before step 13b, so
+Appendix A's macOS and Windows items stay open for that step. Where it
+differs from the text below:
+- **Deleted** `ui/` (the Flutter app, its tests, the vendored
+  `cnativeapi`, its packaging) and `ffi/` (`myconnect-ffi`), and dropped
+  `ffi` from the workspace. Nothing else used either: the `Cargo.lock`
+  loses only `myconnect-ffi`.
+- **Moved** `ui/docs/adr/` to `docs/archive/flutter-adr/` with its
+  history; its README and the links to it (ADR README, ADR 0001,
+  ARCHITECTURE §12) point there now.
+- **ARCHITECTURE**: §1 draws the app beside the API instead of the
+  Flutter UI over it; §2 lost `myconnect-ffi`, gained the
+  `plugins/*/ui.rs` dependency line and the `ui` row's current contents
+  (all six plugins have a UI half, `background`, the tray and the other
+  desktop glue), and the "a new feature is…" paragraph is `mod.rs` +
+  `http.rs` + `ui.rs`, one line in each of `builtin()` and
+  `builtin_with_ui()`, and the CLI; §7 and §8 name the app's flags and
+  its random token instead of the FFI config; §9 is now "the UI runs the
+  daemon in-process"; §10 describes `ui_e2e.rs`, the UI's unit and
+  snapshot tests, and the "done" commands without Flutter.
+- **HANDOFF**: read first is ARCHITECTURE, ADR 0001 and this plan; the
+  ground rules lost the FFI rule and gained "no iced in `-p myconnect`";
+  the traps are the UI's (a short list pointing at this plan's); the
+  real-app recipe runs `myconnect-gui` under Xvfb and drives it through
+  the CLI; open work lists step 13b and this plan's "Open work".
+- **README** and **CLAUDE.md** describe the iced app only. CLAUDE.md's
+  display rule now explains the single-instance socket (per data dir)
+  rather than Flutter's `GApplication`.
+- Code comments that named the FFI or files under `ui/` were reworded;
+  the ones that say a behaviour follows the Flutter app stay, as history.
+
 **Build:**
 - Delete `ui/` and `ffi/` and remove them from the workspace.
 - Move `ui/docs/adr/` to `docs/archive/flutter-adr/`.
@@ -868,6 +1688,29 @@ app.
   otherwise.
 - **macOS loopback.** `--discovery-loopback` can't find peers on macOS
   (no `127.255.255.255`). Use `--demo` there, and do peer tests on Linux.
+- **No shadows under tiny-skia.** iced 0.14's software renderer draws a
+  quad's shadow without the clip mask, so every partial redraw (a
+  blinking text cursor, an activity bar) paints it again over itself and
+  the shadowed widget turns black. Dialogs use a border instead. Check
+  anything with a shadow under `ICED_BACKEND=tiny-skia` in the real app;
+  snapshots render one frame and don't show it.
+- **Driving the app under Xvfb.** There is no window manager, so a click
+  doesn't give the window keyboard focus: call `XSetInputFocus` on it
+  (through `libX11` with ctypes) before sending keys with XTest.
+- **Helpers on the owner's Wayland.** Unsetting `WAYLAND_DISPLAY` isn't
+  enough to keep a GTK or Wayland client off the owner's desktop: they
+  fall back to `$XDG_RUNTIME_DIR/wayland-0`. For helpers under Xvfb set
+  `GDK_BACKEND=x11` (and `XDG_SESSION_TYPE=x11` for `display-info`); for
+  a headless compositor give it its own short `XDG_RUNTIME_DIR` (socket
+  paths are limited to 108 bytes, so not under the scratchpad).
+- **Portals on a private bus.** The app itself (the theme, at start) and a
+  file picker ask `xdg-desktop-portal`, which D-Bus activates on your
+  private bus, and it starts `xdg-document-portal` too. That one mounts its FUSE file system at the
+  owner's `$XDG_RUNTIME_DIR/doc` if nothing is mounted there. Stop every
+  process on your bus when done (match `DBUS_SESSION_BUS_ADDRESS` in
+  `/proc/<pid>/environ`), and check the mount is as you found it.
+- **`setsid cmd &` forks**, so `$!` is a wrapper that has already exited.
+  Record the PID from `pgrep -f` with your run directory in the pattern.
 - **iced version.** Pin `iced = "0.14"` and `iced_fonts = "0.3"` (the
   version that matches 0.14). Upgrading iced is its own change, never
   mixed into a feature step.
@@ -889,110 +1732,110 @@ Tick as you go (`[x]`), in the same commit as the work. File references
 are to the Flutter app under `ui/lib/src/`.
 
 ### §0 Startup and configuration
-- [ ] Starting screen while the daemon starts; error screen with Retry that retries the start (`core/daemon/daemon_gate.dart`)
-- [ ] Tray and close-to-tray work even when the daemon failed to start
-- [ ] Flags/env: data dir, download dir, device name, discovery loopback, system clipboard (default on), API port/token; `window.json` goes to the data dir when one is given
-- [ ] Version in Settings
+- [x] Starting screen while the daemon starts; error screen with Retry that retries the start (`core/daemon/daemon_gate.dart`)
+- [x] Tray and close-to-tray work even when the daemon failed to start (Linux; step 13b for macOS and Windows)
+- [x] Flags/env: data dir, download dir, device name, discovery loopback, system clipboard (default on), API port/token; `window.json` goes to the data dir when one is given
+- [x] Version in Settings
 - [ ] Light and dark themes follow the system
 
 ### §2 Devices (home) (`features/devices/devices_page.dart`)
-- [ ] Title "Devices"; Settings and Transfers buttons with tooltips
-- [ ] "This computer: {name}" once settings are loaded
-- [ ] "Add device" button
-- [ ] Loading; error with Retry; empty: icon, "No paired devices yet", "Find a device to pair"
-- [ ] Paired devices only, sorted by name (case-insensitive)
-- [ ] Card: type icon (primary when connected), name, status label (Connected / Nearby / Not reachable) + status slot; opens the device
-- [ ] Drop on a card: "Drop to send" highlight when the device accepts files
+- [x] Title "Devices"; Settings and Transfers buttons with tooltips
+- [x] "This computer: {name}" once settings are loaded
+- [x] "Add device" button
+- [x] Loading; error with Retry; empty: icon, "No paired devices yet", "Find a device to pair"
+- [x] Paired devices only, sorted by name (case-insensitive)
+- [x] Card: type icon (primary when connected), name, status label (Connected / Nearby / Not reachable) + status slot; opens the device
+- [x] ~~Drop on a card: "Drop to send" highlight when the device accepts files~~ No position while a drag hovers (step 10): a drop on the home page opens the chooser
 
 ### §3 Device detail (`features/devices/device_detail_page.dart`)
-- [ ] Title = device name; "This device is no longer known." when gone
-- [ ] Header: large icon, name, status (with battery)
-- [ ] Selectable facts: Device ID, Type, Protocol version
-- [ ] Send file: enabled when `acceptsFiles`; multi-select picker "Send"; one summary toast for failures
-- [ ] Browse files: enabled when `sharesFiles`
-- [ ] Ping: enabled when `acceptsPings`; toast "Pinged {name}."
-- [ ] Ring: enabled when `canRing`; toast "Asked {name} to ring."
-- [ ] Send clipboard: listed if `supportsClipboard`, enabled if `acceptsClipboard`; toast "Sent the clipboard to {name}."
-- [ ] Errors from any action as a toast
-- [ ] Recent transfers (≤5, newest first, no device name) + "See all"
-- [ ] Unpair: confirm "Unpair {name}?" + body text; goes home; toast on error
-- [ ] Drop anywhere on the page sends to this device
+- [x] Title = device name; "This device is no longer known." when gone
+- [x] Header: large icon, name, status (with battery)
+- [x] Selectable facts: Device ID, Type, Protocol version
+- [x] Send file: enabled when `acceptsFiles`; multi-select picker "Send"; one summary toast for failures
+- [x] Browse files: enabled when `sharesFiles`
+- [x] Ping: enabled when `acceptsPings`; toast "Pinged {name}."
+- [x] Ring: enabled when `canRing`; toast "Asked {name} to ring."
+- [x] Send clipboard: listed if `supportsClipboard`, enabled if `acceptsClipboard`; toast "Sent the clipboard to {name}."
+- [x] Errors from any action as a toast
+- [x] Recent transfers (≤5, newest first, no device name) + "See all"
+- [x] Unpair: confirm "Unpair {name}?" + body text; goes home; toast on error
+- [x] Drop anywhere on the page sends to this device
 
 ### §4 Add device (`features/devices/add_device_page.dart`)
-- [ ] Scan on open; 4 s "searching" indicator; Scan again disabled while searching; toast on scan error
-- [ ] Intro text
-- [ ] "No devices found" when empty and not searching
-- [ ] Candidates: unpaired and not unavailable; blocker text ("Pairing in progress" / "Not connected"), otherwise reachability
-- [ ] Pair: disabled when blocked or while another start is in flight; spinner for the one starting; goes to the pairing page; toast on error
-- [ ] "Add by IP address" row + dialog: autofocus, hint "192.168.1.20", helper text, Enter submits, error under the field, Add disabled while sending; restarts the searching indicator on success
+- [x] Scan on open; 4 s "searching" indicator; Scan again disabled while searching; toast on scan error
+- [x] Intro text
+- [x] "No devices found" when empty and not searching
+- [x] Candidates: unpaired and not unavailable; blocker text ("Pairing in progress" / "Not connected"), otherwise reachability
+- [x] Pair: disabled when blocked or while another start is in flight; spinner for the one starting; goes to the pairing page; toast on error
+- [x] "Add by IP address" row + dialog: autofocus, hint "192.168.1.20", helper text, Enter submits, error under the field, Add disabled while sending; restarts the searching indicator on success
 
 ### §5 Pairing (`features/pairing/`)
-- [ ] Pairing page: every status's icon, title and detail (table in the inventory); "This pairing request no longer exists."
-- [ ] Buttons: Cancel (pending), Done (accepted → device), Close / Try again (other terminal states); disabled while busy
-- [ ] Verification code: large, monospace, letter-spaced, selectable, on a rounded surface
-- [ ] Incoming prompt over every screen while requests are pending; modal; "{n} more request(s) waiting"; Accept/Reject; inline error keeps it open; disappears when resolved elsewhere
-- [ ] Guard: a non-terminal pairing snapshot never replaces a terminal one
+- [x] Pairing page: every status's icon, title and detail (table in the inventory); "This pairing request no longer exists."
+- [x] Buttons: Cancel (pending), Done (accepted → device), Close / Try again (other terminal states); disabled while busy
+- [x] Verification code: large, monospace, letter-spaced, selectable, on a rounded surface
+- [x] Incoming prompt over every screen while requests are pending; modal; "{n} more request(s) waiting"; Accept/Reject; inline error keeps it open; disappears when resolved elsewhere
+- [x] Guard: a non-terminal pairing snapshot never replaces a terminal one
 
 ### §6 Send files and drop (`features/send/`)
 Dropping applies on X11, macOS and Windows, not on Wayland (see Owner decisions).
-- [ ] Drop on a device that accepts files: sends directly
-- [ ] Drop elsewhere / on a device that can't take files: chooser dialog ("Send {file}" / "Send N files", live list, empty text, Cancel); after choosing, go to the device
-- [ ] Drop on an open browser folder: uploads there
-- [ ] Folders refused: "Only files can be sent, not folders."
-- [ ] Drag hint: window border + "Drop on a device, or anywhere to choose one"
-- [ ] Drops disabled while the pairing prompt shows
-- [ ] Files sent one at a time; failures summarised once (send and upload wording)
+- [x] Drop on a device that accepts files: sends directly (on its page; see step 11)
+- [x] Drop elsewhere / on a device that can't take files: chooser dialog ("Send {file}" / "Send N files", live list, empty text, Cancel); after choosing, go to the device
+- [x] Drop on an open browser folder: uploads there
+- [x] Folders refused: "Only files can be sent, not folders."
+- [x] Drag hint: window border + a pill (the target's label, or "Drop anywhere to choose a device")
+- [x] Drops disabled while the pairing prompt shows
+- [x] Files sent one at a time; failures summarised once (send and upload wording)
 
 ### §7 Transfers (`features/transfers/`)
-- [ ] Page: newest first; empty "No transfers yet"; loading; error + Retry
-- [ ] Row: direction icon, name, "From/To {device} · status", status wording incl. failure reasons
-- [ ] Progress: determinate while transferring, indeterminate before
-- [ ] Cancel while active; toast on error
-- [ ] Open file / Open folder on completed with `savedPath`; toast "Couldn't open {path}"
-- [ ] `format_bytes` as in `transfer_tile.dart:107-118`
-- [ ] Guard: newer / terminal wins
+- [x] Page: newest first; empty "No transfers yet"; loading; error + Retry
+- [x] Row: direction icon, name, "From/To {device} · status", status wording incl. failure reasons
+- [x] Progress: determinate while transferring, indeterminate before
+- [x] Cancel while active; toast on error
+- [x] Open file / Open folder on completed with `savedPath`; toast "Couldn't open {path}"
+- [x] `format_bytes` as in `transfer_tile.dart:107-118`
+- [x] Guard: newer / terminal wins
 
 ### §8 File browser (`features/files/`)
-- [ ] Title "Files on {name}"; Upload files, New folder (both only inside a folder), Refresh, Show hidden files
-- [ ] "no longer known" / "doesn't share its files" / "Connect {name} to browse its files."
-- [ ] Storage list; "Connecting to the device…"; "The device isn't sharing any storage."
-- [ ] Breadcrumbs: Up, Storage › root › segments, links, scroll to the end
-- [ ] Columns Name/Size/Modified (Modified at ≥600 px), sort toggle, folders first, name tie-break
-- [ ] Row: icon by extension, name, size, modified `YYYY-MM-DD HH:MM`, menu Preview/Download/Rename/Delete
-- [ ] Click: folder opens, previewable image (≤32 MiB, jpg/jpeg/png/gif/webp/bmp) previews, else downloads
-- [ ] Download toast with Transfers action
-- [ ] Preview dialog with pan/zoom; "This image can't be shown."
-- [ ] Name dialog: pre-selects the name without its extension; client validation ("Enter a name.", "That name is reserved.", "Names can't contain "/".")
-- [ ] Delete confirm with file / folder wording
-- [ ] Refetch after every change (success or failure), on Refresh, on reconnect
-- [ ] Empty folder: "This folder is empty. Drop files here to upload them."
+- [x] Title "Files on {name}"; Upload files, New folder (both only inside a folder), Refresh, Show hidden files (a toggle)
+- [x] "no longer known" / "doesn't share its files" / "Connect {name} to browse its files."
+- [x] Storage list; "Connecting to the device…"; "The device isn't sharing any storage."
+- [x] Breadcrumbs: Up, Storage › root › segments, links, scroll to the end
+- [x] Columns Name/Size/Modified (Modified at ≥600 px), sort toggle, folders first, name tie-break
+- [x] Row: icon by extension, name, size, modified `YYYY-MM-DD HH:MM`, menu Preview/Download/Rename/Delete (under the row, see step 12)
+- [x] Click: folder opens, previewable image (≤32 MiB, jpg/jpeg/png/gif/webp/bmp) previews, else downloads
+- [x] Download toast with Transfers action
+- [x] Preview dialog with pan/zoom; "This image can't be shown."
+- [x] Name dialog: pre-selects the name without its extension; client validation ("Enter a name.", "That name is reserved.", "Names can't contain "/".")
+- [x] Delete confirm with file / folder wording
+- [x] Refetch after every change (success or failure), on Refresh, on reconnect
+- [x] Empty folder: "This folder is empty. Drop files here to upload them."
 
 ### §9 Settings (`features/settings/`)
-- [ ] Device name dialog: max 32 with counter, helper text, error in the field from the daemon, Save disabled while saving
-- [ ] Download folder picker (starts at current, "Choose")
-- [ ] Sync clipboard switch (from the clipboard plugin's slot)
-- [ ] Keep running when the window is closed switch
-- [ ] Version
-- [ ] Loading; error + Retry; toast on save error
+- [x] Device name dialog: max 32 with counter, helper text, error in the field from the daemon, Save disabled while saving
+- [x] Download folder picker (starts at current; the confirm label is the platform's, see step 9)
+- [x] Sync clipboard switch (from the clipboard plugin's slot)
+- [x] Keep running when the window is closed switch
+- [x] Version
+- [x] Loading; error + Retry; toast on save error
 
 ### §10 Background (`features/background/background_host.dart`, `core/desktop/`)
-- [ ] Close hides when `closeToTray` (or settings unavailable), else quits
-- [ ] Quit: stop the daemon, save placement, exit; guarded; also for OS-requested exits
-- [ ] Tray: left click shows the window; right click menu
-- [ ] Menu: Open MyConnect · per connected paired device "{name}" / "{name} · N%" with Send files…, Ping, Ring (listed if capable), Send clipboard (listed if supported), Browse files (listed if capable), Show details · "No paired devices" / "No devices connected" · Settings · Quit
-- [ ] Tray Send files…: picker without showing the window; re-check device after pick; report via Notify
-- [ ] Tray Ping / Ring / Send clipboard: no window; failures only
-- [ ] Notify = toast when focused, desktop notification otherwise
-- [ ] Notification: pairing request (unfocused only; withdrawn when resolved)
-- [ ] Notification: file received (incoming, completed after startup, unfocused)
-- [ ] Notification: ping received (from the ping plugin)
-- [ ] Clicking a notification shows the window (where the platform allows; see step 10)
-- [ ] Window placement: saved/restored per ADR 0009, fits-on-screen, maximized, start hidden
-- [ ] Single instance: second launch shows the running window
-- [ ] Tray icon assets (template image on macOS)
+- [x] Close hides when `closeToTray` (or settings unavailable), else quits (Linux; step 13b for macOS and Windows)
+- [x] Quit: stop the daemon, save placement, exit; guarded; also for OS-requested exits (Linux; step 13b for macOS and Windows)
+- [x] Tray: left click shows the window; right click menu (Linux; step 13b for macOS and Windows)
+- [x] Menu: Open MyConnect · per connected paired device "{name}" / "{name} · N%" with Send files…, Ping, Ring (listed if capable), Send clipboard (listed if supported), Browse files (listed if capable), Show details · "No paired devices" / "No devices connected" · Settings · Quit (Linux; step 13b for macOS and Windows)
+- [x] Tray Send files…: picker without showing the window; re-check device after pick; report via Notify (Linux; step 13b for macOS and Windows)
+- [x] Tray Ping / Ring / Send clipboard: no window; failures only (Linux; step 13b for macOS and Windows)
+- [x] Notify = toast when focused, desktop notification otherwise (Linux; step 13b for macOS and Windows)
+- [x] Notification: pairing request (unfocused only; withdrawn when resolved) (Linux; step 13b for macOS and Windows)
+- [x] Notification: file received (incoming, completed after startup, unfocused) (Linux; step 13b for macOS and Windows)
+- [x] Notification: ping received (from the ping plugin) (Linux; step 13b for macOS and Windows)
+- [x] Clicking a notification shows the window (where the platform allows; see step 10) (Linux; step 13b for macOS and Windows)
+- [x] Window placement: saved/restored per ADR 0009, fits-on-screen, maximized, start hidden
+- [x] Single instance: second launch shows the running window
+- [ ] Tray icon assets (template image on macOS): Linux done in step 13; the macOS template image in step 13b
 
 ### §12 Platform
-- [ ] Linux: installed as `myConnect`, with the CLI in the same package; `.desktop` file, icons, window class matching the desktop file
+- [x] Linux: installed as `myConnect`, with the CLI in the same package; `.desktop` file, icons, window class matching the desktop file
 - [ ] macOS: app bundle, icon, tray template icon, Downloads access works without the sandbox
 - [ ] Windows: single instance, notification identity, installer
 

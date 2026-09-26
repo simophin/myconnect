@@ -2,7 +2,7 @@
 //! browsing in the app without a phone.
 //!
 //! ```sh
-//! cargo run --example fake_phone -- <DATA_DIR> <STORAGE_DIR> <DESKTOP_ID>
+//! cargo run --example fake_phone -- <DATA_DIR> <STORAGE_DIR> <DESKTOP_ID> [NAME]
 //! ```
 //!
 //! It listens for loopback discovery announcements on UDP
@@ -18,15 +18,19 @@ mod fake_phone;
 
 use std::{net::SocketAddr, path::PathBuf};
 
-use fake_phone::{BrowseReply, FakePhone, FakePhoneConfig};
+use fake_phone::{BrowseReply, FakePhone, FakePhoneConfig, PHONE_NAME};
 use myconnect::transport::lan::{DISCOVERY_PORT, LOOPBACK_BROADCAST};
 
 #[tokio::main]
 async fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
-    let [data_dir, storage, desktop_id] = arguments.as_slice() else {
-        eprintln!("usage: fake_phone <DATA_DIR> <STORAGE_DIR> <DESKTOP_ID>");
-        std::process::exit(2);
+    let (data_dir, storage, desktop_id, name) = match arguments.as_slice() {
+        [data_dir, storage, desktop_id] => (data_dir, storage, desktop_id, PHONE_NAME),
+        [data_dir, storage, desktop_id, name] => (data_dir, storage, desktop_id, name.as_str()),
+        _ => {
+            eprintln!("usage: fake_phone <DATA_DIR> <STORAGE_DIR> <DESKTOP_ID> [NAME]");
+            std::process::exit(2);
+        }
     };
     let storage = PathBuf::from(storage);
     for root in ["internal", "sdcard"] {
@@ -34,6 +38,7 @@ async fn main() {
     }
 
     let phone = FakePhone::start(FakePhoneConfig {
+        name: name.to_owned(),
         data_dir: data_dir.into(),
         storage,
         reply: BrowseReply::Serve(vec![

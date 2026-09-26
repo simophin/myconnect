@@ -19,7 +19,7 @@ use crate::{
         ApiToken, FilesystemTrustStore, LocalIdentity, SettingsFile, StoredSettings, TrustStore,
         default_config_dir,
     },
-    core::{Core, LocalDeviceSnapshot, Settings, SettingsDefaults, TransferConfig},
+    core::{Core, LocalDeviceSnapshot, Plugin, Settings, SettingsDefaults, TransferConfig},
     plugins::{
         self,
         clipboard::{ClipboardService, InMemoryClipboard, SystemClipboard},
@@ -32,7 +32,7 @@ use crate::{
 };
 
 /// Options for starting the MyConnect service.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunRequest {
     /// Bearer token API clients must present. `None` leaves the control API
     /// unauthenticated.
@@ -83,8 +83,9 @@ impl Default for RunRequest {
 
 /// A started daemon: LAN transport, core, and control API.
 ///
-/// The CLI runs one until Ctrl-C; an embedding frontend (see the `ffi` crate)
-/// starts one, reads [`RunningService::api_addr`], and shuts it down on exit.
+/// The CLI runs one until Ctrl-C; the desktop app (`myconnect-gui`) starts
+/// one with [`RunningService::start_with`], hands its [`RunningService::core`]
+/// to the UI, and shuts it down when the user quits.
 pub struct RunningService {
     core: Core,
     lan: LanService,
@@ -92,7 +93,18 @@ pub struct RunningService {
 }
 
 impl RunningService {
+    /// Start with the built-in plugins ([`plugins::builtin`]).
     pub async fn start(request: RunRequest) -> Result<Self> {
+        Self::start_with(request, plugins::builtin).await
+    }
+
+    /// Start with the plugins `plugins` builds from the clipboard this run
+    /// chose (the desktop's or an in-memory one). The desktop app uses this
+    /// to keep each plugin's UI half next to the instance the core runs.
+    pub async fn start_with(
+        request: RunRequest,
+        plugins: impl FnOnce(Arc<dyn ClipboardService + Send + Sync>) -> Vec<Arc<dyn Plugin>>,
+    ) -> Result<Self> {
         let config_dir = request
             .data_dir
             .clone()
@@ -149,7 +161,7 @@ impl RunningService {
             8,
             local_public_key_der,
             trust_store.clone(),
-            plugins::builtin(clipboard),
+            plugins(clipboard),
             32,
             256,
             identity.clone(),

@@ -58,7 +58,13 @@ pub(crate) fn handle() -> (Core, mpsc::Receiver<LanCommand>) {
 pub(crate) fn handle_with_trust(
     trust_store: MemoryTrustStore,
 ) -> (Core, mpsc::Receiver<LanCommand>) {
-    build(trust_store, Vec::new())
+    build(trust_store, Vec::new(), 1)
+}
+
+/// A core with no devices and no plugins whose event bus holds `capacity`
+/// events, for tests that watch several.
+pub(crate) fn handle_with_event_capacity(capacity: usize) -> (Core, mpsc::Receiver<LanCommand>) {
+    build(MemoryTrustStore::default(), Vec::new(), capacity)
 }
 
 /// A core with no devices running only `plugin`, and the plugin, so a
@@ -67,13 +73,14 @@ pub(crate) fn handle_with_plugin<P: Plugin>(
     plugin: P,
 ) -> (Core, Arc<P>, mpsc::Receiver<LanCommand>) {
     let plugin = Arc::new(plugin);
-    let (core, commands) = build(MemoryTrustStore::default(), vec![plugin.clone()]);
+    let (core, commands) = build(MemoryTrustStore::default(), vec![plugin.clone()], 1);
     (core, plugin, commands)
 }
 
 fn build(
     trust_store: MemoryTrustStore,
     plugins: Vec<Arc<dyn Plugin>>,
+    event_capacity: usize,
 ) -> (Core, mpsc::Receiver<LanCommand>) {
     let directory = tempfile::tempdir().unwrap();
     let identity = Arc::new(LocalIdentity::load_or_create(directory.path()).unwrap());
@@ -87,7 +94,7 @@ fn build(
         Arc::new(trust_store),
         plugins,
         1,
-        1,
+        event_capacity,
         identity,
         // Payload listeners stay off the network.
         TransferConfig::new(directory.path().join("downloads"))

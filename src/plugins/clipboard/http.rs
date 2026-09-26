@@ -29,15 +29,12 @@ pub(super) fn routes(plugin: Arc<ClipboardPlugin>, ctx: PluginContext) -> Router
 
 impl From<ClipboardSyncError> for ApiProblem {
     fn from(error: ClipboardSyncError) -> Self {
+        let code = error.code();
         match error {
-            ClipboardSyncError::TextTooLarge { .. } => ApiProblem::new(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "Payload too large",
-                "clipboard_text_too_large",
-            ),
-            ClipboardSyncError::Empty => {
-                ApiProblem::new(StatusCode::CONFLICT, "Conflict", "clipboard_empty")
+            ClipboardSyncError::TextTooLarge { .. } => {
+                ApiProblem::new(StatusCode::PAYLOAD_TOO_LARGE, "Payload too large", code)
             }
+            ClipboardSyncError::Empty => ApiProblem::new(StatusCode::CONFLICT, "Conflict", code),
             ClipboardSyncError::Core(error) => error.into(),
         }
     }
