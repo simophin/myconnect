@@ -1,7 +1,8 @@
 //! The daemon's features.
 //!
 //! Each feature implements [`crate::core::Plugin`] and is listed in
-//! [`builtin`]: ping, find my phone, battery, clipboard, share and browse.
+//! [`builtin`]: ping, find my phone, battery, clipboard, share, browse and
+//! notifications.
 //! The set is fixed at compile time; nothing is loaded at runtime. A plugin
 //! reaches the core through its [`crate::core::PluginContext`], never another
 //! plugin. See `docs/ARCHITECTURE.md` §2.
@@ -10,6 +11,7 @@ pub mod battery;
 pub mod browse;
 pub mod clipboard;
 pub mod findmyphone;
+pub mod notifications;
 pub mod ping;
 pub mod share;
 
@@ -31,6 +33,7 @@ pub struct Parts {
     pub core: Vec<Arc<dyn Plugin>>,
     pub clipboard: Arc<clipboard::ClipboardPlugin>,
     pub browse: Arc<browse::BrowsePlugin>,
+    pub notifications: Arc<notifications::NotificationsPlugin>,
 }
 
 /// Every plugin in this build, and the instances among them that the UI
@@ -38,6 +41,7 @@ pub struct Parts {
 pub fn builtin_parts(clipboard: Arc<dyn clipboard::ClipboardService + Send + Sync>) -> Parts {
     let clipboard = Arc::new(clipboard::ClipboardPlugin::new(clipboard));
     let browse = Arc::new(browse::BrowsePlugin::default());
+    let notifications = Arc::new(notifications::NotificationsPlugin::default());
     Parts {
         core: vec![
             Arc::new(ping::PingPlugin),
@@ -46,9 +50,11 @@ pub fn builtin_parts(clipboard: Arc<dyn clipboard::ClipboardService + Send + Syn
             clipboard.clone(),
             Arc::new(share::SharePlugin),
             browse.clone(),
+            notifications.clone(),
         ],
         clipboard,
         browse,
+        notifications,
     }
 }
 
@@ -80,7 +86,11 @@ mod tests {
             strings(
                 &[
                     &bidirectional[..],
-                    &[browse::PACKET_TYPE, battery::PACKET_TYPE]
+                    &[
+                        browse::PACKET_TYPE,
+                        battery::PACKET_TYPE,
+                        notifications::PACKET_TYPE
+                    ]
                 ]
                 .concat()
             )
@@ -92,7 +102,10 @@ mod tests {
                     &bidirectional[..],
                     &[
                         browse::REQUEST_PACKET_TYPE,
-                        findmyphone::REQUEST_PACKET_TYPE
+                        findmyphone::REQUEST_PACKET_TYPE,
+                        notifications::REQUEST_PACKET_TYPE,
+                        notifications::REPLY_PACKET_TYPE,
+                        notifications::ACTION_PACKET_TYPE,
                     ]
                 ]
                 .concat()

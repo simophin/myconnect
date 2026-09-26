@@ -1629,6 +1629,74 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferry"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "async-stream",
+ "axum",
+ "bytes",
+ "chrono",
+ "clap",
+ "directories",
+ "display-info",
+ "dotenvy",
+ "futures-core",
+ "futures-util",
+ "gethostname",
+ "iced",
+ "iced_fonts",
+ "iced_runtime",
+ "iced_test",
+ "image",
+ "interprocess",
+ "ksni",
+ "libc",
+ "mac-usernotifications",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "opener",
+ "rcgen",
+ "reqwest",
+ "rfd",
+ "russh",
+ "russh-sftp",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "socket2",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "tray-icon",
+ "uuid",
+ "windows-registry",
+ "x509-parser",
+ "zbus",
+]
+
+[[package]]
+name = "ferry-gui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ferry",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "winresource",
+]
+
+[[package]]
 name = "ff"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3233,74 +3301,6 @@ name = "mutate_once"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"
-
-[[package]]
-name = "ferry"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arboard",
- "async-stream",
- "axum",
- "bytes",
- "chrono",
- "clap",
- "directories",
- "display-info",
- "dotenvy",
- "futures-core",
- "futures-util",
- "gethostname",
- "iced",
- "iced_fonts",
- "iced_runtime",
- "iced_test",
- "image",
- "interprocess",
- "ksni",
- "libc",
- "mac-usernotifications",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "opener",
- "rcgen",
- "reqwest",
- "rfd",
- "russh",
- "russh-sftp",
- "rustls",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "socket2",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tokio-rustls",
- "tokio-util",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "tray-icon",
- "uuid",
- "windows-registry",
- "x509-parser",
- "zbus",
-]
-
-[[package]]
-name = "ferry-gui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "ferry",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "winresource",
-]
 
 [[package]]
 name = "naga"

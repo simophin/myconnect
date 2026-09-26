@@ -25,6 +25,7 @@ use crate::{
     plugins::{
         browse::{DirectoryListing, FileEntry},
         clipboard::ClipboardSnapshot,
+        notifications::{Notification, NotificationPosted, NotificationRemoved},
     },
 };
 
@@ -406,6 +407,123 @@ impl ApiClient {
         Ok(())
     }
 
+    /// The notifications a paired device shows, newest first.
+    pub async fn notifications(&self, device_id: &str) -> Result<Vec<Notification>, ClientError> {
+        self.get_json(
+            &format!("api/v1/devices/{device_id}/notifications"),
+            "device",
+        )
+        .await
+    }
+
+    /// Answer a notification on a paired device that takes a reply.
+    pub async fn reply_to_notification(
+        &self,
+        device_id: &str,
+        id: &str,
+        message: &str,
+    ) -> Result<(), ClientError> {
+        #[derive(Serialize)]
+        struct Reply<'a> {
+            id: &'a str,
+            message: &'a str,
+        }
+
+        let response = self
+            .authorized(
+                self.http
+                    .post(self.url(&format!("api/v1/devices/{device_id}/notifications/reply"))?),
+            )
+            .json(&Reply { id, message })
+            .send()
+            .await
+            .map_err(map_transport)?;
+        checked(response, "device or notification").await?;
+        Ok(())
+    }
+
+    /// Press one of a notification's buttons, by its label.
+    pub async fn run_notification_action(
+        &self,
+        device_id: &str,
+        id: &str,
+        action: &str,
+    ) -> Result<(), ClientError> {
+        #[derive(Serialize)]
+        struct Action<'a> {
+            id: &'a str,
+            action: &'a str,
+        }
+
+        let response = self
+            .authorized(
+                self.http
+                    .post(self.url(&format!("api/v1/devices/{device_id}/notifications/action"))?),
+            )
+            .json(&Action { id, action })
+            .send()
+            .await
+            .map_err(map_transport)?;
+        checked(response, "device or notification").await?;
+        Ok(())
+    }
+
+    /// Dismiss a notification on a paired device.
+    pub async fn dismiss_notification(&self, device_id: &str, id: &str) -> Result<(), ClientError> {
+        let mut url = self.url(&format!("api/v1/devices/{device_id}/notifications"))?;
+        url.query_pairs_mut().append_pair("id", id);
+        let response = self
+            .authorized(self.http.delete(url))
+            .send()
+            .await
+            .map_err(map_transport)?;
+        checked(response, "device or notification").await?;
+        Ok(())
+    }
+
+    /// Like [`ApiClient::watch_devices`], for one device's notifications:
+    /// the list, then each `notification.*` event about the device.
+    pub async fn watch_notifications<F>(
+        &self,
+        device_id: &str,
+        cancellation: CancellationToken,
+        mut on_update: F,
+    ) -> Result<(), ClientError>
+    where
+        F: FnMut(NotificationWatchUpdate) + Send,
+    {
+        self.watch(
+            cancellation,
+            || self.notifications(device_id),
+            |update| {
+                match update {
+                    Watched::Snapshot(notifications) => {
+                        on_update(NotificationWatchUpdate::Snapshot(notifications));
+                    }
+                    Watched::Event(event) => {
+                        let EventData::Plugin(plugin_event) = &event.event else {
+                            return false;
+                        };
+                        let about_device = plugin_event
+                            .decode::<NotificationPosted>()
+                            .map(|posted| posted.device_id)
+                            .or_else(|| {
+                                plugin_event
+                                    .decode::<NotificationRemoved>()
+                                    .map(|removed| removed.device_id)
+                            })
+                            .is_some_and(|id| id == device_id);
+                        if about_device {
+                            on_update(NotificationWatchUpdate::Event(event));
+                        }
+                    }
+                }
+                false
+            },
+        )
+        .await
+    }
+
     pub async fn transfer(&self, transfer_id: Uuid) -> Result<TransferSnapshot, ClientError> {
         self.get_json(&format!("api/v1/transfers/{transfer_id}"), "transfer")
             .await
@@ -675,6 +793,12 @@ pub enum DeviceWatchUpdate {
     Event(CoreEvent),
 }
 
+pub enum NotificationWatchUpdate {
+    Snapshot(Vec<Notification>),
+    Event(CoreEvent),
+}
+
+#[derive(Debug)]
 pub enum ClipboardWatchUpdate {
     Snapshot(ClipboardSnapshot),
     Event(CoreEvent),

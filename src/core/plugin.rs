@@ -78,6 +78,13 @@ pub trait Plugin: Send + Sync + 'static {
     /// device may not be paired; [`PluginContext::send`] checks that.
     fn connected(&self, _ctx: &PluginContext, _device: &DeviceSnapshot) {}
 
+    /// The device, connected, became paired: this device accepted its
+    /// request, or it accepted ours. Called after the core publishes the
+    /// device's new state, never while holding its own lock. A device
+    /// that connects already paired gets [`Self::connected`] instead, so
+    /// work for any paired, connected device belongs in both.
+    fn paired(&self, _ctx: &PluginContext, _device: &DeviceSnapshot) {}
+
     /// The device's connection closed, or the device was forgotten while
     /// connected. Called before the core publishes the device's new state,
     /// so state cleared here needs no [`PluginContext::device_changed`].
@@ -355,6 +362,12 @@ impl PluginRegistry {
     pub fn connected(&self, ctx: &PluginContext, device: &DeviceSnapshot) {
         for plugin in &self.plugins {
             plugin.connected(ctx, device);
+        }
+    }
+
+    pub fn paired(&self, ctx: &PluginContext, device: &DeviceSnapshot) {
+        for plugin in &self.plugins {
+            plugin.paired(ctx, device);
         }
     }
 

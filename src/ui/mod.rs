@@ -367,6 +367,7 @@ impl App {
                 match update {
                     sync::Update::Snapshot(snapshot) => {
                         running.ctx.store_mut().apply_snapshot(*snapshot);
+                        running.features.on_snapshot();
                         Task::none()
                     }
                     // The store first, so features see the event applied.
@@ -380,6 +381,7 @@ impl App {
                 if let Some(running) = self.running() {
                     let snapshot = Snapshot::take(running.ctx.core());
                     running.ctx.store_mut().apply_snapshot(snapshot);
+                    running.features.on_snapshot();
                 }
                 Task::none()
             }
@@ -743,15 +745,11 @@ impl App {
             ),
             Route::Browse { device, folder } => match running.ctx.device(device) {
                 Some(device) => running.features.browse_page(device, folder.clone()),
-                None => widgets::page(
-                    widgets::page_header("", Some(Message::Back), vec![]),
-                    widgets::empty_state(
-                        lucide::circle_alert,
-                        "This device is no longer known.",
-                        None,
-                        None,
-                    ),
-                ),
+                None => unknown_device_page(),
+            },
+            Route::Notifications(device) => match running.ctx.device(device) {
+                Some(device) => running.features.notifications_page(device),
+                None => unknown_device_page(),
             },
             Route::Device(id) => device::view(
                 running.ctx.store(),
@@ -851,6 +849,19 @@ fn key_command(event: Event, _status: event::Status, _window: window::Id) -> Opt
         keyboard::Key::Character("q") if modifiers.command() => Some(KeyCommand::Quit),
         _ => None,
     }
+}
+
+/// A feature's page of a device that is no longer known.
+fn unknown_device_page<'a>() -> Element<'a, Message> {
+    widgets::page(
+        widgets::page_header("", Some(Message::Back), vec![]),
+        widgets::empty_state(
+            lucide::circle_alert,
+            "This device is no longer known.",
+            None,
+            None,
+        ),
+    )
 }
 
 #[cfg(test)]

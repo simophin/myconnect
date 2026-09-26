@@ -8,7 +8,8 @@ use clap::{Parser, Subcommand};
 use ferry::{
     api::DEFAULT_API_PORT,
     client::{
-        API_TOKEN_ENV, ApiClient, ClipboardWatchUpdate, DeviceWatchUpdate, TransferWatchUpdate,
+        API_TOKEN_ENV, ApiClient, ClipboardWatchUpdate, DeviceWatchUpdate, NotificationWatchUpdate,
+        TransferWatchUpdate,
     },
     config::ApiToken,
     core::{
@@ -20,6 +21,7 @@ use ferry::{
         battery::BatteryStatus,
         browse::{DirectoryListing, FileEntry, FileKind},
         clipboard::{ClipboardSettings, ClipboardSnapshot},
+        notifications::{Notification, NotificationPosted, NotificationRemoved},
         ping::ReceivedPing,
     },
 };
@@ -127,6 +129,13 @@ enum Command {
         #[command(subcommand)]
         action: FilesAction,
     },
+    /// List, answer or dismiss a paired device's notifications (KDE
+    /// Connect for Android shares them once allowed to read them).
+    Notifications {
+        device_id: String,
+        #[command(subcommand)]
+        action: Option<NotificationsAction>,
+    },
     /// Read, update, or watch synchronized clipboard text.
     Clipboard {
         #[command(subcommand)]
@@ -181,6 +190,22 @@ enum FilesAction {
     Mv { from: String, to: String },
     /// Delete a file, or a directory and everything in it.
     Rm { path: String },
+}
+
+#[derive(Debug, PartialEq, Eq, Subcommand)]
+enum NotificationsAction {
+    /// List them (the default).
+    Ls {
+        /// Keep listening and print changes as they happen.
+        #[arg(long)]
+        watch: bool,
+    },
+    /// Answer one that takes a reply.
+    Reply { id: String, message: String },
+    /// Press one of its buttons, by label.
+    Action { id: String, action: String },
+    /// Dismiss one on the device.
+    Dismiss { id: String },
 }
 
 #[derive(Debug, PartialEq, Eq, Subcommand)]
@@ -401,6 +426,50 @@ impl Cli {
                         if !json {
                             println!("Deleted {path}");
                         }
+                    }
+                }
+            }
+            Command::Notifications { device_id, action } => {
+                let done = |status: &str, text: String| {
+                    if json {
+                        println!("{}", json!({"deviceId": device_id, "status": status}));
+                    } else {
+                        println!("{text}");
+                    }
+                };
+                match action.unwrap_or(NotificationsAction::Ls { watch: false }) {
+                    NotificationsAction::Ls { watch: false } => {
+                        print_notifications(&client.notifications(&device_id).await?, json)
+                    }
+                    NotificationsAction::Ls { watch: true } => {
+                        client
+                            .watch_notifications(&device_id, cancellation_on_ctrl_c(), |update| {
+                                match update {
+                                    NotificationWatchUpdate::Snapshot(notifications) => {
+                                        print_notifications(&notifications, json)
+                                    }
+                                    NotificationWatchUpdate::Event(event) => {
+                                        print_event(&event, json)
+                                    }
+                                }
+                            })
+                            .await?
+                    }
+                    NotificationsAction::Reply { id, message } => {
+                        client
+                            .reply_to_notification(&device_id, &id, &message)
+                            .await?;
+                        done("sent", "Reply sent".into());
+                    }
+                    NotificationsAction::Action { id, action } => {
+                        client
+                            .run_notification_action(&device_id, &id, &action)
+                            .await?;
+                        done("sent", format!("Pressed {action}"));
+                    }
+                    NotificationsAction::Dismiss { id } => {
+                        client.dismiss_notification(&device_id, &id).await?;
+                        done("dismissed", "Dismissed".into());
                     }
                 }
             }
@@ -679,6 +748,14 @@ fn print_event(event: &CoreEvent, json_output: bool) {
                     println!("{}", clipboard.text);
                     return;
                 }
+                if let Some(posted) = event.decode::<NotificationPosted>() {
+                    print_notification(&posted.notification);
+                    return;
+                }
+                if let Some(removed) = event.decode::<NotificationRemoved>() {
+                    println!("Removed {}", removed.id);
+                    return;
+                }
                 match event.decode::<ReceivedPing>() {
                     Some(ReceivedPing {
                         device_name,
@@ -692,6 +769,50 @@ fn print_event(event: &CoreEvent, json_output: bool) {
                 }
             }
         }
+    }
+}
+
+fn print_notifications(notifications: &[Notification], json_output: bool) {
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string(notifications).expect("notifications serialize")
+        );
+        return;
+    }
+    if notifications.is_empty() {
+        println!("No notifications");
+    }
+    for notification in notifications {
+        print_notification(notification);
+    }
+}
+
+/// `[Messages] Ana: Dinner?`, then its id and what can be done with it.
+fn print_notification(notification: &Notification) {
+    let heading = match (&notification.title, &notification.text) {
+        (Some(title), Some(text)) => format!("{title}: {text}"),
+        (Some(line), None) | (None, Some(line)) => line.clone(),
+        (None, None) => String::new(),
+    };
+    println!("[{}] {heading}", notification.app_name);
+    let mut can = Vec::new();
+    if notification.repliable {
+        can.push("reply".to_owned());
+    }
+    if notification.dismissable {
+        can.push("dismiss".to_owned());
+    }
+    can.extend(
+        notification
+            .actions
+            .iter()
+            .map(|action| format!("action \"{action}\"")),
+    );
+    if can.is_empty() {
+        println!("  id {}", notification.id);
+    } else {
+        println!("  id {} ({})", notification.id, can.join(", "));
     }
 }
 

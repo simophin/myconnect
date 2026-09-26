@@ -29,7 +29,8 @@ next.
 The app lists your paired devices with their battery, pairs with a code
 both sides confirm, sends files (from a picker or dropped on the window),
 pings and rings devices, shares the clipboard, browses a phone's files,
-and keeps running in the tray. It follows the system's light or dark
+shows a phone's notifications (reply, dismiss, press their buttons), and
+keeps running in the tray. It follows the system's light or dark
 theme.
 
 <table>
@@ -92,6 +93,9 @@ The CLI interface is command based, allowing users to interact with Ferry throug
   with a message. Receiving pings is not supported yet.
 - `ferry ring <device-id>` - Make a paired device ring so you can find it.
 - `ferry send <device-id> <file> [--watch]` - Stream a file to a device.
+- `ferry notifications <device-id> [ls [--watch] | reply <id> <message> |
+  action <id> <label> | dismiss <id>]` - List a phone's notifications, or
+  answer, press a button on, or dismiss one.
 - `ferry clipboard get|set <text>|watch|send <device-id>` - Control text synchronization, or send the clipboard to one device now.
 
 Add `--json` for machine-readable output. `--api-host`/`--api-port` (global
@@ -116,7 +120,7 @@ src/
 ├── config/          # persistent identity, optional API token, peer trust
 ├── transport/        # UDP discovery, TCP/TLS, auxiliary payload connections
 ├── core(.rs/*)       # devices, connections, pairing, transfers, settings, events, plugin API
-├── plugins/          # features: ping, findmyphone, battery, clipboard, share, browse
+├── plugins/          # features: ping, findmyphone, battery, clipboard, share, browse, notifications
 ├── daemon.rs         # composition root: core + built-in plugins + LAN + API
 ├── api.rs               # local HTTP control plane (optional token auth)
 ├── client.rs             # HTTP client used by the CLI

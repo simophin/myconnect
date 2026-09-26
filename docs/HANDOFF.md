@@ -196,6 +196,18 @@ installer installed in CI, but neither was used on a real desktop yet.
   the details page and the tray) was checked against the fake phone only,
   not a real one. This machine doesn't ring when a peer asks it to.
 
+- Notifications (`kdeconnect.notification`: `ferry notifications`, the
+  device page's Notifications page, a desktop notification for each new
+  one) were checked against the fake phone only, not a real one. Worth
+  checking on the phone: that it sends what it already shows once paired
+  (the plugin asks when a device becomes paired and connected), how
+  messaging apps' updates read (Android posts a new message as an update
+  of the same notification, which alerts only when its text changes),
+  that icons arrive, and a reply from the app. Not built: the
+  `conversation` history Android sends for messaging apps, showing this
+  machine's notifications on the phone, and per-app muting here (the phone
+  picks which apps share).
+
 - Battery reports were checked against the fake phone only, not a real
   one. A low-battery notification (`thresholdEvent: 1`) isn't shown, and
   this machine doesn't report its own battery.
