@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ferry: a KDE Connect client for macOS, Linux and Windows</title>
+<meta name="description" content="Ferry is an open-source KDE Connect client written in Rust. Share files and the clipboard with your phone over the local network.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="pico.classless.min.css">
+<style>
+  :root { --pico-font-size: 100%; }
+  header hgroup { display: flex; align-items: center; gap: 1rem; }
+  header hgroup img { width: 64px; height: 64px; }
+  header hgroup h1, header hgroup p { margin: 0; }
+  .shots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+  .shots.wide { grid-template-columns: repeat(2, 1fr); }
+  @media (max-width: 640px) { .shots { grid-template-columns: repeat(2, 1fr); } .shots.wide { grid-template-columns: 1fr; } }
+  .shots figure { margin: 0; }
+  .shots img { width: 100%; height: auto; border: 1px solid var(--pico-muted-border-color); border-radius: var(--pico-border-radius); }
+  .shots figcaption { font-size: .875rem; color: var(--pico-muted-color); text-align: center; padding-top: .25rem; }
+</style>
+</head>
+<body>
+<header>
+  <hgroup>
+    <img src="icon.svg" alt="">
+    <div>
+      <h1>Ferry</h1>
+      <p>Share files and the clipboard with your phone. A KDE Connect client for macOS, Linux and Windows.</p>
+    </div>
+  </hgroup>
+  <nav>
+    <ul>
+      <li><a href="#download">Download</a></li>
+      <li><a href="https://github.com/simophin/ferryapp">Source</a></li>
+      <li><a href="https://github.com/sponsors/simophin">Sponsor</a></li>
+    </ul>
+  </nav>
+</header>
+
+<main>
+<section>
+  <p>
+    Ferry lets your computer and phone share files and the clipboard over
+    the local network. There is no cloud service and no account; data goes
+    directly between your devices. Ferry is open source and written in Rust,
+    with one native app for macOS, Linux and Windows.
+  </p>
+  <p>
+    Ferry speaks the protocol of <a href="https://kdeconnect.kde.org">KDE Connect</a>,
+    the KDE project's app for connecting devices. Install KDE Connect on your
+    phone, from
+    <a href="https://play.google.com/store/apps/details?id=org.kde.kdeconnect_tp">Google Play</a>
+    or <a href="https://f-droid.org/packages/org.kde.kdeconnect_tp/">F-Droid</a>
+    (<a href="https://invent.kde.org/network/kdeconnect-android">source</a>),
+    and Ferry on your computer, then pair them once.
+  </p>
+  <h2>Features</h2>
+  <ul>
+    <li>Send files, from a file picker or by dropping them on the window</li>
+    <li>Share the clipboard (text)</li>
+    <li>Browse a phone's files: download, upload, rename, delete and preview</li>
+    <li>See a device's battery level, ping it, or make it ring to find it</li>
+    <li>Tray icon, desktop notifications, and light and dark themes</li>
+    <li>Pairing confirmed with a code on both screens; TLS on every connection</li>
+  </ul>
+</section>
+
+<section id="download">
+  <h2>Download</h2>
+  <p>Latest version: <a href="{{release_url}}">{{tag}}</a></p>
+  <table>
+    <thead><tr><th>Platform</th><th>Package</th><th>Size</th></tr></thead>
+    <tbody>
+      <tr><td>macOS 12+ (Apple Silicon and Intel)</td><td><a href="{{macos_url}}">DMG</a></td><td>{{macos_size}}</td></tr>
+      <tr><td>Windows (x64)</td><td><a href="{{windows_url}}">Installer</a></td><td>{{windows_size}}</td></tr>
+      <tr><td>Debian, Ubuntu (x86_64)</td><td><a href="{{deb_amd64_url}}">.deb</a></td><td>{{deb_amd64_size}}</td></tr>
+      <tr><td>Debian, Ubuntu (arm64)</td><td><a href="{{deb_arm64_url}}">.deb</a></td><td>{{deb_arm64_size}}</td></tr>
+      <tr><td>Arch Linux</td><td><a href="{{arch_url}}">PKGBUILD</a></td><td>{{arch_size}}</td></tr>
+    </tbody>
+  </table>
+  <p>
+    Older versions and release notes are on
+    <a href="https://github.com/simophin/ferryapp/releases">GitHub Releases</a>.
+  </p>
+</section>
+
+<section>
+  <h2>Screenshots</h2>
+  <div class="shots">
+    <figure>
+      <picture><source media="(prefers-color-scheme: dark)" srcset="img/devices-dark.webp"><img src="img/devices-light.webp" width="880" height="1240" alt="The device list: a phone with its battery, and a desktop"></picture>
+      <figcaption>Paired devices</figcaption>
+    </figure>
+    <figure>
+      <picture><source media="(prefers-color-scheme: dark)" srcset="img/device-dark.webp"><img src="img/device-light.webp" width="880" height="1240" alt="A device's page: ping, ring, send clipboard, send files, recent transfers"></picture>
+      <figcaption>One device</figcaption>
+    </figure>
+    <figure>
+      <picture><source media="(prefers-color-scheme: dark)" srcset="img/pairing-request-dark.webp"><img src="img/pairing-request-light.webp" width="880" height="1240" alt="A pairing request with the verification code to compare" loading="lazy"></picture>
+      <figcaption>Pairing</figcaption>
+    </figure>
+    <figure>
+      <picture><source media="(prefers-color-scheme: dark)" srcset="img/add-device-dark.webp"><img src="img/add-device-light.webp" width="880" height="1240" alt="Add device: devices found on the network, and add by IP address" loading="lazy"></picture>
+      <figcaption>Finding devices</figcaption>
+    </figure>
+    <figure>
+      <picture><source media="(prefers-color-scheme: dark)" srcset="img/transfers-dark.webp"><img src="img/transfers-light.webp" width="880" height="1240" alt="Transfers in both directions, one in progress" loading="lazy"></picture>
+      <figcaption>Transfers</figcaption>
+    </figure>
+    <figure>
+      <picture><source media="(prefers-color-scheme: dark)" srcset="img/settings-dark.webp"><img src="img/settings-light.webp" width="880" height="1240" alt="Settings: device name, download folder, clipboard sync, tray" loading="lazy"></picture>
+      <figcaption>Settings</figcaption>
+    </figure>
+  </div>
+  <h3>Browsing a phone's files</h3>
+  <div class="shots wide">
+    <figure>
+      <picture><source media="(prefers-color-scheme: dark)" srcset="img/files-dark.webp"><img src="img/files-light.webp" width="880" height="1240" alt="A phone's camera folder, with a photo's actions open" loading="lazy"></picture>
+    </figure>
+    <figure>
+      <picture><source media="(prefers-color-scheme: dark)" srcset="img/file-preview-dark.webp"><img src="img/file-preview-light.webp" width="880" height="1240" alt="An image preview" loading="lazy"></picture>
+    </figure>
+  </div>
+</section>
+
+<section>
+  <h2>Status</h2>
+  <p>
+    Ferry is young. Pairing, clipboard sync and file transfer have been
+    tested with KDE Connect for Android, but not yet with KDE Connect on
+    other desktops. Known gaps are listed in
+    <a href="https://github.com/simophin/ferryapp/blob/main/docs/ARCHITECTURE.md">ARCHITECTURE.md</a>.
+    Please report bugs on <a href="https://github.com/simophin/ferryapp/issues">GitHub</a>;
+    pull requests are welcome.
+  </p>
+</section>
+
+<section>
+  <h2>Sponsor</h2>
+  <p>
+    Ferry is free and developed in spare time. If you find it useful,
+    please consider <a href="https://github.com/sponsors/simophin">sponsoring it on GitHub</a>.
+  </p>
+</section>
+</main>
+
+<footer>
+  <small>Ferry is open source. Not affiliated with KDE. ·
+  <a href="https://github.com/simophin/ferryapp">github.com/simophin/ferryapp</a></small>
+</footer>
+</body>
+</html>

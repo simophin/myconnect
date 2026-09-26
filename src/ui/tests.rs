@@ -350,8 +350,10 @@ async fn the_version_is_shown() {
     let mut app = running();
     settle(&mut app, Message::Reload).await;
     settle(&mut app, Message::Navigate(Route::Settings, Origin::Window)).await;
-    assert!(shows(&app, "Version"));
-    assert!(shows(&app, "1.2.3 (test)"));
+    assert!(shows(&app, "Version 1.2.3 (test)"));
+    settle(&mut app, Message::Navigate(Route::About, Origin::Window)).await;
+    assert!(shows(&app, "Ferry"));
+    assert!(shows(&app, "Version 1.2.3 (test)"));
 }
 #[tokio::test]
 async fn a_browse_page_of_a_forgotten_device_says_so() {
