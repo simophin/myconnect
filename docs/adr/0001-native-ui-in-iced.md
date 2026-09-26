@@ -118,6 +118,7 @@ first needs one adds it to the `gui` feature.
 | Monitor list | `display-info` (step 13) | iced exposes only the size of the window's current monitor; the `window.json` fits-on-screen check needs every monitor's bounds. |
 | Tray (macOS, Windows) | `tray-icon` 0.25 (step 13b) | The Tauri team's tray crate, with `muda` menus (used through its `tray_icon::menu` re-export, so the versions match). Default features off: they are Linux's (GTK, libappindicator). |
 | Dock icon (macOS) | `objc2` 0.6, `objc2-app-kit` 0.3 | Already in the tree through `tray-icon`. Switches the activation policy, so the app has a Dock icon only while its window is open. |
+| Login item (Windows) | `windows-registry` 0.6 | The `Run` value for starting on login. From windows-rs, whose `windows-link`, `windows-result` and `windows-strings` are already in the tree. On Linux and macOS the entry is a small file the app writes itself (a `.desktop` file, a LaunchAgent plist), so those need no crate. |
 | Windows exe resources | `winresource` (step 15, build dependency of `gui` on Windows only) | Embeds the icon Explorer and the taskbar show, and the name Task Manager lists, in `myConnect.exe`. |
 | Packaging | Shell scripts in `packaging/`, NSIS on Windows (step 15) | See "Packaging" below. |
 

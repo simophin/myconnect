@@ -46,6 +46,7 @@ use myconnect::{
     ui::{
         self, Desktop, Service, Started, UiOptions,
         desktop::{
+            autostart::LoginItem,
             dialogs::{Pick, Picked},
             notify::Notifier,
             open::Open,
@@ -430,12 +431,14 @@ impl Test {
             events: None,
             opener: Arc::new(NoOpener),
             picker: self.picker.clone(),
+            login_item: Arc::new(NoLoginItem),
         };
         let options = UiOptions {
             runtime: self.runtime.handle().clone(),
             demo: false,
             version: "e2e".into(),
             data_dir: Some(self.directory.path().join("data")),
+            background: false,
         };
         let (program, service) = ui::program(options, start, desktop);
         let (sender, events) = mpsc::channel(256);
@@ -851,6 +854,19 @@ impl Open for NoOpener {
 
     fn reveal(&self, _path: &Path) -> Result<(), String> {
         Ok(())
+    }
+}
+
+/// Never started at login: tests don't touch the real entry.
+struct NoLoginItem;
+
+impl LoginItem for NoLoginItem {
+    fn is_enabled(&self) -> bool {
+        false
+    }
+
+    fn set_enabled(&self, _enabled: bool) -> Result<(), String> {
+        Err("not in tests".into())
     }
 }
 

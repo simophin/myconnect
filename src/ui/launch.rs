@@ -19,6 +19,7 @@ use super::{
     demo,
     desktop::{
         self,
+        autostart::{self, LoginItem},
         dialogs::{self as picking, Pick},
         instance::{self, Instance},
         notify::{self as notifying, Notifier},
@@ -48,8 +49,11 @@ pub struct UiOptions {
     /// The app's version, for Settings.
     pub version: String,
     /// The data directory given (`--data-dir`), if any: `window.json` goes
-    /// there, and it names the single-instance socket.
+    /// there, and it names the single-instance socket and the login item.
     pub data_dir: Option<PathBuf>,
+    /// Start in the tray, without the window (`--background`, which the
+    /// login item passes), if there is a tray to show it from.
+    pub background: bool,
 }
 
 /// A started daemon, and the plugins it runs that the UI calls too
@@ -88,6 +92,7 @@ pub fn run(options: UiOptions, start: impl Fn() -> StartFuture + 'static) -> Res
         events: Some(desktop::Receiver::new(received)),
         opener: Arc::new(opening::System),
         picker: Arc::new(picking::System),
+        login_item: Arc::new(autostart::System::new(options.data_dir.as_deref())),
     };
     desktop::watch_quit_signals(&runtime, events);
 
@@ -159,6 +164,8 @@ pub struct Desktop {
     pub opener: Arc<dyn Open>,
     /// The desktop's file and folder pickers.
     pub picker: Arc<dyn Pick>,
+    /// Starts the app at login.
+    pub login_item: Arc<dyn LoginItem>,
 }
 
 impl App {
@@ -173,6 +180,7 @@ impl App {
             .as_ref()
             .and_then(PlacementStore::load)
             .unwrap_or_default();
+        let desktop_login_enabled = desktop.login_item.is_enabled();
         let mut app = Self {
             options,
             start,
@@ -198,19 +206,27 @@ impl App {
             answer_error: None,
             drag: Drag::default(),
             choosing: None,
+            start_on_login: desktop_login_enabled,
         };
-        // Hidden if it was quit from the tray, unless there is no tray to
-        // bring it back.
-        let open = if app.placement.visible || !app.desktop.tray_available {
+        // Hidden if it was quit from the tray or started at login, unless
+        // there is no tray to bring it back.
+        let shown = app.placement.visible && !app.options.background;
+        let open = if shown || !app.desktop.tray_available {
             app.open_window()
         } else {
             Task::none()
         };
         let start = app.start();
+        // Rewrite the login item, in case the app moved since it was made.
+        let login = if app.start_on_login {
+            app.set_start_on_login(true)
+        } else {
+            Task::none()
+        };
         app.update_tray();
         // A message, so the tray starts once the event loop runs.
         let tray = Task::done(Message::StartTray);
-        (app, Task::batch([open, start, tray]))
+        (app, Task::batch([open, start, login, tray]))
     }
 
     /// Start the daemon, off the UI thread so the window paints meanwhile.
@@ -268,6 +284,7 @@ mod tests {
                 demo: false,
                 version: "1.2.3 (test)".into(),
                 data_dir: None,
+                background: false,
             },
             start,
             Service::default(),
@@ -289,5 +306,39 @@ mod tests {
             panic!("unexpected outputs: {outputs:?}");
         };
         assert_eq!(error, "attempt 2 failed");
+    }
+
+    #[test]
+    fn an_enabled_login_item_is_rewritten_at_start() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let boot = |fakes: &Fakes| {
+            let start: Rc<dyn Fn() -> StartFuture> =
+                Rc::new(|| Box::pin(async { anyhow::bail!("not in this test") }));
+            let options = UiOptions {
+                runtime: runtime.handle().clone(),
+                demo: false,
+                version: "1.2.3 (test)".into(),
+                data_dir: None,
+                background: false,
+            };
+            let (app, task) = App::boot(options, start, Service::default(), fakes.desktop());
+            let outputs = runtime.block_on(testing::outputs(task));
+            (app, outputs)
+        };
+
+        let fakes = Fakes::default();
+        let (app, _) = boot(&fakes);
+        assert!(!app.start_on_login);
+        assert_eq!(fakes.login_item.writes.load(Ordering::SeqCst), 0);
+
+        *fakes.login_item.enabled.lock().unwrap() = true;
+        let (app, outputs) = boot(&fakes);
+        assert!(app.start_on_login);
+        assert_eq!(fakes.login_item.writes.load(Ordering::SeqCst), 1);
+        assert!(
+            outputs
+                .iter()
+                .any(|message| matches!(message, Message::StartOnLoginSet(true, None)))
+        );
     }
 }

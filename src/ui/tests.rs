@@ -13,6 +13,7 @@ use crate::{
         clipboard::{ClipboardPlugin, InMemoryClipboard},
     },
     ui::desktop::{
+        autostart::LoginItem,
         dialogs::{self as picking, Pick},
         notify::Notifier,
         open as opening,
@@ -104,6 +105,30 @@ impl Windows for FakeWindows {
     }
 }
 
+/// A login item held in memory: whether it's on, how often it was written,
+/// and whether writing fails.
+#[derive(Default)]
+pub(super) struct FakeLoginItem {
+    pub(super) enabled: Mutex<bool>,
+    pub(super) writes: AtomicUsize,
+    pub(super) broken: bool,
+}
+
+impl LoginItem for FakeLoginItem {
+    fn is_enabled(&self) -> bool {
+        *self.enabled.lock().unwrap()
+    }
+
+    fn set_enabled(&self, enabled: bool) -> Result<(), String> {
+        if self.broken {
+            return Err("read-only".into());
+        }
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        *self.enabled.lock().unwrap() = enabled;
+        Ok(())
+    }
+}
+
 /// The desktop an app is given in tests, to look at afterwards.
 #[derive(Clone, Default)]
 pub(super) struct Fakes {
@@ -114,6 +139,9 @@ pub(super) struct Fakes {
     pub(super) placements: Option<PlacementStore>,
     /// No tray host shows the icon.
     pub(super) no_tray: bool,
+    pub(super) login_item: Arc<FakeLoginItem>,
+    /// Launched with `--background`.
+    pub(super) background: bool,
 }
 
 impl Fakes {
@@ -127,6 +155,7 @@ impl Fakes {
             events: None,
             opener: Arc::new(opening::System),
             picker: Arc::new(picking::System),
+            login_item: self.login_item.clone(),
         }
     }
 
@@ -159,6 +188,7 @@ pub(super) fn app_on(runtime: tokio::runtime::Handle, fakes: &Fakes) -> App {
             demo: false,
             version: "1.2.3 (test)".into(),
             data_dir: None,
+            background: fakes.background,
         },
         start,
         Service::default(),

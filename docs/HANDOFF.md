@@ -35,7 +35,9 @@ cargo feature.
 
 - **The UI is dumb.** It persists nothing but the main window's placement
   (`window.json`); preferences are daemon settings, and its store is a
-  cache of core snapshots. It calls the core and the plugins' typed Rust
+  cache of core snapshots. The one exception is starting on login, which
+  only the app has: the system's login item is its state (ARCHITECTURE
+  §7), so the CLI can't change it. It calls the core and the plugins' typed Rust
   functions in-process (`adr/0001`), the same ones `http.rs` calls, so
   anything it does, the CLI can do too. A UI feature that needs new
   behaviour adds it to the plugin's or the core's Rust API first, then to
@@ -164,7 +166,6 @@ CC_aarch64_apple_darwin=fakecc AR_aarch64_apple_darwin=fakear \
 **The rest of the UI's open work:**
 
 - Drag files out of the browser to the desktop (ADR 0008 lists it).
-- Start on login.
 - Remembered add-by-IP addresses (see "Smaller follow-ups").
 - A low-battery notification (`thresholdEvent`).
 - Accessibility: check what iced 0.14 exposes to screen readers and

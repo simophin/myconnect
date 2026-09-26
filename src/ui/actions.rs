@@ -218,6 +218,15 @@ impl App {
         self.core_task(move || core.update_settings(patch), Message::SettingsSaved)
     }
 
+    /// Have the system start the app at login, or stop, off the UI thread.
+    pub(super) fn set_start_on_login(&mut self, enabled: bool) -> Task<Message> {
+        let item = self.desktop.login_item.clone();
+        context::on_runtime(&self.options.runtime, async move {
+            let error = item.set_enabled(enabled).err();
+            Message::StartOnLoginSet(item.is_enabled(), error)
+        })
+    }
+
     /// Run a core call on the daemon's runtime, with its error in words.
     pub(super) fn core_task<T: Send + 'static>(
         &self,
@@ -309,12 +318,17 @@ mod tests {
     use crate::{
         core::{
             LanCommand, PairingDirection, PairingSnapshot, PairingStatus, SettingsSnapshot,
-            TransferDirection,
+            TransferDirection, testing::handle,
         },
         plugins::browse::BrowsePlugin,
         ui::{
-            KeyCommand, Origin, Snapshot, desktop::open::Open, features::Features,
-            overlay::dialog::DialogEvent, route::Route, testing, tests::*,
+            KeyCommand, Origin, Snapshot,
+            desktop::{autostart::LoginItem, open::Open},
+            features::Features,
+            overlay::dialog::DialogEvent,
+            route::Route,
+            testing,
+            tests::*,
         },
     };
 
@@ -754,6 +768,36 @@ mod tests {
             "without waiting for the event"
         );
         assert!(app.toasts.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn starting_on_login_is_the_system_s_and_says_when_it_can_t_change() {
+        let fakes = Fakes::default();
+        let mut app = running_on_desktop(handle().0, &fakes);
+        settle(&mut app, Message::Reload).await;
+        settle(&mut app, Message::Navigate(Route::Settings, Origin::Window)).await;
+
+        click(&mut app, "Start when you log in").await;
+        assert!(fakes.login_item.is_enabled());
+        assert!(app.start_on_login);
+        click(&mut app, "Start when you log in").await;
+        assert!(!fakes.login_item.is_enabled());
+        assert!(!app.start_on_login);
+        assert!(app.toasts.is_empty());
+
+        let broken = Fakes {
+            login_item: Arc::new(FakeLoginItem {
+                broken: true,
+                ..FakeLoginItem::default()
+            }),
+            ..Fakes::default()
+        };
+        let mut app = running_on_desktop(handle().0, &broken);
+        settle(&mut app, Message::Reload).await;
+        settle(&mut app, Message::Navigate(Route::Settings, Origin::Window)).await;
+        click(&mut app, "Start when you log in").await;
+        assert!(!app.start_on_login, "the switch shows it's still off");
+        assert!(shows(&app, "Couldn’t change starting on login."));
     }
 
     #[tokio::test(start_paused = true)]

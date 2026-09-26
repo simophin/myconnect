@@ -229,6 +229,10 @@ pub(crate) enum Message {
     /// The folder picked, or `None` if the picker was cancelled.
     DownloadDirPicked(Option<PathBuf>),
     SetCloseToTray(bool),
+    SetStartOnLogin(bool),
+    /// A start-on-login change finished: whether it's on now, and why the
+    /// change failed, if it did.
+    StartOnLoginSet(bool, Option<String>),
     /// A settings change finished: the settings now, or why it failed.
     SettingsSaved(Result<SettingsSnapshot, String>),
     /// The wait for the rest of this drag's dropped files is over.
@@ -295,6 +299,8 @@ struct App {
     drag: Drag,
     /// Dropped files waiting for the user to choose a device.
     choosing: Option<Vec<PathBuf>>,
+    /// The system starts the app at login ([`desktop::autostart`]).
+    start_on_login: bool,
 }
 
 /// Whether the daemon runs yet.
@@ -574,6 +580,17 @@ impl App {
                 close_to_tray: Some(Some(enabled)),
                 ..SettingsPatch::default()
             }),
+            Message::SetStartOnLogin(enabled) => self.set_start_on_login(enabled),
+            Message::StartOnLoginSet(enabled, error) => {
+                self.start_on_login = enabled;
+                match error {
+                    Some(error) => {
+                        tracing::warn!(%error, "couldn't change starting on login");
+                        self.toast("Couldn’t change starting on login.".into(), None)
+                    }
+                    None => Task::none(),
+                }
+            }
             Message::SettingsSaved(Ok(settings)) => {
                 if let Some(running) = self.running() {
                     running.ctx.store_mut().apply_settings(settings);
@@ -786,12 +803,14 @@ impl App {
                 running.ctx.store(),
                 |settings| running.features.settings_sections(settings),
                 &self.options.version,
+                self.start_on_login,
                 settings::Actions {
                     back: Message::Back,
                     retry: Message::Reload,
                     rename: Message::Rename,
                     choose_download_dir: Message::ChooseDownloadDir,
                     set_close_to_tray: Message::SetCloseToTray,
+                    set_start_on_login: Message::SetStartOnLogin,
                 },
             ),
         }

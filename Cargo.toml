@@ -25,6 +25,7 @@ gui = [
     "dep:opener",
     "dep:rfd",
     "dep:tray-icon",
+    "dep:windows-registry",
     "dep:zbus",
 ]
 
@@ -101,6 +102,11 @@ mac-usernotifications = { version = "0.3.1", optional = true }
 # the tree through `tray-icon`.
 objc2 = { version = "0.6", optional = true }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSRunningApplication"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+# Starting on login (`gui`): a value under `HKCU\...\Run`. From windows-rs;
+# its `windows-*` dependencies are already in the tree.
+windows-registry = { version = "0.6", optional = true }
 
 [[test]]
 name = "ui_e2e"
