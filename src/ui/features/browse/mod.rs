@@ -8,175 +8,36 @@
 //! made here, on Refresh, and when the device can share its files again
 //! after it couldn't (it reconnected).
 
-use std::{cmp::Ordering, collections::HashMap, ops::Range, path::PathBuf, sync::Arc};
+mod describe;
+pub mod files;
+mod preview;
+mod view;
 
-use futures_util::future::BoxFuture;
-use iced::{
-    Alignment, Background, Border, Element, Length, Padding, Subscription, Task, Theme, keyboard,
-    widget::{Space, button, column, container, image, responsive, row, rule, scrollable, text},
-};
+use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc};
+
+use iced::{Subscription, Task, keyboard, widget::image};
 use iced_fonts::lucide;
-use tokio::io::AsyncReadExt;
 
 use super::{DeviceAction, DropTarget, Feature};
 use crate::{
-    core::{CoreEvent, DeviceReachability, DeviceSnapshot, PluginContext, TransferSnapshot},
+    core::{CoreEvent, DeviceReachability, DeviceSnapshot},
     plugins::browse::{
-        BrowseError, BrowsePlugin, DirectoryListing, FileEntry, FileKind, REQUEST_PACKET_TYPE,
-        UploadPathError,
+        BrowsePlugin, DirectoryListing, FileEntry, FileKind, REQUEST_PACKET_TYPE,
         files::{join_remote_path, split_remote_path},
     },
-    ui::{
-        self, Origin,
-        context::UiContext,
-        error::{describe_code, describe_file_failures},
-        overlay::dialog,
-        route::Route,
-        shell,
-        widgets::{self, HeaderAction, Icon, bold, format_bytes, format_timestamp},
-    },
+    ui::{self, Origin, context::UiContext, error::describe_file_failures, route::Route, shell},
 };
-
-/// Images opened as a preview rather than downloaded, up to
-/// [`MAX_PREVIEW_BYTES`].
-const PREVIEW_EXTENSIONS: [&str; 6] = ["jpg", "jpeg", "png", "gif", "webp", "bmp"];
-const MAX_PREVIEW_BYTES: u64 = 32 * 1024 * 1024;
-
-/// From this width the listing shows when files were modified.
-const WIDE: f32 = 600.0;
-const SIZE_WIDTH: f32 = 96.0;
-const MODIFIED_WIDTH: f32 = 168.0;
-const ICON_WIDTH: f32 = 32.0;
-const MORE_WIDTH: f32 = 40.0;
+pub use describe::describe_error;
+use describe::describe_upload_error;
+pub use files::{Answer, Files};
+use preview::{Preview, can_preview};
+use view::folder_name;
 
 /// Where the browser is: a device, and a folder of it or its storage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Place {
     device_id: String,
     folder: Option<String>,
-}
-
-/// A future of a device's answer.
-pub type Answer<T> = BoxFuture<'static, Result<T, BrowseError>>;
-
-/// What the browser does with a device's files: [`BrowsePlugin`]'s
-/// methods, or a fake in tests. The futures run on the daemon's runtime.
-pub trait Files: Send + Sync + 'static {
-    fn list(
-        self: Arc<Self>,
-        ctx: PluginContext,
-        device_id: String,
-        folder: Option<String>,
-    ) -> Answer<DirectoryListing>;
-    /// A file's content, cut off after `limit` bytes.
-    fn read(
-        self: Arc<Self>,
-        ctx: PluginContext,
-        device_id: String,
-        path: String,
-        limit: u64,
-    ) -> Answer<Vec<u8>>;
-    fn download(
-        self: Arc<Self>,
-        ctx: PluginContext,
-        device_id: String,
-        path: String,
-    ) -> Answer<TransferSnapshot>;
-    fn upload(
-        self: Arc<Self>,
-        ctx: PluginContext,
-        device_id: String,
-        folder: String,
-        local: PathBuf,
-    ) -> BoxFuture<'static, Result<TransferSnapshot, UploadPathError>>;
-    fn create_directory(
-        self: Arc<Self>,
-        ctx: PluginContext,
-        device_id: String,
-        path: String,
-    ) -> Answer<FileEntry>;
-    fn move_file(
-        self: Arc<Self>,
-        ctx: PluginContext,
-        device_id: String,
-        from: String,
-        to: String,
-    ) -> Answer<FileEntry>;
-    fn delete(self: Arc<Self>, ctx: PluginContext, device_id: String, path: String) -> Answer<()>;
-}
-
-impl Files for BrowsePlugin {
-    fn list(
-        self: Arc<Self>,
-        ctx: PluginContext,
-        device_id: String,
-        folder: Option<String>,
-    ) -> Answer<DirectoryListing> {
-        Box::pin(async move { self.list_files(&ctx, &device_id, folder.as_deref()).await })
-    }
-
-    fn read(
-        self: Arc<Self>,
-        ctx: PluginContext,
-        device_id: String,
-        path: String,
-        limit: u64,
-    ) -> Answer<Vec<u8>> {
-        Box::pin(async move {
-            let content = self.open_file(&ctx, &device_id, &path).await?;
-            let mut bytes = Vec::new();
-            content
-                .take(limit)
-                .read_to_end(&mut bytes)
-                .await
-                .map_err(|_| BrowseError::Failed)?;
-            Ok(bytes)
-        })
-    }
-
-    fn download(
-        self: Arc<Self>,
-        ctx: PluginContext,
-        device_id: String,
-        path: String,
-    ) -> Answer<TransferSnapshot> {
-        Box::pin(async move { BrowsePlugin::download(&self, &ctx, &device_id, &path).await })
-    }
-
-    fn upload(
-        self: Arc<Self>,
-        ctx: PluginContext,
-        device_id: String,
-        folder: String,
-        local: PathBuf,
-    ) -> BoxFuture<'static, Result<TransferSnapshot, UploadPathError>> {
-        Box::pin(async move { self.upload_path(&ctx, &device_id, &folder, &local).await })
-    }
-
-    fn create_directory(
-        self: Arc<Self>,
-        ctx: PluginContext,
-        device_id: String,
-        path: String,
-    ) -> Answer<FileEntry> {
-        Box::pin(
-            async move { BrowsePlugin::create_directory(&self, &ctx, &device_id, &path).await },
-        )
-    }
-
-    fn move_file(
-        self: Arc<Self>,
-        ctx: PluginContext,
-        device_id: String,
-        from: String,
-        to: String,
-    ) -> Answer<FileEntry> {
-        Box::pin(async move { BrowsePlugin::move_file(&self, &ctx, &device_id, &from, &to).await })
-    }
-
-    fn delete(self: Arc<Self>, ctx: PluginContext, device_id: String, path: String) -> Answer<()> {
-        Box::pin(async move { BrowsePlugin::delete(&self, &ctx, &device_id, &path).await })
-    }
 }
 
 pub struct BrowseUi {
@@ -226,13 +87,6 @@ impl Default for Sort {
             ascending: true,
         }
     }
-}
-
-/// An image from the device, shown over the page.
-struct Preview {
-    file: FileEntry,
-    /// The decoded image, or why it can't be shown; `None` while loading.
-    image: Option<Result<image::Handle, String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -532,29 +386,6 @@ impl BrowseUi {
                     .map_err(|error| describe_error(&error))
             },
             move |result| to_app(Message::Downloading(result), origin),
-        )
-    }
-
-    fn preview(&mut self, ctx: &UiContext, file: FileEntry, origin: Origin) -> Task<ui::Message> {
-        let Some(device_id) = self.open_device() else {
-            return Task::none();
-        };
-        let path = file.path.clone();
-        let read = self.files.clone().read(
-            ctx.plugin_context(),
-            device_id,
-            path.clone(),
-            MAX_PREVIEW_BYTES,
-        );
-        self.preview = Some(Preview { file, image: None });
-        ctx.spawn(
-            async move {
-                let bytes = read.await.map_err(|error| describe_error(&error))?;
-                tokio::task::spawn_blocking(move || decode(&bytes))
-                    .await
-                    .unwrap_or_else(|_| Err(CANT_SHOW.into()))
-            },
-            move |result| to_app(Message::Previewed { path, result }, origin),
         )
     }
 
@@ -886,474 +717,6 @@ impl BrowseUi {
             _ => None,
         })
     }
-
-    /// The page of `device`'s files showing `folder`, or its storage, with
-    /// the image preview over it.
-    pub fn view<'a>(
-        &'a self,
-        device: &'a DeviceSnapshot,
-        folder: Option<String>,
-    ) -> Element<'a, Message> {
-        let page = self.page(device, folder);
-        match &self.preview {
-            Some(preview) => {
-                dialog::modal(page, preview_view(preview), Some(Message::ClosePreview))
-            }
-            None => page,
-        }
-    }
-
-    fn page<'a>(
-        &'a self,
-        device: &'a DeviceSnapshot,
-        folder: Option<String>,
-    ) -> Element<'a, Message> {
-        let available = shares_files(device);
-        let in_folder = folder.is_some();
-        let when = |enabled: bool, message: Message| enabled.then_some(message);
-        let actions = vec![
-            HeaderAction {
-                icon: lucide::file_up,
-                tooltip: "Upload files".into(),
-                on_press: when(available && in_folder, Message::PickUploads),
-            },
-            HeaderAction {
-                icon: lucide::folder_plus,
-                tooltip: "New folder".into(),
-                on_press: when(available && in_folder, Message::NewFolder),
-            },
-            HeaderAction {
-                icon: lucide::refresh_cw,
-                tooltip: "Refresh".into(),
-                on_press: when(available, Message::Refresh),
-            },
-            if self.show_hidden {
-                HeaderAction::new(lucide::eye_off, "Hide hidden files", Message::ToggleHidden)
-            } else {
-                HeaderAction::new(lucide::eye, "Show hidden files", Message::ToggleHidden)
-            },
-        ];
-        let header = widgets::page_header(
-            format!("Files on {}", device.device_name),
-            Some(Message::Back),
-            actions,
-        );
-        let body: Element<'a, Message> = if !available {
-            let reason = if device.reachability == DeviceReachability::Connected {
-                format!("{} doesn’t share its files.", device.device_name)
-            } else {
-                format!("Connect {} to browse its files.", device.device_name)
-            };
-            widgets::error_view(reason, None)
-        } else {
-            column![
-                breadcrumbs(folder.as_deref(), self.roots()),
-                rule::horizontal(1),
-                self.listing(folder),
-            ]
-            .spacing(4)
-            .into()
-        };
-        widgets::page(header, body)
-    }
-
-    fn listing<'a>(&'a self, folder: Option<String>) -> Element<'a, Message> {
-        let in_folder = folder.is_some();
-        let answer = self
-            .listings
-            .get(&folder)
-            .and_then(|listing| listing.answer.as_ref());
-        let listing = match answer {
-            None if in_folder => return widgets::loading("Loading the folder…"),
-            None => return widgets::loading("Connecting to the device…"),
-            Some(Err(error)) => return widgets::error_view(error.as_str(), Some(Message::Refresh)),
-            Some(Ok(listing)) => listing,
-        };
-        let entries: Vec<&FileEntry> = listing
-            .entries
-            .iter()
-            .filter(|entry| self.show_hidden || !entry.name.starts_with('.'))
-            .collect();
-        if !in_folder {
-            if entries.is_empty() {
-                return widgets::empty_state(
-                    lucide::hard_drive,
-                    "The device isn’t sharing any storage.",
-                    None,
-                    None,
-                );
-            }
-            let rows = entries.into_iter().map(|root| {
-                button(
-                    row![
-                        lucide::hard_drive().size(20).style(text::secondary),
-                        column![
-                            text(&root.name),
-                            text(&root.path).size(13).style(text::secondary),
-                        ]
-                        .spacing(2),
-                    ]
-                    .spacing(14)
-                    .align_y(Alignment::Center),
-                )
-                .padding([12, 14])
-                .width(Length::Fill)
-                .style(widgets::card_button)
-                .on_press(Message::Open(Some(root.path.clone())))
-                .into()
-            });
-            return scrollable(column(rows).spacing(8).padding([8, 0]))
-                .spacing(6)
-                .height(Length::Fill)
-                .into();
-        }
-        let sort = self.sort;
-        let mut entries = entries;
-        entries.sort_by(|a, b| compare(a, b, sort));
-        responsive(move |size| {
-            let wide = size.width >= WIDE;
-            let list: Element<'a, Message> = if entries.is_empty() {
-                widgets::empty_state(
-                    lucide::folder_open,
-                    "This folder is empty. Drop files here to upload them.",
-                    None,
-                    None,
-                )
-            } else {
-                scrollable(column(entries.iter().map(|file| self.file_row(file, wide))).spacing(2))
-                    .spacing(6)
-                    .height(Length::Fill)
-                    .into()
-            };
-            column![header_row(wide, sort), rule::horizontal(1), list]
-                .spacing(2)
-                .into()
-        })
-        .into()
-    }
-
-    fn file_row<'a>(&'a self, file: &'a FileEntry, wide: bool) -> Element<'a, Message> {
-        let mut line = row![
-            container(file_icon(file)().size(18).style(text::secondary)).width(ICON_WIDTH),
-            container(text(&file.name).wrapping(text::Wrapping::None))
-                .width(Length::Fill)
-                .clip(true),
-            text(file.size.map(format_bytes).unwrap_or_default())
-                .size(13)
-                .style(text::secondary)
-                .width(SIZE_WIDTH)
-                .align_x(Alignment::End),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center);
-        if wide {
-            line = line.push(
-                text(file.modified_at.map(format_timestamp).unwrap_or_default())
-                    .size(13)
-                    .style(text::secondary)
-                    .width(MODIFIED_WIDTH)
-                    .align_x(Alignment::End),
-            );
-        }
-        line = line.push(
-            container(widgets::icon_button(
-                lucide::ellipsis_vertical,
-                "More",
-                Some(Message::Menu(file.path.clone())),
-            ))
-            .width(MORE_WIDTH)
-            .align_x(Alignment::End),
-        );
-        let row_button = button(line)
-            .padding([2, 8])
-            .width(Length::Fill)
-            .style(row_style)
-            .on_press(Message::Activate(file.clone()));
-        if self.menu.as_deref() != Some(file.path.as_str()) {
-            return row_button.into();
-        }
-
-        let mut actions = row![].spacing(8);
-        if can_preview(file) {
-            actions = actions.push(menu_button(
-                lucide::eye,
-                "Preview",
-                Message::Preview(file.clone()),
-            ));
-        }
-        if file.kind != FileKind::Directory {
-            actions = actions.push(menu_button(
-                lucide::download,
-                "Download",
-                Message::Download(file.clone()),
-            ));
-        }
-        actions = actions
-            .push(menu_button(
-                lucide::pencil,
-                "Rename",
-                Message::Rename(file.clone()),
-            ))
-            .push(menu_button(
-                lucide::trash_two,
-                "Delete",
-                Message::Delete(file.clone()),
-            ));
-        column![
-            row_button,
-            container(actions.wrap().vertical_spacing(8)).padding(Padding {
-                // Under the name, past the row's icon.
-                left: 8.0 + ICON_WIDTH + 8.0,
-                ..Padding::from([4, 8])
-            })
-        ]
-        .spacing(2)
-        .into()
-    }
-}
-
-/// The page's path from the storage: "Storage", the root as the device
-/// names it, then each folder, each a link back up, and Up before them.
-fn breadcrumbs<'a>(folder: Option<&str>, roots: &[FileEntry]) -> Element<'a, Message> {
-    let crumbs = crumbs(folder, roots);
-    let last = crumbs.len() - 1;
-    let mut trail = row![].spacing(2).align_y(Alignment::Center);
-    for (index, (label, target)) in crumbs.into_iter().enumerate() {
-        if index > 0 {
-            trail = trail.push(lucide::chevron_right().size(14).style(text::secondary));
-        }
-        trail = trail.push(if index == last {
-            container(text(label).font(bold()).wrapping(text::Wrapping::None))
-                .padding([6, 12])
-                .into()
-        } else {
-            widgets::link_button(label, Message::Open(target))
-        });
-    }
-    row![
-        widgets::icon_button(lucide::arrow_up, "Up", folder.map(|_| Message::Up)),
-        // Deep paths scroll, showing their end.
-        scrollable(trail)
-            .direction(scrollable::Direction::Horizontal(
-                scrollable::Scrollbar::new().width(3).scroller_width(3),
-            ))
-            .anchor_right()
-            .width(Length::Fill),
-    ]
-    .spacing(4)
-    .align_y(Alignment::Center)
-    .into()
-}
-
-/// Each breadcrumb's label and the folder it opens (`None`: the storage).
-fn crumbs(folder: Option<&str>, roots: &[FileEntry]) -> Vec<(String, Option<String>)> {
-    let mut crumbs = vec![("Storage".to_owned(), None)];
-    let Some(folder) = folder else {
-        return crumbs;
-    };
-    let root = root_of(folder, roots);
-    let mut current = root.map(|root| root.path.clone()).unwrap_or_default();
-    if let Some(root) = root {
-        crumbs.push((root.name.clone(), Some(root.path.clone())));
-    }
-    let rest = match root {
-        Some(root) => &folder[root.path.len()..],
-        None => folder,
-    };
-    for segment in rest.split('/').filter(|segment| !segment.is_empty()) {
-        current = join_remote_path(if current.is_empty() { "/" } else { &current }, segment);
-        crumbs.push((segment.to_owned(), Some(current.clone())));
-    }
-    crumbs
-}
-
-/// The folder's name as the breadcrumbs end with it.
-fn folder_name(folder: &str, roots: &[FileEntry]) -> String {
-    crumbs(Some(folder), roots)
-        .pop()
-        .map(|(label, _)| label)
-        .unwrap_or_default()
-}
-
-fn header_row<'a>(wide: bool, sort: Sort) -> Element<'a, Message> {
-    let column_button = |label: &'static str, by: Column| -> Element<'a, Message> {
-        let mut content = row![text(label).size(13).font(bold())]
-            .spacing(4)
-            .align_y(Alignment::Center);
-        if sort.by == by {
-            let arrow = if sort.ascending {
-                lucide::arrow_up()
-            } else {
-                lucide::arrow_down()
-            };
-            content = content.push(arrow.size(13));
-        }
-        button(content)
-            .padding([6, 0])
-            .style(row_style)
-            .on_press(Message::Sort(by))
-            .into()
-    };
-    let mut header = row![
-        Space::new().width(ICON_WIDTH),
-        container(column_button("Name", Column::Name)).width(Length::Fill),
-        container(column_button("Size", Column::Size))
-            .width(SIZE_WIDTH)
-            .align_x(Alignment::End),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
-    if wide {
-        header = header.push(
-            container(column_button("Modified", Column::Modified))
-                .width(MODIFIED_WIDTH)
-                .align_x(Alignment::End),
-        );
-    }
-    container(header.push(Space::new().width(MORE_WIDTH)))
-        .padding([0, 8])
-        .into()
-}
-
-/// A plain row that shows hover and press.
-fn row_style(theme: &Theme, status: button::Status) -> button::Style {
-    let palette = theme.extended_palette();
-    let background = match status {
-        button::Status::Hovered => Some(palette.background.weak.color),
-        button::Status::Pressed => Some(palette.background.strong.color),
-        _ => None,
-    };
-    button::Style {
-        background: background.map(Background::Color),
-        text_color: palette.background.base.text,
-        border: Border::default().rounded(8),
-        ..button::Style::default()
-    }
-}
-
-fn menu_button<'a>(icon: Icon, label: &'a str, message: Message) -> Element<'a, Message> {
-    button(
-        row![icon().size(14), text(label).size(13)]
-            .spacing(6)
-            .align_y(Alignment::Center),
-    )
-    .padding([6, 12])
-    .style(widgets::tonal)
-    .on_press(message)
-    .into()
-}
-
-fn preview_view(preview: &Preview) -> Element<'_, Message> {
-    let body: Element<'_, Message> = match &preview.image {
-        None => widgets::loading("Loading the image…"),
-        Some(Err(error)) => widgets::error_view(error.as_str(), None),
-        Some(Ok(handle)) => image::viewer(handle.clone())
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
-    };
-    let card = container(
-        column![
-            row![
-                container(
-                    text(&preview.file.name)
-                        .size(18)
-                        .font(bold())
-                        .wrapping(text::Wrapping::None)
-                )
-                .width(Length::Fill)
-                .clip(true),
-                widgets::icon_button(lucide::x, "Close", Some(Message::ClosePreview)),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-            container(body).height(Length::Fill),
-        ]
-        .spacing(12),
-    )
-    .padding(16)
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .max_width(960)
-    .max_height(720)
-    .style(dialog::surface_style);
-    container(card).padding(32).into()
-}
-
-/// What an image that can't be decoded says.
-const CANT_SHOW: &str = "This image can’t be shown.";
-
-/// Decode an image for the preview. iced would decode it only when drawn,
-/// and drop the error.
-fn decode(bytes: &[u8]) -> Result<image::Handle, String> {
-    let decoded = ::image::load_from_memory(bytes).map_err(|_| CANT_SHOW.to_owned())?;
-    let rgba = decoded.into_rgba8();
-    Ok(image::Handle::from_rgba(
-        rgba.width(),
-        rgba.height(),
-        rgba.into_raw(),
-    ))
-}
-
-/// Folders first, then by the chosen column, then by name.
-fn compare(a: &FileEntry, b: &FileEntry, sort: Sort) -> Ordering {
-    let (a_folder, b_folder) = (a.kind == FileKind::Directory, b.kind == FileKind::Directory);
-    if a_folder != b_folder {
-        return b_folder.cmp(&a_folder);
-    }
-    let by_name = a.name.to_lowercase().cmp(&b.name.to_lowercase());
-    let order = match sort.by {
-        Column::Name => by_name,
-        Column::Size => a.size.unwrap_or(0).cmp(&b.size.unwrap_or(0)),
-        Column::Modified => a.modified_at.unwrap_or(0).cmp(&b.modified_at.unwrap_or(0)),
-    }
-    .then(by_name);
-    if sort.ascending {
-        order
-    } else {
-        order.reverse()
-    }
-}
-
-/// Whether a click on `file` previews it rather than downloading it.
-fn can_preview(file: &FileEntry) -> bool {
-    file.kind != FileKind::Directory
-        && extension(&file.name)
-            .is_some_and(|extension| PREVIEW_EXTENSIONS.contains(&extension.as_str()))
-        && file.size.unwrap_or(0) <= MAX_PREVIEW_BYTES
-}
-
-/// A file's extension, lowercase; a leading dot doesn't start one.
-fn extension(name: &str) -> Option<String> {
-    match name.rfind('.') {
-        Some(dot) if dot > 0 => Some(name[dot + 1..].to_lowercase()),
-        _ => None,
-    }
-}
-
-fn file_icon(file: &FileEntry) -> Icon {
-    if file.kind == FileKind::Directory {
-        return lucide::folder;
-    }
-    match extension(&file.name).as_deref().unwrap_or("") {
-        "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "heic" => lucide::image,
-        "mp4" | "mkv" | "mov" | "webm" | "3gp" => lucide::film,
-        "mp3" | "m4a" | "ogg" | "opus" | "flac" | "wav" => lucide::music,
-        "pdf" => lucide::file_text,
-        "zip" | "tar" | "gz" | "7z" | "rar" => lucide::file_archive,
-        "apk" => lucide::package,
-        _ => lucide::file,
-    }
-}
-
-/// The storage root that `path` is in, among `roots`.
-fn root_of<'a>(path: &str, roots: &'a [FileEntry]) -> Option<&'a FileEntry> {
-    roots.iter().find(|root| {
-        path == root.path
-            || path
-                .strip_prefix(&root.path)
-                .is_some_and(|rest| rest.starts_with('/'))
-    })
 }
 
 /// The folder holding `path`; `/` has none.
@@ -1389,317 +752,21 @@ fn advertises_browse(device: &DeviceSnapshot) -> bool {
         .any(|capability| capability == REQUEST_PACKET_TYPE)
 }
 
-/// A sentence for the user about why an upload didn't start.
-fn describe_upload_error(error: &UploadPathError) -> String {
-    match error {
-        UploadPathError::Browse(error) => describe_error(error),
-        UploadPathError::File(_) => "The file couldn’t be read.".into(),
-    }
-}
-
-/// A sentence for the user about `error`.
-pub fn describe_error(error: &BrowseError) -> String {
-    let reason = match error {
-        BrowseError::Unavailable { reason } => reason.as_deref(),
-        _ => None,
-    };
-    describe(error.code(), reason)
-}
-
-/// Words this feature's codes, with the peer's `reason` where it gives one,
-/// and leaves the rest to `ui::error`.
-fn describe(code: &str, reason: Option<&str>) -> String {
-    let message = match code {
-        "files_unavailable" => {
-            let reason = reason
-                .map(|reason| format!(" ({reason})"))
-                .unwrap_or_default();
-            return format!(
-                "The device isn’t sharing its files{reason}. In KDE Connect on the device, \
-                 allow access to files in the Filesystem expose plugin."
-            );
-        }
-        "file_not_found" => "That file or folder no longer exists.",
-        "file_exists" => "There is already a file or folder with that name.",
-        "file_permission_denied" => "The device doesn’t allow that.",
-        "not_a_directory" => "That isn’t a folder.",
-        "is_a_directory" => "Folders can’t be downloaded, only files.",
-        "invalid_path" => "That name or location can’t be used.",
-        "files_failed" => "The device’s files couldn’t be reached.",
-        "files_timed_out" => "The device took too long to answer.",
-        "files_host_key_mismatch" => {
-            "The device’s file server didn’t prove it is the paired device, so MyConnect \
-             didn’t connect to it."
-        }
-        code => return describe_code(code),
-    };
-    message.into()
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::{
-        io,
-        sync::{Mutex, PoisonError},
-    };
-
-    use chrono::TimeZone;
-    use iced::widget;
+    use iced::{Element, widget};
     use iced_test::simulator::Simulator;
 
     use super::*;
     use crate::{
-        core::{CoreError, EventData, TransferDirection, TransferStatus, testing::handle},
+        core::{EventData, testing::handle},
+        plugins::browse::BrowseError,
         ui::{
-            pages::transfers::tests::transfer,
             shell::{PickFiles, Prompt},
             testing,
         },
     };
-
-    const INTERNAL: &str = "/storage/emulated/0";
-    const SD_CARD: &str = "/storage/sdcard";
-
-    /// What the browser asked of the device.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub(crate) enum Call {
-        List(Option<String>),
-        Read(String),
-        Download(String),
-        Upload { folder: String, local: PathBuf },
-        CreateDirectory(String),
-        Move(String, String),
-        Delete(String),
-    }
-
-    /// A phone's files, held in memory: every call is recorded, folders
-    /// not listed here don't exist.
-    #[derive(Default)]
-    pub(crate) struct FakeFiles {
-        listings: Mutex<HashMap<Option<String>, DirectoryListing>>,
-        calls: Mutex<Vec<Call>>,
-        /// What listing answers instead, if set.
-        refuse: Mutex<Option<fn() -> BrowseError>>,
-        /// What changes answer instead, if set.
-        fail_changes: Mutex<Option<fn() -> BrowseError>>,
-        /// Every file's content.
-        content: Mutex<Vec<u8>>,
-    }
-
-    fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-        mutex.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    impl FakeFiles {
-        pub(crate) fn calls(&self) -> Vec<Call> {
-            lock(&self.calls).clone()
-        }
-
-        fn record(&self, call: Call) {
-            lock(&self.calls).push(call);
-        }
-
-        fn change<T: Send + 'static>(&self, call: Call, answer: T) -> Answer<T> {
-            self.record(call);
-            let failure = *lock(&self.fail_changes);
-            Box::pin(async move { failure.map_or(Ok(answer), |failure| Err(failure())) })
-        }
-
-        fn listed(&self, folder: Option<&str>) -> usize {
-            let call = Call::List(folder.map(str::to_owned));
-            self.calls().iter().filter(|made| **made == call).count()
-        }
-    }
-
-    fn directory(path: &str, name: Option<&str>) -> FileEntry {
-        FileEntry {
-            name: name
-                .unwrap_or_else(|| path.rsplit('/').next().unwrap())
-                .into(),
-            path: path.into(),
-            kind: FileKind::Directory,
-            size: None,
-            modified_at: None,
-        }
-    }
-
-    fn september_24_at_14_03() -> u64 {
-        chrono::Local
-            .with_ymd_and_hms(2026, 9, 24, 14, 3, 0)
-            .unwrap()
-            .timestamp_millis()
-            .try_into()
-            .unwrap()
-    }
-
-    fn file(path: &str, size: u64) -> FileEntry {
-        FileEntry {
-            name: path.rsplit('/').next().unwrap().into(),
-            path: path.into(),
-            kind: FileKind::File,
-            size: Some(size),
-            modified_at: Some(september_24_at_14_03()),
-        }
-    }
-
-    /// A phone sharing its internal storage and an SD card, with a few
-    /// files.
-    pub(crate) fn phone_files() -> Arc<FakeFiles> {
-        let listing = |path: Option<&str>, entries| DirectoryListing {
-            path: path.map(str::to_owned),
-            entries,
-        };
-        let camera = format!("{INTERNAL}/DCIM/Camera");
-        let dcim = format!("{INTERNAL}/DCIM");
-        let files = FakeFiles::default();
-        *lock(&files.listings) = HashMap::from([
-            (
-                None,
-                listing(
-                    None,
-                    vec![
-                        directory(INTERNAL, Some("All files")),
-                        directory(SD_CARD, Some("SD card")),
-                    ],
-                ),
-            ),
-            (
-                Some(INTERNAL.into()),
-                listing(
-                    Some(INTERNAL),
-                    vec![
-                        file(&format!("{INTERNAL}/notes.txt"), 2048),
-                        directory(&dcim, None),
-                        file(&format!("{INTERNAL}/photo.png"), 100),
-                        file(&format!("{INTERNAL}/.nomedia"), 0),
-                    ],
-                ),
-            ),
-            (
-                Some(dcim.clone()),
-                listing(Some(&dcim), vec![directory(&camera, None)]),
-            ),
-            (Some(camera.clone()), listing(Some(&camera), vec![])),
-            (Some(SD_CARD.into()), listing(Some(SD_CARD), vec![])),
-        ]);
-        Arc::new(files)
-    }
-
-    impl Files for FakeFiles {
-        fn list(
-            self: Arc<Self>,
-            _ctx: PluginContext,
-            _device_id: String,
-            folder: Option<String>,
-        ) -> Answer<DirectoryListing> {
-            self.record(Call::List(folder.clone()));
-            let answer = match *lock(&self.refuse) {
-                Some(refuse) => Err(refuse()),
-                None => lock(&self.listings)
-                    .get(&folder)
-                    .cloned()
-                    .ok_or(BrowseError::NotFound),
-            };
-            Box::pin(async move { answer })
-        }
-
-        fn read(
-            self: Arc<Self>,
-            _ctx: PluginContext,
-            _device_id: String,
-            path: String,
-            _limit: u64,
-        ) -> Answer<Vec<u8>> {
-            self.record(Call::Read(path));
-            let content = lock(&self.content).clone();
-            Box::pin(async move { Ok(content) })
-        }
-
-        fn download(
-            self: Arc<Self>,
-            _ctx: PluginContext,
-            _device_id: String,
-            path: String,
-        ) -> Answer<TransferSnapshot> {
-            let name = path.rsplit('/').next().unwrap().to_owned();
-            self.record(Call::Download(path));
-            Box::pin(async move {
-                Ok(transfer(
-                    &name,
-                    TransferDirection::Incoming,
-                    TransferStatus::Queued,
-                    1,
-                ))
-            })
-        }
-
-        fn upload(
-            self: Arc<Self>,
-            _ctx: PluginContext,
-            _device_id: String,
-            folder: String,
-            local: PathBuf,
-        ) -> BoxFuture<'static, Result<TransferSnapshot, UploadPathError>> {
-            self.record(Call::Upload {
-                folder,
-                local: local.clone(),
-            });
-            Box::pin(async move {
-                if !local.is_file() {
-                    return Err(UploadPathError::File(io::ErrorKind::NotFound.into()));
-                }
-                Ok(transfer(
-                    "upload",
-                    TransferDirection::Outgoing,
-                    TransferStatus::Transferring,
-                    1,
-                ))
-            })
-        }
-
-        fn create_directory(
-            self: Arc<Self>,
-            _ctx: PluginContext,
-            _device_id: String,
-            path: String,
-        ) -> Answer<FileEntry> {
-            let entry = directory(&path, None);
-            self.change(Call::CreateDirectory(path), entry)
-        }
-
-        fn move_file(
-            self: Arc<Self>,
-            _ctx: PluginContext,
-            _device_id: String,
-            from: String,
-            to: String,
-        ) -> Answer<FileEntry> {
-            let entry = file(&to, 1);
-            self.change(Call::Move(from, to), entry)
-        }
-
-        fn delete(
-            self: Arc<Self>,
-            _ctx: PluginContext,
-            _device_id: String,
-            path: String,
-        ) -> Answer<()> {
-            self.change(Call::Delete(path), ())
-        }
-    }
-
-    /// A paired, connected phone named "Pixel" that shares its files.
-    pub(crate) fn pixel() -> DeviceSnapshot {
-        let mut device = testing::device("Pixel");
-        device.incoming_capabilities = vec![REQUEST_PACKET_TYPE.into()];
-        device
-    }
-
-    impl BrowseUi {
-        pub(crate) fn with_files(files: Arc<FakeFiles>) -> Self {
-            Self::over(files)
-        }
-    }
+    use files::tests::{Call, FakeFiles, INTERNAL, SD_CARD, lock, phone_files, pixel};
 
     /// The page of the test phone's files showing `folder`, or its storage.
     fn files_route(folder: Option<&str>) -> Route {
@@ -1719,20 +786,20 @@ pub(crate) mod tests {
 
     /// The browser, with the shell's part played: navigation reaches
     /// `on_route`, and the other requests are kept to look at.
-    struct Browser {
-        ui: BrowseUi,
-        ctx: UiContext,
-        files: Arc<FakeFiles>,
-        route: Route,
-        requests: Vec<ui::Message>,
+    pub(super) struct Browser {
+        pub(super) ui: BrowseUi,
+        pub(super) ctx: UiContext,
+        pub(super) files: Arc<FakeFiles>,
+        pub(super) route: Route,
+        pub(super) requests: Vec<ui::Message>,
     }
 
     impl Browser {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             Self::with_device(pixel())
         }
 
-        fn with_device(device: DeviceSnapshot) -> Self {
+        pub(super) fn with_device(device: DeviceSnapshot) -> Self {
             let (core, _commands) = handle();
             let mut ctx = UiContext::new(core, tokio::runtime::Handle::current());
             *ctx.store_mut() = testing::store("Desk", vec![device]);
@@ -1746,12 +813,12 @@ pub(crate) mod tests {
             }
         }
 
-        fn device(&self) -> &DeviceSnapshot {
+        pub(super) fn device(&self) -> &DeviceSnapshot {
             self.ctx.device(&pixel().device_id).expect("the phone")
         }
 
         /// Run `task`, its messages and what they lead to.
-        async fn run(&mut self, task: Task<ui::Message>) {
+        pub(super) async fn run(&mut self, task: Task<ui::Message>) {
             let mut pending = vec![task];
             while let Some(task) = pending.pop() {
                 for message in testing::outputs(task).await {
@@ -1769,35 +836,35 @@ pub(crate) mod tests {
             }
         }
 
-        async fn send(&mut self, message: Message) {
+        pub(super) async fn send(&mut self, message: Message) {
             let task = self.ui.update(&self.ctx, message, Origin::Window);
             self.run(task).await;
         }
 
-        async fn go(&mut self, folder: Option<&str>) {
+        pub(super) async fn go(&mut self, folder: Option<&str>) {
             self.route = files_route(folder);
             let route = self.route.clone();
             let task = self.ui.on_route(&self.ctx, &route);
             self.run(task).await;
         }
 
-        fn page(&self) -> Element<'_, Message> {
+        pub(super) fn page(&self) -> Element<'_, Message> {
             let Route::Browse { folder, .. } = &self.route else {
                 panic!("not on a browse page: {:?}", self.route);
             };
             self.ui.view(self.device(), folder.clone())
         }
 
-        fn shows(&self, text: &str) -> bool {
+        pub(super) fn shows(&self, text: &str) -> bool {
             Simulator::new(self.page()).find(text).is_ok()
         }
 
-        fn top(&self, text: &str) -> f32 {
+        pub(super) fn top(&self, text: &str) -> f32 {
             let mut ui = Simulator::new(self.page());
             ui.find(text).unwrap().visible_bounds().unwrap().y
         }
 
-        async fn click(
+        pub(super) async fn click(
             &mut self,
             target: impl iced_test::selector::Selector<
                 Output: iced_test::selector::Bounded + Clone + Send + Sync + 'static,
@@ -1814,14 +881,14 @@ pub(crate) mod tests {
         }
 
         /// Open `name`'s actions and choose `action`.
-        async fn row_action(&mut self, name: &str, action: &str) {
+        pub(super) async fn row_action(&mut self, name: &str, action: &str) {
             let folder = self.ui.open_folder().unwrap().to_owned();
             self.send(Message::Menu(join_remote_path(&folder, name)))
                 .await;
             self.click(action).await;
         }
 
-        fn take_requests(&mut self) -> Vec<ui::Message> {
+        pub(super) fn take_requests(&mut self) -> Vec<ui::Message> {
             std::mem::take(&mut self.requests)
         }
     }
@@ -1885,76 +952,6 @@ pub(crate) mod tests {
         assert!(browser.shows("SD card"));
     }
 
-    #[test]
-    fn crumbs_follow_the_root_then_each_folder() {
-        let roots = [directory(INTERNAL, Some("All files"))];
-        assert_eq!(
-            crumbs(Some(&format!("{INTERNAL}/DCIM/Camera")), &roots),
-            [
-                ("Storage".to_owned(), None),
-                ("All files".into(), Some(INTERNAL.into())),
-                ("DCIM".into(), Some(format!("{INTERNAL}/DCIM"))),
-                ("Camera".into(), Some(format!("{INTERNAL}/DCIM/Camera"))),
-            ]
-        );
-        // Outside every root, the path's own folders.
-        assert_eq!(
-            crumbs(Some("/sdcard/Music"), &roots),
-            [
-                ("Storage".to_owned(), None),
-                ("sdcard".into(), Some("/sdcard".into())),
-                ("Music".into(), Some("/sdcard/Music".into())),
-            ]
-        );
-        // A root's name isn't mistaken for a prefix of another folder.
-        assert_eq!(
-            folder_name(&format!("{INTERNAL}0/x"), &roots),
-            "x",
-            "{INTERNAL}0 isn't inside {INTERNAL}"
-        );
-    }
-
-    #[tokio::test]
-    async fn hidden_files_can_be_shown() {
-        let mut browser = Browser::new();
-        browser.go(Some(INTERNAL)).await;
-        assert!(!browser.shows(".nomedia"));
-        browser.click(widget::Id::from("Show hidden files")).await;
-        assert!(browser.shows(".nomedia"));
-        browser.click(widget::Id::from("Hide hidden files")).await;
-        assert!(!browser.shows(".nomedia"));
-    }
-
-    #[tokio::test]
-    async fn columns_sort_both_ways_with_folders_first() {
-        let mut browser = Browser::new();
-        browser.go(Some(INTERNAL)).await;
-        let order = |browser: &Browser| {
-            let mut names = ["DCIM", "notes.txt", "photo.png"];
-            names.sort_by(|a, b| browser.top(a).total_cmp(&browser.top(b)));
-            names
-        };
-        assert_eq!(order(&browser), ["DCIM", "notes.txt", "photo.png"]);
-        browser.click("Size").await;
-        assert_eq!(order(&browser), ["DCIM", "photo.png", "notes.txt"]);
-        browser.click("Size").await;
-        assert_eq!(order(&browser), ["DCIM", "notes.txt", "photo.png"]);
-        browser.click("Name").await;
-        browser.click("Name").await;
-        assert_eq!(order(&browser), ["DCIM", "photo.png", "notes.txt"]);
-    }
-
-    #[tokio::test]
-    async fn modified_shows_only_on_a_wide_window() {
-        let mut browser = Browser::new();
-        browser.go(Some(INTERNAL)).await;
-        let narrow = Simulator::with_size(Default::default(), (500.0, 600.0), browser.page())
-            .find("2026-09-24 14:03")
-            .is_ok();
-        assert!(!narrow);
-        assert!(browser.shows("Modified"), "the default size is wide");
-    }
-
     #[tokio::test]
     async fn opening_a_file_downloads_it() {
         let mut browser = Browser::new();
@@ -1971,41 +968,6 @@ pub(crate) mod tests {
         };
         assert_eq!(text, "Downloading notes.txt");
         assert_eq!(action, &Some(("Transfers".into(), Route::Transfers)));
-    }
-
-    #[tokio::test]
-    async fn opening_a_small_image_previews_it() {
-        let mut browser = Browser::new();
-        browser.go(Some(INTERNAL)).await;
-        let mut png = std::io::Cursor::new(Vec::new());
-        ::image::RgbaImage::new(4, 3)
-            .write_to(&mut png, ::image::ImageFormat::Png)
-            .unwrap();
-        *lock(&browser.files.content) = png.into_inner();
-
-        browser.click("photo.png").await;
-        assert!(
-            browser
-                .files
-                .calls()
-                .contains(&Call::Read(format!("{INTERNAL}/photo.png")))
-        );
-        let preview = browser.ui.preview.as_ref().expect("a preview");
-        assert!(matches!(preview.image, Some(Ok(_))), "decoded");
-        browser.click(widget::Id::from("Close")).await;
-        assert!(browser.ui.preview.is_none());
-
-        // Not an image after all.
-        *lock(&browser.files.content) = b"not a png".to_vec();
-        browser.row_action("photo.png", "Preview").await;
-        assert!(browser.shows(CANT_SHOW));
-        // Large images download instead.
-        let mut large = file(&format!("{INTERNAL}/huge.jpg"), MAX_PREVIEW_BYTES + 1);
-        assert!(!can_preview(&large));
-        large.size = Some(MAX_PREVIEW_BYTES);
-        assert!(can_preview(&large));
-        assert!(!can_preview(&directory("/x.png", None)));
-        assert!(!can_preview(&file("/.png", 1)));
     }
 
     /// The prompt the browser asked the shell for.
@@ -2310,83 +1272,5 @@ pub(crate) mod tests {
         };
         browser.send(stale).await;
         assert!(browser.shows("notes.txt"));
-    }
-
-    /// The browse codes, worded as the Flutter app worded them.
-    #[test]
-    fn codes_read_like_the_flutter_app() {
-        for (code, message) in [
-            ("file_not_found", "That file or folder no longer exists."),
-            (
-                "file_exists",
-                "There is already a file or folder with that name.",
-            ),
-            ("file_permission_denied", "The device doesn’t allow that."),
-            ("not_a_directory", "That isn’t a folder."),
-            ("is_a_directory", "Folders can’t be downloaded, only files."),
-            ("invalid_path", "That name or location can’t be used."),
-            ("files_failed", "The device’s files couldn’t be reached."),
-            ("files_timed_out", "The device took too long to answer."),
-            (
-                "files_host_key_mismatch",
-                "The device’s file server didn’t prove it is the paired device, so \
-                 MyConnect didn’t connect to it.",
-            ),
-        ] {
-            assert_eq!(describe(code, None), message, "{code}");
-        }
-    }
-
-    #[test]
-    fn unavailable_says_why_when_the_device_does() {
-        assert_eq!(
-            describe_error(&BrowseError::Unavailable {
-                reason: Some("No storage access".into())
-            }),
-            "The device isn’t sharing its files (No storage access). In KDE Connect on \
-             the device, allow access to files in the Filesystem expose plugin."
-        );
-        assert_eq!(
-            describe_error(&BrowseError::Unavailable { reason: None }),
-            "The device isn’t sharing its files. In KDE Connect on the device, allow \
-             access to files in the Filesystem expose plugin."
-        );
-    }
-
-    #[test]
-    fn core_errors_read_as_the_core_words_them() {
-        assert_eq!(
-            describe_error(&BrowseError::Core(CoreError::DeviceNotConnected)),
-            "The device is not connected right now."
-        );
-    }
-
-    #[tokio::test]
-    async fn snapshot_files() {
-        let mut browser = Browser::new();
-        browser.go(None).await;
-        testing::snapshot("files-storage", (720.0, 420.0), || browser.page());
-        browser.go(Some(&format!("{INTERNAL}/DCIM/Camera"))).await;
-        testing::snapshot("files-empty", (720.0, 420.0), || browser.page());
-        browser.go(Some(INTERNAL)).await;
-        testing::snapshot("files-folder", (720.0, 420.0), || browser.page());
-        browser
-            .send(Message::Menu(format!("{INTERNAL}/photo.png")))
-            .await;
-        testing::snapshot("files-folder-narrow", (440.0, 420.0), || browser.page());
-
-        let mut png = std::io::Cursor::new(Vec::new());
-        ::image::RgbaImage::from_fn(64, 48, |x, y| {
-            ::image::Rgba([(x * 4) as u8, (y * 5) as u8, 160, 255])
-        })
-        .write_to(&mut png, ::image::ImageFormat::Png)
-        .unwrap();
-        *lock(&browser.files.content) = png.into_inner();
-        browser.click("photo.png").await;
-        testing::snapshot("files-preview", (720.0, 520.0), || browser.page());
-
-        let mut browser = Browser::with_device(testing::device("Pixel"));
-        browser.go(None).await;
-        testing::snapshot("files-not-shared", (440.0, 320.0), || browser.page());
     }
 }

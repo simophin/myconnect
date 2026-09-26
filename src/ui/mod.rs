@@ -2677,7 +2677,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn files_dropped_on_a_browse_folder_upload_there_and_elsewhere_send() {
-        use crate::ui::features::browse::tests::{Call, phone_files};
+        use crate::ui::features::browse::files::tests::{Call, phone_files};
 
         let mut sharing = Sharing::new();
         let phone = phone_files();
