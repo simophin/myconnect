@@ -46,7 +46,14 @@ impl System {
     /// if one was given.
     pub fn new(data_dir: Option<&Path>) -> Self {
         let name = entry_name(data_dir);
-        let program = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("Ferry"));
+        // The installed name, should the running one be unknown: `ferry-gui`
+        // on Linux, `Ferry` in the macOS bundle and on Windows.
+        let installed = if cfg!(any(target_os = "macos", windows)) {
+            "Ferry"
+        } else {
+            "ferry-gui"
+        };
+        let program = std::env::current_exe().unwrap_or_else(|_| PathBuf::from(installed));
         let mut args = vec![OsString::from("--background")];
         if let Some(data_dir) = data_dir {
             let absolute = std::path::absolute(data_dir).unwrap_or_else(|_| data_dir.to_owned());

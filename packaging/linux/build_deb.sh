@@ -3,8 +3,9 @@
 #
 #   build_deb.sh APP CLI VERSION OUT_DIR
 #
-# APP is cargo's ferry-gui, installed as /usr/bin/Ferry; CLI is the
-# ferry command line, installed next to it (docs/adr/0001, "Packaging").
+# APP is cargo's ferry-gui, installed under that name as /usr/bin/ferry-gui;
+# CLI is the ferry command line, installed next to it as /usr/bin/ferry
+# (docs/adr/0001, "Packaging").
 # The menu entry and icons go to /usr/share. Runs on Debian or
 # Ubuntu: it needs dpkg-deb, and dpkg-shlibdeps to work out the dependencies
 # from the ELF files. Build on the oldest release you want to support, since
@@ -38,7 +39,7 @@ root=$work/root
 
 mkdir -p "$root/usr/bin" "$root/usr/share/applications" \
   "$root/usr/share/icons" "$root/DEBIAN"
-install -m 755 -s "$app" "$root/usr/bin/Ferry"
+install -m 755 -s "$app" "$root/usr/bin/ferry-gui"
 install -m 755 -s "$cli" "$root/usr/bin/ferry"
 install -m 644 "$packaging/$app_id.desktop" "$root/usr/share/applications/"
 cp -R "$assets/linux/hicolor" "$root/usr/share/icons/"
@@ -50,7 +51,7 @@ printf 'Source: ferry\n\nPackage: ferry\nArchitecture: any\n' \
   >"$work/src/debian/control"
 depends=$(
   cd "$work/src" &&
-    dpkg-shlibdeps -O "$root/usr/bin/Ferry" "$root/usr/bin/ferry" \
+    dpkg-shlibdeps -O "$root/usr/bin/ferry-gui" "$root/usr/bin/ferry" \
       2>"$work/shlibdeps.log" |
     sed -n 's/^shlibs:Depends=//p'
 ) || {
