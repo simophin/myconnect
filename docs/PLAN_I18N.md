@@ -63,7 +63,7 @@ Split into four commits, one per step, each passing the checks.
       describe module
 - [x] 2b. Pages: devices, device, pairing, add device, transfers,
       settings, about
-- [ ] 2c. Overlays (dialog, drop, incoming, toast) and features: share,
+- [x] 2c. Overlays (dialog, drop, incoming, toast) and features: share,
       clipboard, ping, findmyphone, battery, notifications, browse
 - [ ] 2d. Tray menu, desktop notifications (incl. the "Open" action),
       file-dialog titles, `background.rs`; then a sweep:
@@ -164,3 +164,27 @@ Anything a later phase must know, one line each, newest last.
   and skipped real-clipboard tests; `transfer_e2e` passed this time. The
   pages' snapshots (`SNAPSHOT_DIR`, `-p ferry --features gui`) read as
   before.
+- 2c: overlay keys are `dialog-` (the shared Cancel), `drop-choose-hint`
+  and `drop-chooser-…`, `incoming-`; feature keys are `ping-`,
+  `findmyphone-`, `battery-`, `share-`, `clipboard-`, `notifications-`,
+  `browse-`, each feature's errors now in its own group.
+  `overlay::drop::CHOOSE_LABEL` and browse's `CANT_SHOW` are functions
+  now (`choose_label()`, `cant_show()`); `invalid_name_reason` returns
+  `Option<String>`.
+- 2c: the chooser's title for exactly one file ("Send file", the name
+  under it) is its own key, `drop-chooser-title-one`; the plural key
+  still has a `[one]` for languages whose `one` covers 21. The
+  notifications action uses a `[0]` variant for its unnumbered label.
+- 2c: a notification's button that failed now reads "Couldn’t do
+  “{ $action }”" (it was "Couldn’t {action}", a verb glued on); the
+  label is the phone's own text.
+- 2c left on purpose: `battery-charge` is `{ $charge }%` with the number
+  unformatted, and the dialog's `n/max` counter is plain digits (both
+  phase 3); `--demo`'s made-up notifications (`notifications::demo_packets`)
+  stand for what a phone sends, so they stay English; the share picker's
+  title (`share-pick-title`) and browse's (`browse-upload-title`) are
+  done, so 2d's file-dialog titles are only the shell's own.
+- 2c was checked on macOS, as 2b was: the same `tests/lan.rs` loopback
+  failure and skipped real-clipboard tests; `transfer_e2e`'s
+  zero-byte test failed again, also with `-p ferry` alone (no gui code).
+  The overlays' and browse's snapshots read as before.

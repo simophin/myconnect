@@ -12,6 +12,7 @@ use crate::{
     ui::{
         self, Origin,
         context::UiContext,
+        i18n::fl,
         overlay::dialog,
         widgets::{self, bold},
     },
@@ -52,7 +53,7 @@ impl BrowseUi {
                 let bytes = read.await.map_err(|error| describe_error(&error))?;
                 tokio::task::spawn_blocking(move || decode(&bytes))
                     .await
-                    .unwrap_or_else(|_| Err(CANT_SHOW.into()))
+                    .unwrap_or_else(|_| Err(cant_show()))
             },
             move |result| to_app(Message::Previewed { path, result }, origin),
         )
@@ -61,7 +62,7 @@ impl BrowseUi {
 
 pub(super) fn preview_view(preview: &Preview) -> Element<'_, Message> {
     let body: Element<'_, Message> = match &preview.image {
-        None => widgets::loading("Loading the image…"),
+        None => widgets::loading(fl!("browse-loading-image")),
         Some(Err(error)) => widgets::error_view(error.as_str(), None),
         Some(Ok(handle)) => image::viewer(handle.clone())
             .width(Length::Fill)
@@ -79,7 +80,11 @@ pub(super) fn preview_view(preview: &Preview) -> Element<'_, Message> {
                 )
                 .width(Length::Fill)
                 .clip(true),
-                widgets::icon_button(lucide::x, "Close", Some(Message::ClosePreview)),
+                widgets::icon_button(
+                    lucide::x,
+                    fl!("browse-close-preview"),
+                    Some(Message::ClosePreview)
+                ),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
@@ -97,12 +102,14 @@ pub(super) fn preview_view(preview: &Preview) -> Element<'_, Message> {
 }
 
 /// What an image that can't be decoded says.
-const CANT_SHOW: &str = "This image can’t be shown.";
+fn cant_show() -> String {
+    fl!("browse-image-unreadable")
+}
 
 /// Decode an image for the preview. iced would decode it only when drawn,
 /// and drop the error.
 fn decode(bytes: &[u8]) -> Result<image::Handle, String> {
-    let decoded = ::image::load_from_memory(bytes).map_err(|_| CANT_SHOW.to_owned())?;
+    let decoded = ::image::load_from_memory(bytes).map_err(|_| cant_show())?;
     let rgba = decoded.into_rgba8();
     Ok(image::Handle::from_rgba(
         rgba.width(),
@@ -162,7 +169,7 @@ mod tests {
         // Not an image after all.
         *lock(&browser.files.content) = b"not a png".to_vec();
         browser.row_action("photo.png", "Preview").await;
-        assert!(browser.shows(CANT_SHOW));
+        assert!(browser.shows(&cant_show()));
         // Large images download instead.
         let mut large = file(&format!("{INTERNAL}/huge.jpg"), MAX_PREVIEW_BYTES + 1);
         assert!(!can_preview(&large));

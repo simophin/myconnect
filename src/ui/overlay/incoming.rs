@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     core::PairingSnapshot,
-    ui::{overlay::dialog::surface, widgets},
+    ui::{i18n::fl, overlay::dialog::surface, widgets},
 };
 
 /// Accept or reject a request, by id.
@@ -32,13 +32,10 @@ pub fn view<'a, M: Clone + 'a>(
 ) -> Option<Element<'a, M>> {
     let (pairing, queued) = pending.split_first()?;
     let mut content = column![
-        text("Pairing request").size(20).font(widgets::bold()),
-        text(format!(
-            "{} wants to pair with this computer. Accept only if it shows the same code:",
-            pairing.device_name
-        ))
-        .size(14)
-        .wrapping(text::Wrapping::WordOrGlyph),
+        text(fl!("incoming-title")).size(20).font(widgets::bold()),
+        text(fl!("incoming-body", name = pairing.device_name.as_str()))
+            .size(14)
+            .wrapping(text::Wrapping::WordOrGlyph),
     ]
     .spacing(12);
     if let Some(code) = &pairing.verification_code {
@@ -47,7 +44,7 @@ pub fn view<'a, M: Clone + 'a>(
     }
     if !queued.is_empty() {
         content = content.push(
-            text(format!("{} more request(s) waiting", queued.len()))
+            text(fl!("incoming-queued", count = queued.len()))
                 .size(12)
                 .style(text::secondary),
         );
@@ -65,8 +62,16 @@ pub fn view<'a, M: Clone + 'a>(
         container(
             row![
                 space::horizontal(),
-                answer("Reject", button::text, (actions.reject)(pairing.id)),
-                answer("Accept", widgets::filled, (actions.accept)(pairing.id)),
+                answer(
+                    fl!("incoming-reject"),
+                    button::text,
+                    (actions.reject)(pairing.id)
+                ),
+                answer(
+                    fl!("incoming-accept"),
+                    widgets::filled,
+                    (actions.accept)(pairing.id)
+                ),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
@@ -125,7 +130,7 @@ mod tests {
             "Pairing request",
             "Pixel 8a wants to pair with this computer. Accept only if it shows the same code:",
             "9F3A7C21",
-            "2 more request(s) waiting",
+            "2 more requests waiting",
         ] {
             assert!(ui.find(shown).is_ok(), "{shown} is shown");
         }
@@ -151,7 +156,7 @@ mod tests {
             .unwrap(),
         );
         assert!(ui.find("The device is not connected right now.").is_ok());
-        assert!(ui.find("more request(s) waiting").is_err());
+        assert!(ui.find("1 more request waiting").is_err());
         ui.click("Accept").unwrap();
         assert!(ui.into_messages().next().is_none());
     }

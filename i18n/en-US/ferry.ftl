@@ -22,6 +22,40 @@ drop-no-recipients = No paired device can receive files
 drop-send-failed = Couldn’t send
 drop-folders-refused = Only files can be sent, not folders.
 
+## Files dropped on the window: the hint and the chooser (src/ui/overlay/drop.rs)
+
+# The hint while files hover over a page with no device to drop them on.
+drop-choose-hint = Drop anywhere to choose a device
+# The chooser's title for one file; the file's name goes under it.
+drop-chooser-title-one = Send file
+# The chooser's title for several files (never 1 in English, but other
+# languages' `one` may cover counts like 21).
+drop-chooser-title =
+    { $count ->
+        [one] Send { $count } file
+       *[other] Send { $count } files
+    }
+drop-chooser-prompt = Choose the device to send to:
+drop-chooser-no-devices = No paired device is connected and able to receive files.
+
+## Dialogs (src/ui/overlay/dialog.rs; also the drop chooser)
+
+dialog-cancel = Cancel
+
+## An incoming pairing request (src/ui/overlay/incoming.rs)
+
+incoming-title = Pairing request
+# `name` is the device asking.
+incoming-body = { $name } wants to pair with this computer. Accept only if it shows the same code:
+# Other requests waiting behind this one.
+incoming-queued =
+    { $count ->
+        [one] { $count } more request waiting
+       *[other] { $count } more requests waiting
+    }
+incoming-reject = Reject
+incoming-accept = Accept
+
 ## Errors, keyed by the code the HTTP API reports (src/ui/error.rs)
 
 error-daemon_unavailable = Ferry is not responding.
@@ -220,8 +254,146 @@ about-source = Source code
 about-support = Support development
 about-support-detail = Sponsor on GitHub
 
-## Browsing a device's files: errors (src/ui/features/browse/describe.rs)
+## Ping (src/ui/features/ping.rs)
 
+# A device's action (a button, and an item in the tray).
+ping-action = Ping
+# A notification's body when a device pings without a message; the device's
+# name is its title.
+ping-received = Ping!
+# `name` is the device's name.
+ping-sent = Pinged { $name }.
+ping-failed = Couldn’t ping { $name }
+
+## Find my phone (src/ui/features/findmyphone.rs)
+
+findmyphone-action = Ring
+findmyphone-sent = Asked { $name } to ring.
+findmyphone-failed = Couldn’t ring { $name }
+
+## Battery (src/ui/features/battery.rs)
+
+# A device's charge, in its status chip; `charge` is 0 to 100.
+battery-charge = { $charge }%
+
+## Sending files (src/ui/features/share.rs)
+
+share-action = Send files
+# The hint while files hover over a device's page; `name` is the device's.
+share-drop-hint = Drop to send to { $name }
+# The file picker's title.
+share-pick-title = Send files to { $name }
+# The title of a failure; why is its body.
+share-failed = Couldn’t send to { $name }
+share-error-file-unreadable = The file couldn’t be read.
+
+## The clipboard (src/ui/features/clipboard.rs)
+
+clipboard-action = Send clipboard
+# The setting's switch and its explanation.
+clipboard-sync = Sync clipboard
+clipboard-sync-detail = Share copied text with paired devices
+clipboard-sent = Sent the clipboard to { $name }.
+clipboard-failed = Couldn’t send the clipboard to { $name }
+clipboard-error-clipboard_empty = There is no text on the clipboard to send.
+clipboard-error-clipboard_text_too_large = The clipboard text is too long to send.
+
+## A device's notifications (src/ui/features/notifications.rs)
+
+# The device's action, with how many notifications it shows.
+notifications-action =
+    { $count ->
+        [0] Notifications
+       *[other] Notifications ({ $count })
+    }
+notifications-title = Notifications
+# `name` is the device's.
+notifications-offline = { $name } isn’t connected.
+notifications-offline-detail = Its notifications show here while it is.
+notifications-empty = No notifications from { $name }.
+notifications-empty-detail = On the phone, let KDE Connect read notifications, and choose which apps share them.
+# A notification's buttons.
+notifications-reply = Reply
+notifications-dismiss = Dismiss
+# The dialog asking for a reply. `title` is the notification's title (or its
+# app's name).
+notifications-reply-title = Reply
+notifications-reply-to = To “{ $title }”
+notifications-reply-label = Message
+notifications-reply-send = Send
+notifications-reply-sent = Reply sent.
+notifications-reply-failed = Couldn’t send the reply
+# `action` is the label of one of the notification's own buttons, in the
+# device's language (such as "Mark as read").
+notifications-action-failed = Couldn’t do “{ $action }”
+notifications-dismiss-failed = Couldn’t dismiss it
+# A desktop notification's title for a new one: its title (or its app's
+# name), then the device's name.
+notifications-announce-title = { $title } · { $name }
+# Why an action on one failed.
+notifications-error-notification_not_found = It’s no longer on the device.
+notifications-error-notification_not_repliable = It doesn’t take a reply.
+notifications-error-notification_not_dismissable = It can’t be dismissed from here.
+notifications-error-unknown_notification_action = It no longer has that button.
+# Also when a reply is left empty.
+notifications-error-empty_reply = Write a message.
+
+## Browsing a device's files (src/ui/features/browse/)
+
+browse-action = Browse files
+# The page's title; `name` is the device's.
+browse-title = Files on { $name }
+browse-not-shared = { $name } doesn’t share its files.
+browse-not-connected = Connect { $name } to browse its files.
+# Tooltips of the header's icon buttons.
+browse-upload = Upload files
+browse-new-folder = New folder
+browse-refresh = Refresh
+browse-hide-hidden = Hide hidden files
+browse-show-hidden = Show hidden files
+browse-up = Up
+browse-loading-folder = Loading the folder…
+browse-connecting = Connecting to the device…
+browse-no-storage = The device isn’t sharing any storage.
+browse-empty-folder = This folder is empty. Drop files here to upload them.
+# The first breadcrumb: the list of the device's storage (internal, SD card).
+browse-storage = Storage
+# The listing's column headers.
+browse-column-name = Name
+browse-column-size = Size
+browse-column-modified = Modified
+# A file's menu.
+browse-more = More
+browse-preview = Preview
+browse-download = Download
+browse-rename = Rename
+browse-delete = Delete
+# `file` is the file's name; the button opens the Transfers page.
+browse-downloading = Downloading { $file }
+browse-see-transfers = Transfers
+# `folder` is the folder's name.
+browse-drop-hint = Drop to upload to { $folder }
+browse-upload-title = Upload files to { $folder }
+# The dialog naming a new folder or a file's new name.
+browse-name-label = Name
+browse-new-folder-title = New folder
+browse-new-folder-confirm = Create
+browse-rename-title = Rename
+browse-rename-confirm = Rename
+browse-name-empty = Enter a name.
+browse-name-reserved = That name is reserved.
+browse-name-slash = Names can’t contain “/”.
+# `name` is the file's or folder's.
+browse-delete-folder-title = Delete folder?
+browse-delete-folder-body = “{ $name }” and everything in it will be deleted from the device. This can’t be undone.
+browse-delete-file-title = Delete file?
+browse-delete-file-body = “{ $name }” will be deleted from the device. This can’t be undone.
+browse-delete-confirm = Delete
+# The image preview.
+browse-loading-image = Loading the image…
+browse-close-preview = Close
+browse-image-unreadable = This image can’t be shown.
+# Errors (src/ui/features/browse/describe.rs).
 browse-error-file-unreadable = The file couldn’t be read.
 browse-error-files_unavailable = The device isn’t sharing its files. In KDE Connect on the device, allow access to files in the Filesystem expose plugin.
 # `reason` is the device's own words, in its language.
@@ -235,21 +407,3 @@ browse-error-invalid_path = That name or location can’t be used.
 browse-error-files_failed = The device’s files couldn’t be reached.
 browse-error-files_timed_out = The device took too long to answer.
 browse-error-files_host_key_mismatch = The device’s file server didn’t prove it is the paired device, so Ferry didn’t connect to it.
-
-## The clipboard: errors (src/ui/features/clipboard.rs)
-
-clipboard-error-clipboard_empty = There is no text on the clipboard to send.
-clipboard-error-clipboard_text_too_large = The clipboard text is too long to send.
-
-## A device's notifications: why an action on one failed
-## (src/ui/features/notifications.rs)
-
-notifications-error-notification_not_found = It’s no longer on the device.
-notifications-error-notification_not_repliable = It doesn’t take a reply.
-notifications-error-notification_not_dismissable = It can’t be dismissed from here.
-notifications-error-unknown_notification_action = It no longer has that button.
-notifications-error-empty_reply = Write a message.
-
-## Sending files: errors (src/ui/features/share.rs)
-
-share-error-file-unreadable = The file couldn’t be read.

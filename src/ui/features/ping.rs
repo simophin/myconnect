@@ -8,7 +8,7 @@ use super::{DeviceAction, Feature};
 use crate::{
     core::{CoreEvent, DeviceReachability, DeviceSnapshot, EventData},
     plugins::ping::{PACKET_TYPE, ReceivedPing, send_ping},
-    ui::{self, Origin, context::UiContext, error::describe_error, shell},
+    ui::{self, Origin, context::UiContext, error::describe_error, i18n::fl, shell},
 };
 
 #[derive(Debug, Clone)]
@@ -23,7 +23,7 @@ pub enum Message {
 pub fn device_actions(device: &DeviceSnapshot) -> Vec<DeviceAction> {
     vec![DeviceAction {
         id: "ping",
-        label: "Ping".into(),
+        label: fl!("ping-action"),
         icon: lucide::bell_ring,
         enabled: accepts_pings(device),
         visible_in_tray: true,
@@ -41,7 +41,7 @@ pub(crate) fn on_event(event: &CoreEvent) -> Task<ui::Message> {
     match event.decode::<ReceivedPing>() {
         Some(ping) => shell::notify(
             ping.device_name,
-            ping.message.unwrap_or_else(|| "Ping!".into()),
+            ping.message.unwrap_or_else(|| fl!("ping-received")),
         ),
         None => Task::none(),
     }
@@ -52,10 +52,10 @@ pub(crate) fn update(ctx: &UiContext, message: Message, origin: Origin) -> Task<
         Message::Ping { device_id, name } => {
             // Queues the packet; nothing here waits on the network.
             match send_ping(&ctx.plugin_context(), &device_id, None) {
-                Ok(()) => shell::done(origin, format!("Pinged {name}.")),
+                Ok(()) => shell::done(origin, fl!("ping-sent", name = name.as_str())),
                 Err(error) => shell::failed(
                     origin,
-                    format!("Couldn’t ping {name}"),
+                    fl!("ping-failed", name = name.as_str()),
                     describe_error(&error),
                 ),
             }

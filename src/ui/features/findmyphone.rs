@@ -7,7 +7,7 @@ use super::{DeviceAction, Feature};
 use crate::{
     core::{DeviceReachability, DeviceSnapshot},
     plugins::findmyphone::{REQUEST_PACKET_TYPE, ring_device},
-    ui::{self, Origin, context::UiContext, error::describe_error, shell},
+    ui::{self, Origin, context::UiContext, error::describe_error, i18n::fl, shell},
 };
 
 #[derive(Debug, Clone)]
@@ -22,7 +22,7 @@ pub enum Message {
 pub fn device_actions(device: &DeviceSnapshot) -> Vec<DeviceAction> {
     vec![DeviceAction {
         id: "ring",
-        label: "Ring".into(),
+        label: fl!("findmyphone-action"),
         icon: lucide::volume_two,
         enabled: can_ring(device),
         visible_in_tray: advertises_ring(device),
@@ -38,10 +38,10 @@ pub(crate) fn update(ctx: &UiContext, message: Message, origin: Origin) -> Task<
         Message::Ring { device_id, name } => {
             // Queues the packet; nothing here waits on the network.
             match ring_device(&ctx.plugin_context(), &device_id) {
-                Ok(()) => shell::done(origin, format!("Asked {name} to ring.")),
+                Ok(()) => shell::done(origin, fl!("findmyphone-sent", name = name.as_str())),
                 Err(error) => shell::failed(
                     origin,
-                    format!("Couldn’t ring {name}"),
+                    fl!("findmyphone-failed", name = name.as_str()),
                     describe_error(&error),
                 ),
             }

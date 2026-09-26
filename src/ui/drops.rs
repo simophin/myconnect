@@ -148,7 +148,7 @@ impl App {
         }
         Some(
             self.drop_target_here()
-                .map_or_else(|| dropping::CHOOSE_LABEL.into(), |target| target.label),
+                .map_or_else(dropping::choose_label, |target| target.label),
         )
     }
 
@@ -392,7 +392,7 @@ mod tests {
         sharing.hover(std::slice::from_ref(&photo)).await;
         assert_eq!(
             sharing.app.drop_hint().as_deref(),
-            Some(dropping::CHOOSE_LABEL)
+            Some(dropping::choose_label().as_str())
         );
         sharing
             .window(window::Event::FileDropped(photo.clone()))
@@ -535,7 +535,7 @@ mod tests {
         sharing.hover(&[sharing.file("photo.jpg")]).await;
         assert_eq!(
             sharing.app.drop_hint().as_deref(),
-            Some(dropping::CHOOSE_LABEL)
+            Some(dropping::choose_label().as_str())
         );
         sharing.drop(&[sharing.file("photo.jpg")]).await;
         let recipients: Vec<_> = sharing

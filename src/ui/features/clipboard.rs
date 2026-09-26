@@ -54,7 +54,7 @@ pub fn device_actions(device: &DeviceSnapshot) -> Vec<DeviceAction> {
     }
     vec![DeviceAction {
         id: "send-clipboard",
-        label: "Send clipboard".into(),
+        label: fl!("clipboard-action"),
         icon: lucide::clipboard_paste,
         enabled: device.paired && device.reachability == DeviceReachability::Connected,
         visible_in_tray: true,
@@ -69,8 +69,8 @@ pub fn device_actions(device: &DeviceSnapshot) -> Vec<DeviceAction> {
 pub fn view_settings(settings: &SettingsSnapshot) -> Element<'_, Message> {
     widgets::switch_setting(
         lucide::clipboard_copy,
-        "Sync clipboard",
-        "Share copied text with paired devices",
+        fl!("clipboard-sync"),
+        fl!("clipboard-sync-detail"),
         ClipboardSettings::of(settings).sync_enabled,
         Message::SetSync,
     )
@@ -99,7 +99,7 @@ impl ClipboardUi {
                     },
                     move |result| {
                         let result = match result {
-                            Ok(Ok(())) => Ok(format!("Sent the clipboard to {name}.")),
+                            Ok(Ok(())) => Ok(fl!("clipboard-sent", name = name.as_str())),
                             Ok(Err(error)) => Err(describe_error(&error)),
                             Err(_) => Err(describe_code("internal")),
                         };
@@ -109,11 +109,9 @@ impl ClipboardUi {
             }
             Message::Sent { name, result } => match result {
                 Ok(text) => shell::done(origin, text),
-                Err(error) => shell::failed(
-                    origin,
-                    format!("Couldn’t send the clipboard to {name}"),
-                    error,
-                ),
+                Err(error) => {
+                    shell::failed(origin, fl!("clipboard-failed", name = name.as_str()), error)
+                }
             },
             Message::SetSync(enabled) => {
                 let core = ctx.core().clone();

@@ -16,7 +16,7 @@ use iced::{
     },
 };
 
-use crate::ui::widgets::bold;
+use crate::ui::{i18n::fl, widgets::bold};
 
 /// Checks a typed value: the error to show under the field, if any.
 pub type Validator = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
@@ -344,7 +344,7 @@ fn view<M>(dialog: &Dialog<M>) -> Element<'_, DialogEvent> {
     content = content.push(
         row![
             space::horizontal(),
-            button(text("Cancel"))
+            button(text(fl!("dialog-cancel")))
                 .padding([8, 14])
                 .style(button::text)
                 .on_press(DialogEvent::Cancel),

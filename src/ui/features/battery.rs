@@ -9,14 +9,14 @@ use crate::{
     core::DeviceSnapshot,
     plugins::battery::{BatteryStatus, PACKET_TYPE},
     protocol::{DeviceType, Packet},
-    ui::widgets::Icon,
+    ui::{i18n::fl, widgets::Icon},
 };
 
 pub fn device_status(device: &DeviceSnapshot) -> Option<DeviceStatus> {
     let battery = BatteryStatus::of(device)?;
     Some(DeviceStatus {
         icon: Level::of(battery).icon(),
-        label: format!("{}%", battery.charge),
+        label: fl!("battery-charge", charge = battery.charge),
     })
 }
 
