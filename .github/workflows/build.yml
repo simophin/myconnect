@@ -319,8 +319,7 @@ jobs:
   # filled in from this release (site/build.py) now that its packages are
   # attached, so the links never point at files that aren't uploaded yet. A
   # pre-release keeps the site on the last full release. A change to site/
-  # goes live with the next release. The site also carries the release's
-  # third-party notices (about.toml) as licenses.html, which About links to.
+  # goes live with the next release.
   # Needs Settings → Pages → Source: GitHub Actions.
   website:
     name: Website
@@ -339,10 +338,6 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-about@0.9
       - name: Build
         env:
           GH_TOKEN: ${{ github.token }}
@@ -350,7 +345,6 @@ jobs:
         run: |
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName,url,assets > release.json
           site/build.py release.json _site
-          cargo about generate --locked --fail about.hbs -o _site/licenses.html
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:

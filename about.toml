@@ -1,6 +1,5 @@
 # cargo-about: the notices for the third-party code in Ferry, which the
-# packages ship as THIRD_PARTY_LICENSES.html (about.hbs), and the website
-# publishes as licenses.html for About to link to.
+# packages ship as THIRD_PARTY_LICENSES.html (about.hbs) and About opens.
 #
 #   cargo about generate --locked --fail about.hbs > THIRD_PARTY_LICENSES.html
 #

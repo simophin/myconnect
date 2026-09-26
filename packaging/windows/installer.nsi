@@ -8,7 +8,7 @@
 ;
 ; The app is installed as Ferry.exe and the CLI next to it as ferry-cli.exe
 ; (docs/adr/0001, "Packaging"). LICENSES is the notices cargo-about wrote
-; (about.toml), installed next to Ferry.exe.
+; (about.toml), installed next to Ferry.exe, where About opens it.
 ; LANGUAGES is what `packaging/i18n.sh nsis` prints: the app's languages
 ; and the installer's own strings in each. The installer speaks the
 ; system's language if it is one of them, else English.
