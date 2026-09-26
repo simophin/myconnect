@@ -96,7 +96,7 @@ fn content<'a, M: Clone + 'a>(
             .into(),
         None => container(activity_bar(160, 4.0)).padding([26, 0]).into(),
     };
-    let mut content = column![top, text(title).size(20).font(widgets::semibold())]
+    let mut content = column![top, text(title).size(20).font(widgets::bold())]
         .spacing(16)
         .align_x(Alignment::Center);
     if let Some(detail) = detail {

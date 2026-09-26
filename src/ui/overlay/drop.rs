@@ -178,7 +178,7 @@ pub fn chooser<'a, M: Clone + 'a>(
         column![
             text(title)
                 .size(20)
-                .font(widgets::semibold())
+                .font(widgets::bold())
                 .wrapping(text::Wrapping::None),
             body,
             row![

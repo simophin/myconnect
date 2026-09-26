@@ -18,7 +18,7 @@ use iced::{
 
 use crate::ui::{
     plugin::{Callback, Validator},
-    widgets::semibold,
+    widgets::bold,
 };
 
 /// The dialog's text field, for focusing it.
@@ -312,7 +312,7 @@ pub fn modal<'a, T: Clone + 'a>(
 }
 
 fn view<M>(dialog: &Dialog<M>) -> Element<'_, DialogEvent> {
-    let mut content = column![text(&dialog.title).size(20).font(semibold())].spacing(16);
+    let mut content = column![text(&dialog.title).size(20).font(bold())].spacing(16);
     if let Some(body) = &dialog.body {
         content = content.push(text(body).size(14));
     }

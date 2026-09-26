@@ -47,7 +47,7 @@ pub fn page_header<'a, M: Clone + 'a>(
         container(
             text(title)
                 .size(22)
-                .font(semibold())
+                .font(bold())
                 .wrapping(text::Wrapping::None),
         )
         .padding([0, 4])
@@ -419,10 +419,15 @@ pub fn gap(size: impl Into<Length> + Copy) -> Space {
     Space::new().width(size).height(size)
 }
 
-/// The app's semibold font, for titles.
-pub fn semibold() -> Font {
+/// The app's bold font, for titles.
+///
+/// Bold rather than semibold: cosmic-text keeps the sans-serif family only
+/// for the exact weight asked for, and many don't ship a semibold (Noto
+/// Sans on most Linux desktops), so a semibold title fell back to whatever
+/// installed face is weight 600, such as URW Bookman's serif.
+pub fn bold() -> Font {
     Font {
-        weight: font::Weight::Semibold,
+        weight: font::Weight::Bold,
         ..Font::DEFAULT
     }
 }

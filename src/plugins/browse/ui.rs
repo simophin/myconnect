@@ -30,7 +30,7 @@ use crate::{
         overlay::dialog,
         plugin::{Command, DeviceAction, DropTarget, Icon, ShellRequest, UiContext, UiPlugin},
         route::Route,
-        widgets::{self, HeaderAction, format_bytes, format_timestamp, semibold},
+        widgets::{self, HeaderAction, bold, format_bytes, format_timestamp},
     },
 };
 
@@ -1115,7 +1115,7 @@ fn breadcrumbs<'a>(folder: Option<&str>, roots: &[FileEntry]) -> Element<'a, Mes
             trail = trail.push(lucide::chevron_right().size(14).style(text::secondary));
         }
         trail = trail.push(if index == last {
-            container(text(label).font(semibold()).wrapping(text::Wrapping::None))
+            container(text(label).font(bold()).wrapping(text::Wrapping::None))
                 .padding([6, 12])
                 .into()
         } else {
@@ -1169,7 +1169,7 @@ fn folder_name(folder: &str, roots: &[FileEntry]) -> String {
 
 fn header_row<'a>(wide: bool, sort: Sort) -> Element<'a, Message> {
     let column_button = |label: &'static str, by: Column| -> Element<'a, Message> {
-        let mut content = row![text(label).size(13).font(semibold())]
+        let mut content = row![text(label).size(13).font(bold())]
             .spacing(4)
             .align_y(Alignment::Center);
         if sort.by == by {
@@ -1250,7 +1250,7 @@ fn preview_view(preview: &Preview) -> Element<'_, Message> {
                 container(
                     text(&preview.file.name)
                         .size(18)
-                        .font(semibold())
+                        .font(bold())
                         .wrapping(text::Wrapping::None)
                 )
                 .width(Length::Fill)

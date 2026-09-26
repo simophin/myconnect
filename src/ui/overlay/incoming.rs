@@ -32,7 +32,7 @@ pub fn view<'a, M: Clone + 'a>(
 ) -> Option<Element<'a, M>> {
     let (pairing, queued) = pending.split_first()?;
     let mut content = column![
-        text("Pairing request").size(20).font(widgets::semibold()),
+        text("Pairing request").size(20).font(widgets::bold()),
         text(format!(
             "{} wants to pair with this computer. Accept only if it shows the same code:",
             pairing.device_name

@@ -87,7 +87,7 @@ pub fn view<'a, Message: Clone + 'a>(
         content = content.push(
             column![
                 row![
-                    text("Recent transfers").font(widgets::semibold()),
+                    text("Recent transfers").font(widgets::bold()),
                     space::horizontal(),
                     widgets::link_button("See all", navigate(Route::Transfers)),
                 ]
@@ -134,7 +134,7 @@ fn summary<'a, Message: 'a>(
     row![
         badge,
         column![
-            text(&device.device_name).size(18).font(widgets::semibold()),
+            text(&device.device_name).size(18).font(widgets::bold()),
             status_row(device, plugins),
         ]
         .spacing(4),
