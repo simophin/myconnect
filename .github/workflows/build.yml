@@ -3,7 +3,7 @@
 # installer, Debian packages for amd64 and arm64 (the app and the CLI), and a
 # PKGBUILD that repackages those for Arch Linux. It can also be run by hand
 # (Actions → Build → Run workflow), leaving the packages as run artifacts.
-# After a release it also publishes the website for it (site.yml).
+# After a full release it also publishes the website (site/) for it.
 # The scripts it runs are in packaging/.
 name: Build
 
@@ -285,16 +285,39 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
 
-  # Points the website's downloads at this release, now that its packages
-  # are attached. A pre-release keeps the site on the last full release.
+  # Publishes the website (site/) to GitHub Pages, with its download links
+  # filled in from this release (site/build.py) now that its packages are
+  # attached, so the links never point at files that aren't uploaded yet. A
+  # pre-release keeps the site on the last full release. A change to site/
+  # goes live with the next release.
+  # Needs Settings → Pages → Source: GitHub Actions.
   website:
     name: Website
     if: github.event_name == 'release' && !github.event.release.prerelease
     needs: release
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pages: write
       id-token: write
-    uses: ./.github/workflows/site.yml
-    with:
-      tag: ${{ github.event.release.tag_name }}
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName,url,assets > release.json
+          site/build.py release.json _site
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v5
