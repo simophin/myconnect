@@ -320,6 +320,11 @@ click with XTest (`libXtst` through Python `ctypes`). Don't open windows on
 the user's own session, and don't pair with or send to real devices on
 their network without asking.
 
+The README and the website share one set of screenshots,
+`site/img/<page>-<light|dark>.webp`, taken at 2x
+(`WINIT_X11_SCALE_FACTOR=2`) and saved 880 px wide. `ICED_THEME=Light` or
+`Dark` forces the app's theme, for taking both.
+
 - Launch the app under `env -u WAYLAND_DISPLAY DISPLAY=:NN
   GDK_BACKEND=x11 ICED_BACKEND=tiny-skia dbus-run-session -- ...`, with
   the environment *outside* `dbus-run-session`. Services the private bus starts (the file chooser

@@ -36,6 +36,7 @@ pub mod store;
 pub mod sync;
 #[cfg(test)]
 pub(crate) mod testing;
+pub mod theme;
 pub mod widgets;
 
 use std::{
@@ -249,6 +250,8 @@ pub(crate) enum Message {
     StartTray,
     WindowOpened,
     Window(window::Id, window::Event),
+    /// The system's light or dark mode, at start and when it changes.
+    SystemTheme(iced::theme::Mode),
 }
 
 /// Keyboard shortcuts the shell handles.
@@ -305,6 +308,8 @@ struct App {
     tray_dropped: Option<Vec<PathBuf>>,
     /// The system starts the app at login ([`desktop::autostart`]).
     start_on_login: bool,
+    /// Light or dark, following the system.
+    theme: iced::Theme,
 }
 
 /// Whether the daemon runs yet.
@@ -641,6 +646,10 @@ impl App {
                 Task::none()
             }
             Message::WindowOpened => Task::none(),
+            Message::SystemTheme(mode) => {
+                self.theme = theme::for_mode(mode);
+                Task::none()
+            }
             Message::Window(id, event) if Some(id) == self.window => match event {
                 window::Event::Focused | window::Event::Unfocused => {
                     self.set_focused(event == window::Event::Focused);
@@ -833,6 +842,7 @@ impl App {
         let mut subscriptions = vec![
             window::events().map(|(id, event)| Message::Window(id, event)),
             event::listen_with(key_command).map(Message::Key),
+            iced::system::theme_changes().map(Message::SystemTheme),
         ];
         if let Some(events) = &self.desktop.events {
             subscriptions.push(desktop::events(events).map(Message::Desktop));
