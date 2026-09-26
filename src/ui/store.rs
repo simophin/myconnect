@@ -324,6 +324,7 @@ mod tests {
             device_name: name.into(),
             download_dir: PathBuf::from("/tmp/downloads"),
             close_to_tray: true,
+            language: None,
             plugins: BTreeMap::new(),
         }
     }

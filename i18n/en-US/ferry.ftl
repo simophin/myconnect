@@ -283,6 +283,14 @@ settings-close-to-tray = Keep running when the window is closed
 settings-close-to-tray-detail = Stay in the tray so devices can still reach this computer
 settings-start-on-login = Start when you log in
 settings-start-on-login-detail = Open in the tray, ready for your devices
+# The language setting: its title, the line under it, and the first choice
+# of its list, which follows the system's language.
+settings-language = Language
+settings-language-detail = For the app’s window, tray menu and notifications
+settings-language-system = System default
+# This file's language, named in itself, as Settings' list of languages
+# shows it to someone looking for their own: "Deutsch", "简体中文".
+settings-language-own-name = English
 settings-cli = Command line access
 settings-cli-detail = Let ferry-cli control this app
 settings-cli-setup-hint = ferry-cli on this computer finds the app by itself. Elsewhere, such as a script run as another user, paste this into its shell first:

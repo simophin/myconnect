@@ -103,11 +103,12 @@ Split into four commits, one per step, each passing the checks.
       string and a language
 
 ### 7. Language setting
-- [ ] A `language` daemon setting (none = system): core, `http.rs`,
+- [x] A `language` daemon setting (none = system): core, `http.rs`,
       `client.rs`/CLI, then the Settings page, as the ground rules order
-- [ ] Switching it re-selects the loader at run time, rebuilds the tray
-      menu, and updates the window without a restart
-- [ ] ARCHITECTURE.md updated for the API change
+- [x] Switching it re-selects the loader at run time, rebuilds the tray
+      menu, and updates the window without a restart (tested on the
+      loader; not yet seen in the real app, see Notes)
+- [x] ARCHITECTURE.md updated for the API change
 
 ## Notes
 
@@ -352,3 +353,38 @@ Anything a later phase must know, one line each, newest last.
   real app wasn't run in de or zh-CN (no Xvfb); `packaging/i18n.sh`'s
   output for both was checked (`plutil -lint` passes), `makensis` and
   `desktop-file-validate` weren't run.
+- 7: the setting is `ui.language` (`core::settings::LANGUAGE`), `language`
+  in `GET/PATCH /settings`: a BCP 47 tag, or `null` for the system's. The
+  daemon checks only its shape (`invalid_settings` otherwise), not that a
+  translation exists; the UI negotiates it like a system tag, so `de-AT`
+  gets German and an unknown one en-US. `http.rs`/`client.rs` needed no
+  change (they pass the whole patch). CLI: `ferry-cli settings --language
+  <tag|system>`, and `settings` prints it.
+- 7: `i18n::follow_setting`, called from `App::update` after every
+  message (before `update_tray`), reloads `LOADER` through `select` when
+  the setting changed, then restores isolation (off only after
+  `use_test_language`). It does nothing until `select_system_language` or
+  `use_test_language` ran, so unit tests stay en-US; `FERRY_LANG` still
+  wins over the setting. A chosen tag is requested alone, so dates follow
+  it (`de` gives German dates even on a `de-AT` system). When it switches
+  while starting on login is on, the login item is rewritten (Linux's
+  comment, 5's note).
+- 7: Settings has a Language row with a `pick_list`: "System default",
+  then every `i18n/` language by its new `settings-language-own-name`
+  message (a new language needs only that message). A tag set from the
+  CLI that isn't listed (`de-AT`, `en-XA`) shows as the placeholder. The
+  list draws its own text, which `iced_test`'s `Simulator` can't find or
+  click, so its choices are unit-tested and the snapshots show it (fine
+  in de, zh-CN and en-XA).
+- 7: until the daemon's settings are read at start, the app shows the
+  system's language, so a chosen one replaces it a moment after launch
+  (the startup screen and the first tray menu). Text already on screen
+  that was built as a value (an open toast or dialog) stays in the old
+  language until it closes; pages, the title and the tray follow at once.
+- 7 was checked on macOS, as 6 was: the same `tests/lan.rs` loopback
+  failure, real-clipboard tests skipped, `ui_e2e` doesn't run there.
+  `tests/i18n_switch.rs` switches the real loader (en-US, de, zh-CN,
+  en-XA, back). The real app wasn't run (no Xvfb): on Linux, run it with
+  `--api-port`, `ferry-cli settings --language de` against it, and check
+  that the window, its title, the tray menu and the next notification
+  switch without a restart, and that the Settings list switches it too.

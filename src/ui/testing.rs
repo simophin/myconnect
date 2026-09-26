@@ -115,6 +115,7 @@ pub fn store(local_name: &str, devices: Vec<DeviceSnapshot>) -> Store {
             device_name: local_name.into(),
             download_dir: "/home/me/Downloads".into(),
             close_to_tray: true,
+            language: None,
             plugins: Default::default(),
         }),
     });

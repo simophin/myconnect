@@ -239,6 +239,8 @@ pub(crate) enum Message {
     /// The folder picked, or `None` if the picker was cancelled.
     DownloadDirPicked(Option<PathBuf>),
     SetCloseToTray(bool),
+    /// Show the app in a language (a tag), or `None` in the system's.
+    SetLanguage(Option<String>),
     SetStartOnLogin(bool),
     /// A start-on-login change finished: whether it's on now, and why the
     /// change failed, if it did.
@@ -374,7 +376,11 @@ impl App {
             }
             _ => None,
         };
-        let task = self.react(message);
+        let mut task = self.react(message);
+        if self.follow_language() && self.start_on_login {
+            // Linux's login item has a comment in the app's language.
+            task = Task::batch([task, self.set_start_on_login(true)]);
+        }
         if let Some(before) = before
             && let Phase::Running(running) = &self.phase
         {
@@ -384,6 +390,20 @@ impl App {
         self.update_tray();
         self.notify_pairings();
         task
+    }
+
+    /// Show the app in the language its settings ask for, if it isn't
+    /// already (`i18n::follow_setting`): `view`, the window's title and
+    /// the tray menu, which `update` sends after this, use it from now
+    /// on. Returns whether it changed.
+    fn follow_language(&self) -> bool {
+        let Phase::Running(running) = &self.phase else {
+            return false;
+        };
+        match running.ctx.store().settings().loaded() {
+            Some(settings) => i18n::follow_setting(settings.language.as_deref()),
+            None => false,
+        }
     }
 
     fn react(&mut self, message: Message) -> Task<Message> {
@@ -626,6 +646,10 @@ impl App {
                 close_to_tray: Some(Some(enabled)),
                 ..SettingsPatch::default()
             }),
+            Message::SetLanguage(language) => self.update_settings(SettingsPatch {
+                language: Some(language),
+                ..SettingsPatch::default()
+            }),
             Message::SetStartOnLogin(enabled) => self.set_start_on_login(enabled),
             Message::StartOnLoginSet(enabled, error) => {
                 self.start_on_login = enabled;
@@ -865,6 +889,7 @@ impl App {
                     choose_download_dir: Message::ChooseDownloadDir,
                     set_close_to_tray: Message::SetCloseToTray,
                     set_start_on_login: Message::SetStartOnLogin,
+                    set_language: Message::SetLanguage,
                     set_api_enabled: Message::SetApiEnabled,
                     copy_cli_setup: Message::CopyCli(CliCopy::Setup),
                     copy_api_token: Message::CopyCli(CliCopy::Token),

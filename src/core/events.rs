@@ -166,6 +166,7 @@ mod tests {
             device_name: name.into(),
             download_dir: "/downloads".into(),
             close_to_tray: true,
+            language: None,
             plugins: Default::default(),
         })
     }

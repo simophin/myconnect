@@ -981,6 +981,15 @@ mod tests {
             !settings(&app).close_to_tray,
             "without waiting for the event"
         );
+
+        // The language, kept by the daemon. Unit tests stay in en-US
+        // (`i18n::follow_setting` does nothing in them).
+        assert_eq!(settings(&app).language, None, "the system's by default");
+        settle(&mut app, Message::SetLanguage(Some("de".into()))).await;
+        assert_eq!(core.settings().unwrap().language.as_deref(), Some("de"));
+        assert_eq!(settings(&app).language.as_deref(), Some("de"));
+        settle(&mut app, Message::SetLanguage(None)).await;
+        assert_eq!(core.settings().unwrap().language, None);
         assert!(app.toasts.is_empty());
     }
 

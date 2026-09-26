@@ -4,17 +4,21 @@
 //!
 //! `fl!` checks at compile time that the key exists in the en-US file and
 //! that it is given exactly the arguments that message uses:
-//! `fl!("drop-send-to-header", count = 3)`. The language is chosen once,
-//! at start ([`select_system_language`], from `launch::run`); until then,
-//! and in tests, [`LOADER`] holds en-US, the fallback for any key a
-//! translation lacks. Numbers in messages and dates are in the user's
+//! `fl!("drop-send-to-header", count = 3)`. The language is chosen at
+//! start ([`select_system_language`], from `launch::run`), and again
+//! whenever the daemon's `language` setting changes ([`follow_setting`]);
+//! until then, and in tests, [`LOADER`] holds en-US, the fallback for any
+//! key a translation lacks. Numbers in messages and dates are in the user's
 //! locale ([`format`]). `FERRY_LANG=en-XA` shows a pseudo-locale
 //! generated from en-US ([`pseudo`]). See `docs/PLAN_I18N.md`.
 
 pub mod format;
 pub mod pseudo;
 
-use std::{ops::Deref, sync::LazyLock};
+use std::{
+    ops::Deref,
+    sync::{LazyLock, Mutex, PoisonError},
+};
 
 use i18n_embed::{
     DesktopLanguageRequester, I18nEmbedError, LanguageLoader,
@@ -136,22 +140,140 @@ pub(crate) use fl;
 
 /// Choose the language the app shows: `FERRY_LANG` if it is set, else the
 /// system's preferred languages, falling back to en-US for what isn't
-/// translated. Returns the languages loaded, most preferred first.
+/// translated. Returns the languages loaded, most preferred first. From
+/// then on, [`follow_setting`] switches to the language the user chose.
 pub fn select_system_language() -> Vec<LanguageIdentifier> {
-    let requested = match forced_language() {
-        Some(language) => vec![language],
+    let forced = forced_language();
+    let requested = match &forced {
+        Some(language) => vec![language.clone()],
         None => DesktopLanguageRequester::requested_languages(),
     };
-    select(&requested)
+    let languages = select(&requested);
+    *following() = Some(Following {
+        system: requested,
+        forced: forced.is_some(),
+        isolating: true,
+        setting: None,
+    });
+    languages
 }
 
 /// Show the app in en-US without Fluent's bidi isolation marks around
 /// arguments, so that tests can look for "To Pixel · 3.0 MB" whatever the
 /// machine's language. For tests that run the whole program
-/// (`tests/ui_e2e.rs`); unit tests get this without asking.
+/// (`tests/ui_e2e.rs`); unit tests get this without asking. The
+/// `language` setting still switches it, with en-US as the system's.
 pub fn use_test_language() {
     select(&[en_us()]);
     LOADER.set_use_isolating(false);
+    *following() = Some(Following {
+        system: vec![en_us()],
+        forced: false,
+        isolating: false,
+        setting: None,
+    });
+}
+
+/// Show the app in `setting`, the daemon's `language` setting (a BCP 47
+/// tag, or `None` for the system's languages), if it isn't already, at
+/// run time: the next `view` and tray menu use it. Returns whether the
+/// language changed. `FERRY_LANG` wins over the setting. Does nothing
+/// until the language was chosen at start (so unit tests stay in en-US).
+pub fn follow_setting(setting: Option<&str>) -> bool {
+    let mut following = following();
+    let Some(following) = following.as_mut() else {
+        return false;
+    };
+    let Some(requested) = following.requested(setting) else {
+        return false;
+    };
+    select(&requested);
+    // Reloading languages turns isolation back on.
+    LOADER.set_use_isolating(following.isolating);
+    true
+}
+
+/// How the app's language follows its setting, once chosen at start.
+#[derive(Debug)]
+struct Following {
+    /// The system's languages, most preferred first, or the one
+    /// `FERRY_LANG` forces.
+    system: Vec<LanguageIdentifier>,
+    /// `FERRY_LANG` is set, so the setting is ignored.
+    forced: bool,
+    /// Isolation marks around arguments: on, but off for tests.
+    isolating: bool,
+    /// The setting in effect: `None` for the system's languages.
+    setting: Option<String>,
+}
+
+impl Following {
+    /// The languages to load for `setting`, or `None` if they are loaded
+    /// already. A tag that doesn't parse follows the system.
+    fn requested(&mut self, setting: Option<&str>) -> Option<Vec<LanguageIdentifier>> {
+        if self.forced || self.setting.as_deref() == setting {
+            return None;
+        }
+        self.setting = setting.map(str::to_owned);
+        let chosen = setting.and_then(|tag| {
+            tag.parse::<LanguageIdentifier>()
+                .inspect_err(|error| tracing::warn!("ignoring the language {tag:?}: {error}"))
+                .ok()
+        });
+        Some(match chosen {
+            Some(language) => vec![language],
+            None => self.system.clone(),
+        })
+    }
+}
+
+fn following() -> std::sync::MutexGuard<'static, Option<Following>> {
+    static FOLLOWING: Mutex<Option<Following>> = Mutex::new(None);
+    FOLLOWING.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A language the app is translated into, as Settings offers it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Language {
+    /// Its BCP 47 tag, the `language` setting's value: `de`, `zh-CN`.
+    pub tag: String,
+    /// Its name in itself (`settings-language-own-name`): "Deutsch".
+    pub name: String,
+}
+
+impl std::fmt::Display for Language {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
+/// Every language in `i18n/`, by tag. The pseudo-locale isn't one: it is
+/// for testing, through `FERRY_LANG` or the setting set from the CLI.
+pub fn languages() -> &'static [Language] {
+    static LANGUAGES: LazyLock<Vec<Language>> = LazyLock::new(|| {
+        let loader: FluentLanguageLoader = fluent_language_loader!();
+        let mut tags = loader
+            .available_languages(&Localizations)
+            .unwrap_or_else(|error| {
+                tracing::warn!("couldn't list the UI's translations: {error}");
+                vec![en_us()]
+            });
+        tags.sort_by_key(ToString::to_string);
+        tags.into_iter()
+            .map(|tag| {
+                let own: FluentLanguageLoader = fluent_language_loader!();
+                let name = match own.load_languages(&Localizations, std::slice::from_ref(&tag)) {
+                    Ok(()) => own.get("settings-language-own-name"),
+                    Err(_) => tag.to_string(),
+                };
+                Language {
+                    tag: tag.to_string(),
+                    name,
+                }
+            })
+            .collect()
+    });
+    &LANGUAGES
 }
 
 /// The language `FERRY_LANG` asks for, if it is set and valid.
@@ -368,6 +490,58 @@ mod tests {
         let header = |language| in_locale(language, || fl!("drop-send-to-header", count = 1234));
         assert_eq!(header("de"), "\u{2068}1.234\u{2069} Dateien senden an:");
         assert_eq!(header("zh-CN"), "将 \u{2068}1,234\u{2069} 个文件发送到：");
+        assert_eq!(fl!("settings-title"), "Settings");
+    }
+
+    #[test]
+    fn every_language_is_offered_by_its_own_name() {
+        let offered: Vec<_> = languages()
+            .iter()
+            .map(|language| (language.tag.as_str(), language.name.as_str()))
+            .collect();
+        assert_eq!(
+            offered,
+            [
+                ("de", "Deutsch"),
+                ("en-US", "English"),
+                ("zh-CN", "简体中文")
+            ]
+        );
+    }
+
+    #[test]
+    fn the_setting_switches_the_language_unless_forced() {
+        let tags = |tags: &[&str]| -> Vec<LanguageIdentifier> {
+            tags.iter().map(|tag| tag.parse().unwrap()).collect()
+        };
+        let mut following = Following {
+            system: tags(&["de-AT", "en-GB"]),
+            forced: false,
+            isolating: false,
+            setting: None,
+        };
+        assert_eq!(following.requested(None), None, "the system's already");
+        assert_eq!(following.requested(Some("zh-CN")), Some(tags(&["zh-CN"])));
+        assert_eq!(following.requested(Some("zh-CN")), None, "no change");
+        assert_eq!(following.requested(Some("en-XA")), Some(tags(&["en-XA"])));
+        assert_eq!(following.requested(None), Some(tags(&["de-AT", "en-GB"])));
+        assert_eq!(
+            following.requested(Some("not a tag")),
+            Some(tags(&["de-AT", "en-GB"])),
+            "the system's"
+        );
+
+        let mut forced = Following {
+            system: tags(&["en-XA"]),
+            forced: true,
+            ..following
+        };
+        assert_eq!(forced.requested(Some("de")), None);
+    }
+
+    #[test]
+    fn unit_tests_dont_follow_the_setting() {
+        assert!(!follow_setting(Some("de")));
         assert_eq!(fl!("settings-title"), "Settings");
     }
 

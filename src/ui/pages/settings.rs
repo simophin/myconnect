@@ -1,6 +1,7 @@
 //! The Settings page: the daemon's settings, which are where every user
 //! preference lives, each saved as soon as it changes, starting on
-//! login, which the system keeps, and command line access (the daemon's
+//! login, which the system keeps, the app's language (which the daemon
+//! keeps too, and [`i18n::follow_setting`] applies), and command line access (the daemon's
 //! HTTP API, [`ApiSwitch`](crate::daemon::ApiSwitch)). Features add their
 //! own sections (clipboard: "Sync clipboard") through
 //! [`settings_sections`](crate::ui::features::Features::settings_sections).
@@ -9,7 +10,7 @@ use std::path::Path;
 
 use iced::{
     Background, Border, Element, Font, Length, Theme,
-    widget::{button, column, container, row, scrollable, text},
+    widget::{button, column, container, pick_list, row, scrollable, text},
 };
 use iced_fonts::lucide;
 
@@ -18,7 +19,7 @@ use crate::{
     core::SettingsSnapshot,
     daemon::ApiStatus,
     ui::{
-        i18n::fl,
+        i18n::{self, Language, fl},
         store::{Load, Store},
         widgets,
     },
@@ -63,6 +64,8 @@ pub struct Actions<M> {
     pub choose_download_dir: M,
     pub set_close_to_tray: fn(bool) -> M,
     pub set_start_on_login: fn(bool) -> M,
+    /// Show the app in a language (its tag), or `None` in the system's.
+    pub set_language: fn(Option<String>) -> M,
     /// Turn command line access on or off.
     pub set_api_enabled: fn(bool) -> M,
     /// Copy [`cli_setup`], token and all.
@@ -149,6 +152,7 @@ fn list<'a, M: Clone + 'a>(
             start_on_login,
             actions.set_start_on_login,
         ))
+        .push(language(settings.language.as_deref(), actions.set_language))
         .push(command_line)
         .push(widgets::setting(
             lucide::info,
@@ -163,6 +167,80 @@ fn list<'a, M: Clone + 'a>(
             Some(actions.about),
         ));
     scrollable(items).spacing(6).height(Length::Fill).into()
+}
+
+/// A choice in the language list.
+#[derive(Clone, Debug, PartialEq)]
+enum LanguageChoice {
+    /// Follow the system's language.
+    System,
+    Language(&'static Language),
+}
+
+impl LanguageChoice {
+    /// The system's, then each translation.
+    fn all() -> Vec<Self> {
+        std::iter::once(Self::System)
+            .chain(i18n::languages().iter().map(Self::Language))
+            .collect()
+    }
+
+    /// The choice among `choices` that `setting` (a tag, or `None` for the
+    /// system's) is, if it is one.
+    fn of(choices: &[Self], setting: Option<&str>) -> Option<Self> {
+        choices
+            .iter()
+            .find(|choice| choice.setting().as_deref() == setting)
+            .cloned()
+    }
+
+    /// The `language` setting this choice sets.
+    fn setting(&self) -> Option<String> {
+        match self {
+            Self::System => None,
+            Self::Language(language) => Some(language.tag.clone()),
+        }
+    }
+}
+
+impl std::fmt::Display for LanguageChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::System => f.write_str(&fl!("settings-language-system")),
+            Self::Language(language) => language.fmt(f),
+        }
+    }
+}
+
+/// The language setting: a list of the system's and each translation,
+/// each named in itself. `setting` is the tag chosen, if any; one set from
+/// the CLI that isn't in the list (`de-AT`, `en-XA`) shows as its tag.
+fn language<'a, M: Clone + 'a>(
+    setting: Option<&str>,
+    set_language: fn(Option<String>) -> M,
+) -> Element<'a, M> {
+    let choices = LanguageChoice::all();
+    let selected = LanguageChoice::of(&choices, setting);
+    let list = pick_list(choices, selected, move |choice| {
+        set_language(choice.setting())
+    })
+    .placeholder(setting.unwrap_or_default())
+    .text_size(14)
+    .padding([6, 10])
+    .style(|theme: &Theme, status| {
+        let style = pick_list::default(theme, status);
+        pick_list::Style {
+            border: style.border.rounded(8),
+            ..style
+        }
+    });
+    widgets::setting(
+        lucide::languages,
+        fl!("settings-language"),
+        fl!("settings-language-detail"),
+        Some(list.into()),
+        None,
+    )
 }
 
 /// The switch, and while it is on, how to set up `ferry-cli`: what to paste
@@ -254,6 +332,7 @@ mod tests {
         Choose,
         CloseToTray(bool),
         StartOnLogin(bool),
+        Language(Option<String>),
         Api(bool),
         CopySetup,
         CopyToken,
@@ -270,6 +349,7 @@ mod tests {
             choose_download_dir: Message::Choose,
             set_close_to_tray: Message::CloseToTray,
             set_start_on_login: Message::StartOnLogin,
+            set_language: Message::Language,
             set_api_enabled: Message::Api,
             copy_cli_setup: Message::CopySetup,
             copy_api_token: Message::CopyToken,
@@ -338,6 +418,7 @@ mod tests {
             "Sync clipboard",
             "Keep running when the window is closed",
             "Start when you log in",
+            "Language",
             "Command line access",
             "About Ferry",
             "Version 1.2.3 (dev)",
@@ -428,6 +509,32 @@ mod tests {
         );
     }
 
+    /// The list itself draws its text, which `Simulator` can't find or
+    /// click; the snapshots show it.
+    #[test]
+    fn the_language_list_offers_each_translation_by_its_own_name() {
+        let choices = LanguageChoice::all();
+        let shown: Vec<_> = choices.iter().map(ToString::to_string).collect();
+        assert_eq!(shown, ["System default", "Deutsch", "English", "简体中文"]);
+        let settings: Vec<_> = choices.iter().map(LanguageChoice::setting).collect();
+        assert_eq!(
+            settings,
+            [
+                None,
+                Some("de".into()),
+                Some("en-US".into()),
+                Some("zh-CN".into())
+            ]
+        );
+
+        let selected = |setting| LanguageChoice::of(&choices, setting).map(|c| c.to_string());
+        assert_eq!(selected(None).as_deref(), Some("System default"));
+        assert_eq!(selected(Some("zh-CN")).as_deref(), Some("简体中文"));
+        // A tag set from the CLI that isn't in the list selects nothing,
+        // and shows as the list's placeholder.
+        assert_eq!(selected(Some("de-AT")), None);
+    }
+
     #[test]
     fn loading_and_failure_have_their_own_views() {
         let loading = Store::default();
@@ -454,7 +561,7 @@ mod tests {
     #[test]
     fn snapshot_settings() {
         let store = store();
-        testing::snapshot("settings", (440.0, 620.0), || {
+        testing::snapshot("settings", (440.0, 700.0), || {
             view(
                 &store,
                 sections,

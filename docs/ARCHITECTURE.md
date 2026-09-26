@@ -317,12 +317,14 @@ States: `queued → connecting → transferring → completed | cancelled | fail
 
 User preferences live in the daemon, in its store (`ferry.db` in the data
 directory), never in a client. Core fields: `deviceName`, `downloadDir`,
-and `closeToTray` (owned by the UI; the daemon stores it without
-interpreting it), under the config keys `core.deviceName`,
-`core.downloadDir` and `ui.closeToTray` (`core::settings`). A field the
+and the UI's `closeToTray` and `language` (the daemon stores them without
+interpreting them, apart from checking that `language` looks like a BCP 47
+tag), under the config keys `core.deviceName`, `core.downloadDir`,
+`ui.closeToTray` and `ui.language` (`core::settings`). A field the
 store doesn't set uses its default: the host
 name (first label, trimmed to a valid KDE Connect name, else "Ferry"),
-the platform download directory, `true`.
+the platform download directory, `true`, and `null` (the system's
+language, §13).
 
 - **Starting on login** is the app's alone, not a daemon setting: the
   switch on the Settings page reads and writes the system's login item
@@ -415,8 +417,8 @@ streaming routes) and the event stream.
 | `GET` | `/clipboard` | Current synchronized text and metadata. |
 | `PUT` | `/clipboard` | Set text and send to eligible paired devices. |
 | `POST` | `/devices/{deviceId}/clipboard` | Send this machine's clipboard text to one paired, connected device now; `202`. `409 clipboard_empty` when there is no text, `409 unsupported_by_peer` without `kdeconnect.clipboard`. §6. |
-| `GET` | `/settings` | The settings in effect (§7): `deviceName`, `downloadDir`, `closeToTray`, and `plugins`, an object keyed by plugin id holding each plugin's section (so far `{"clipboard": {"syncEnabled": bool}}`). |
-| `PATCH` | `/settings` | Change the fields present in the JSON body; `null` resets one to its default, unknown fields are rejected. A plugin's fields go under `plugins.<id>`, e.g. `{"plugins": {"clipboard": {"syncEnabled": false}}}`. `400 invalid_device_name` / `invalid_download_dir` / `invalid_settings` (a plugin section) for bad values. Returns the new settings. |
+| `GET` | `/settings` | The settings in effect (§7): `deviceName`, `downloadDir`, `closeToTray`, `language` (the app's, a BCP 47 tag such as `"de"`, or `null` for the system's), and `plugins`, an object keyed by plugin id holding each plugin's section (so far `{"clipboard": {"syncEnabled": bool}}`). |
+| `PATCH` | `/settings` | Change the fields present in the JSON body; `null` resets one to its default, unknown fields are rejected. A plugin's fields go under `plugins.<id>`, e.g. `{"plugins": {"clipboard": {"syncEnabled": false}}}`. `400 invalid_device_name` / `invalid_download_dir` / `invalid_settings` (a plugin section, or a `language` that isn't a tag) for bad values. Returns the new settings. |
 | `GET` | `/events` | Server-Sent Events: `device.discovered/connected/updated/disconnected/forgotten`, `pairing.requested/updated`, `transfer.started/progress/completed/failed`, `clipboard.changed`, `settings.changed`, `notification.posted` (`{deviceId, deviceName, notification, alert}`, a notification posted or changed, including its icon arriving; `alert` is set for news: new, or new text, and not one the device marks as already shown) and `notification.removed` (`{deviceId, id}`), `ping.received` (`{deviceId, deviceName, message?}` from a paired device; a one-off notification with no snapshot endpoint, so one missed during a gap is simply lost). Not durable — clients refetch a snapshot after a gap or reconnect. |
 
 Mutation endpoints that require network round-trips return `202` and are
@@ -604,6 +606,18 @@ plan and its decisions are in [`PLAN_I18N.md`](PLAN_I18N.md).
   `de-AT` reach `zh-CN` and `de`), else en-US. Fluent's isolation marks
   wrap each argument, so a right-to-left name can't reorder a sentence.
   Unit tests and `tests/ui_e2e.rs` stay in en-US without the marks.
+- **The language setting.** The daemon's `language` setting (§7; Settings'
+  list, or `ferry-cli settings --language <tag|system>`) overrides the
+  system's. After each message, `App::update` hands it to
+  `i18n::follow_setting`, which reloads the loader when it changed (the
+  chosen tag, or the system's languages again for `null`; `FERRY_LANG`
+  still wins) and puts back isolation and number formatting, which a
+  reload drops. The window redraws and the tray menu is sent again with
+  the new labels, without a restart; the Linux login item is rewritten
+  for its comment. Until the daemon's settings are read at start, the app
+  shows the system's language. Settings lists each `i18n/` language by
+  its `settings-language-own-name`; en-XA only by tag, from the CLI.
+  `tests/i18n_switch.rs` switches the real loader in a process of its own.
 - **Numbers and dates** in a message are written by ICU4X in the user's
   locale (`i18n::format`, installed as Fluent's formatter); units and a
   percent sign are the message's, so each language spaces them.

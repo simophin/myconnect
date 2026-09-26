@@ -90,7 +90,9 @@ snapshot tests write PNGs of each page there, in light and dark, and in
 the en-XA pseudo-locale (`*-en-XA-light-*.png`: accented, longer, in
 brackets); look at them after a UI change. Plain English in an en-XA
 image is a string that wasn't extracted, or test data; a missing closing
-bracket is text cut off. `FERRY_LANG=en-XA` shows the real app in it.
+bracket is text cut off. `FERRY_LANG=en-XA` shows the real app in it,
+as does `ferry-cli settings --language en-XA` on a running app (the
+`language` setting switches it at run time; `system` goes back).
 `SNAPSHOT_LANGUAGES=de,zh-CN` adds those translations
 (`*-de-light-*.png`); German is the longest, Chinese needs CJK fonts.
 

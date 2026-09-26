@@ -157,6 +157,10 @@ path = "src/bin/ferry-cli/main.rs"
 name = "ui_e2e"
 required-features = ["gui"]
 
+[[test]]
+name = "i18n_switch"
+required-features = ["gui"]
+
 [dev-dependencies]
 iced_runtime = "0.14"
 iced_test = "0.14"
