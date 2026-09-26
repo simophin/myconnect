@@ -2,7 +2,7 @@
 
 use std::{fs, path::Path};
 
-use iced::{Element, Settings, Size, Task, Theme, futures::StreamExt};
+use iced::{Element, Settings, Size, Task, futures::StreamExt};
 use iced_test::simulator::Simulator;
 
 use crate::{
@@ -146,7 +146,10 @@ pub fn snapshot<'a, Message>(
         return;
     };
     let directory = Path::new(&directory);
-    for (variant, theme) in [("light", Theme::Light), ("dark", Theme::Dark)] {
+    for (variant, theme) in [
+        ("light", super::theme::light()),
+        ("dark", super::theme::dark()),
+    ] {
         let stem = format!("{name}-{variant}");
         remove_old_images(directory, &stem);
         let settings = Settings {

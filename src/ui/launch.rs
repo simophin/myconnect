@@ -31,6 +31,7 @@ use super::{
     features::Features,
     overlay::{dialog::Dialogs, drop::Drag, toast::Toasts},
     route::Route,
+    theme,
 };
 use crate::{
     config,
@@ -129,6 +130,7 @@ pub fn program(
     let program = iced::daemon(boot, App::update, App::view)
         .title("Ferry")
         .subscription(App::subscription)
+        .theme(|app: &App, _window| app.theme.clone())
         .font(iced_fonts::LUCIDE_FONT_BYTES);
     (program, service)
 }
@@ -210,6 +212,7 @@ impl App {
             drag: Drag::default(),
             choosing: None,
             start_on_login: desktop_login_enabled,
+            theme: theme::for_mode(iced::theme::Mode::None),
         };
         // Hidden if it was quit from the tray or started at login, unless
         // there is no tray to bring it back.
@@ -229,7 +232,8 @@ impl App {
         app.update_tray();
         // A message, so the tray starts once the event loop runs.
         let tray = Task::done(Message::StartTray);
-        (app, Task::batch([open, start, login, tray]))
+        let theme = iced::system::theme().map(Message::SystemTheme);
+        (app, Task::batch([open, start, login, tray, theme]))
     }
 
     /// Start the daemon, off the UI thread so the window paints meanwhile.
