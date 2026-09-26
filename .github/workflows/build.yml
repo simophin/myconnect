@@ -3,6 +3,7 @@
 # installer, Debian packages for amd64 and arm64 (the app and the CLI), and a
 # PKGBUILD that repackages those for Arch Linux. It can also be run by hand
 # (Actions → Build → Run workflow), leaving the packages as run artifacts.
+# After a release it also publishes the website for it (site.yml).
 # The scripts it runs are in packaging/.
 name: Build
 
@@ -283,3 +284,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
         run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+
+  # Points the website's downloads at this release, now that its packages
+  # are attached. A pre-release keeps the site on the last full release.
+  website:
+    name: Website
+    if: github.event_name == 'release' && !github.event.release.prerelease
+    needs: release
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/site.yml
+    with:
+      tag: ${{ github.event.release.tag_name }}
