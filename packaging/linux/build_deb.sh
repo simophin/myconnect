@@ -1,25 +1,28 @@
 #!/bin/sh
 # Pack the release binaries into a .deb.
 #
-#   build_deb.sh APP CLI VERSION OUT_DIR
+#   build_deb.sh APP CLI LICENSES VERSION OUT_DIR
 #
 # APP is cargo's ferry-gui, installed under that name as /usr/bin/ferry-gui;
 # CLI is the ferry command line, installed next to it as /usr/bin/ferry
-# (docs/adr/0001, "Packaging").
+# (docs/adr/0001, "Packaging"). LICENSES is the THIRD_PARTY_LICENSES.html
+# cargo-about wrote (about.toml), installed in /usr/share/doc/ferry, where
+# About opens it.
 # The menu entry and icons go to /usr/share. Runs on Debian or
 # Ubuntu: it needs dpkg-deb, and dpkg-shlibdeps to work out the dependencies
 # from the ELF files. Build on the oldest release you want to support, since
 # the glibc it links against is the oldest one the package will install on.
 set -eu
 
-if [ $# -ne 4 ]; then
-  echo "usage: $0 APP CLI VERSION OUT_DIR" >&2
+if [ $# -ne 5 ]; then
+  echo "usage: $0 APP CLI LICENSES VERSION OUT_DIR" >&2
   exit 2
 fi
 app=$1
 cli=$2
-version=$3
-out_dir=$4
+licenses=$3
+version=$4
+out_dir=$5
 
 app_id=dev.fanchao.Ferry
 packaging=$(cd "$(dirname "$0")" && pwd)
@@ -38,11 +41,12 @@ trap 'rm -rf "$work"' EXIT
 root=$work/root
 
 mkdir -p "$root/usr/bin" "$root/usr/share/applications" \
-  "$root/usr/share/icons" "$root/DEBIAN"
+  "$root/usr/share/icons" "$root/usr/share/doc/ferry" "$root/DEBIAN"
 install -m 755 -s "$app" "$root/usr/bin/ferry-gui"
 install -m 755 -s "$cli" "$root/usr/bin/ferry"
 install -m 644 "$packaging/$app_id.desktop" "$root/usr/share/applications/"
 cp -R "$assets/linux/hicolor" "$root/usr/share/icons/"
+install -m 644 "$licenses" "$root/usr/share/doc/ferry/THIRD_PARTY_LICENSES.html"
 chmod -R u=rwX,go=rX "$root/usr/share"
 
 # dpkg-shlibdeps wants to run from a source tree; give it a minimal one.

@@ -239,6 +239,17 @@ Decisions for steps 11 and 13:
 - **Icons** come from `assets/icon/*.svg` through `assets/generate_icons.sh`,
   which writes every platform's: the hicolor theme, the macOS iconset, the
   Windows `.ico`, the window icon and the tray icons.
+- **Third-party notices** come from `cargo-about` (`about.toml`,
+  `about.hbs`): nearly every dependency's license (MIT, BSD, Apache and
+  the rest) asks for its notice to ship with the binary. The Build
+  workflow writes `THIRD_PARTY_LICENSES.html` and each package puts it
+  where About's "Open source licenses" finds it from the running binary
+  (`ui::desktop::licenses`): the bundle's `Resources`, next to
+  `Ferry.exe`, and `/usr/share/doc/ferry`. `about.toml` lists the
+  accepted licenses; a dependency under any other fails CI (the Licenses
+  job) until someone decides it's fine. The Lucide font that `iced_fonts`
+  embeds isn't in any crate's metadata, so its notice is written into
+  `about.hbs` by hand.
 - The `.deb` is built on Debian 12 and checked by `packaging/linux/check_deb.sh`
   on a clean Debian 12: it installs with its Depends only (no GPU driver,
   so the app draws with tiny-skia), opens its window with its class and
