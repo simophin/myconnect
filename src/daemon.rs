@@ -15,16 +15,17 @@ use tracing::{info, warn};
 
 use crate::{
     api::{ApiServer, ApiServerConfig, DEFAULT_API_PORT},
-    config::{
-        ApiToken, FilesystemTrustStore, LocalIdentity, SettingsFile, StoredSettings, TrustStore,
-        default_config_dir,
+    config::{ApiToken, LocalIdentity, default_config_dir},
+    core::{
+        Core, LocalDeviceSnapshot, Plugin, Settings, SettingsDefaults, StoredSettings,
+        TransferConfig,
     },
-    core::{Core, LocalDeviceSnapshot, Plugin, Settings, SettingsDefaults, TransferConfig},
     plugins::{
         self,
         clipboard::{ClipboardService, InMemoryClipboard, SystemClipboard},
     },
     protocol::{DeviceType, is_forbidden_name_character, is_valid_device_name},
+    store::Store,
     transport::{
         lan::{DISCOVERY_PORT, LanConfig, LanService, LocalDeviceInfo},
         tls::subject_public_key_info,
@@ -40,7 +41,8 @@ pub struct RunRequest {
     /// Directory in which received files should be stored. Overrides the
     /// stored setting for this run only.
     pub download_dir: Option<PathBuf>,
-    /// Directory holding local identity and trust state. Defaults to
+    /// Directory holding the daemon's data (`ferry.db`: its identity,
+    /// paired devices and settings). Defaults to
     /// the platform configuration directory.
     pub data_dir: Option<PathBuf>,
     /// Name this device advertises to peers. Overrides the stored setting
@@ -110,23 +112,15 @@ impl RunningService {
             .clone()
             .or_else(default_config_dir)
             .context("could not determine configuration directory")?;
-        let identity = Arc::new(LocalIdentity::load_or_create(&config_dir)?);
-        let trust_store: Arc<dyn TrustStore + Send + Sync> =
-            Arc::new(FilesystemTrustStore::new(&config_dir));
+        let store = Store::open(&config_dir)?;
+        let identity = Arc::new(LocalIdentity::load_or_create(&store)?);
         let local_public_key_der = subject_public_key_info(identity.certificate_der())
             .context("local identity certificate could not be parsed")?;
-        let settings_file = SettingsFile::new(&config_dir);
-        let stored = settings_file.load().unwrap_or_else(|error| {
-            // Start with defaults rather than not at all; the file is
-            // rewritten on the next change.
-            warn!(%error, "ignoring unreadable settings file");
-            StoredSettings::default()
-        });
         let settings = Settings::new(SettingsDefaults {
             device_name: default_device_name(),
             download_dir: default_download_dir().unwrap_or_else(|| config_dir.join("downloads")),
         })
-        .with_file(settings_file, stored)
+        .with_store(store.clone())
         .with_overrides(StoredSettings {
             device_name: request.device_name.clone(),
             download_dir: request
@@ -160,7 +154,7 @@ impl RunningService {
             },
             8,
             local_public_key_der,
-            trust_store.clone(),
+            store.clone(),
             plugins(clipboard),
             32,
             256,
@@ -188,7 +182,7 @@ impl RunningService {
             core.clone(),
             commands,
             identity,
-            trust_store,
+            store,
             shutdown.clone(),
         )
         .await?;

@@ -18,13 +18,14 @@ use std::{
 
 use bytes::Bytes;
 use ferry::{
-    config::{FilesystemTrustStore, LocalIdentity, TrustStore},
+    config::LocalIdentity,
     core::{
         Core, CoreError, DeviceReachability, EventData, LocalDeviceSnapshot, TransferConfig,
         TransferDirection, TransferSnapshot, TransferStatus,
     },
     plugins::{clipboard::InMemoryClipboard, share},
     protocol::DeviceType,
+    store::Store,
     transport::{
         lan::{LanConfig, LanService, LocalDeviceInfo, TCP_PORT_RANGE},
         tls::subject_public_key_info,
@@ -158,12 +159,10 @@ async fn connected_and_paired_with(
 ) -> Harness {
     let a_dir = tempfile::tempdir().unwrap();
     let b_dir = tempfile::tempdir().unwrap();
-    let a_identity = Arc::new(LocalIdentity::load_or_create(a_dir.path()).unwrap());
-    let b_identity = Arc::new(LocalIdentity::load_or_create(b_dir.path()).unwrap());
-    let a_trust: Arc<dyn TrustStore + Send + Sync> =
-        Arc::new(FilesystemTrustStore::new(a_dir.path()));
-    let b_trust: Arc<dyn TrustStore + Send + Sync> =
-        Arc::new(FilesystemTrustStore::new(b_dir.path()));
+    let a_store = Store::open(a_dir.path()).unwrap();
+    let b_store = Store::open(b_dir.path()).unwrap();
+    let a_identity = Arc::new(LocalIdentity::load_or_create(&a_store).unwrap());
+    let b_identity = Arc::new(LocalIdentity::load_or_create(&b_store).unwrap());
     let a_pubkey = subject_public_key_info(a_identity.certificate_der()).unwrap();
     let b_pubkey = subject_public_key_info(b_identity.certificate_der()).unwrap();
     let b_download_dir = b_dir.path().join("downloads");
@@ -186,7 +185,7 @@ async fn connected_and_paired_with(
         },
         8,
         a_pubkey,
-        a_trust.clone(),
+        a_store.clone(),
         ferry::plugins::builtin(InMemoryClipboard::shared()),
         32,
         128,
@@ -201,7 +200,7 @@ async fn connected_and_paired_with(
         },
         8,
         b_pubkey,
-        b_trust.clone(),
+        b_store.clone(),
         ferry::plugins::builtin(InMemoryClipboard::shared()),
         32,
         128,
@@ -221,7 +220,7 @@ async fn connected_and_paired_with(
         a_application.clone(),
         a_commands,
         a_identity,
-        a_trust,
+        a_store,
         CancellationToken::new(),
     )
     .await
@@ -232,7 +231,7 @@ async fn connected_and_paired_with(
         b_application.clone(),
         b_commands,
         b_identity,
-        b_trust,
+        b_store,
         CancellationToken::new(),
     )
     .await
@@ -379,7 +378,8 @@ async fn a_local_file_is_sent_from_disk_under_its_own_name() {
 #[tokio::test]
 async fn unpaired_device_cannot_initiate_a_transfer() {
     let a_dir = tempfile::tempdir().unwrap();
-    let a_identity = Arc::new(LocalIdentity::load_or_create(a_dir.path()).unwrap());
+    let a_store = Store::open(a_dir.path()).unwrap();
+    let a_identity = Arc::new(LocalIdentity::load_or_create(&a_store).unwrap());
     let a_pubkey = subject_public_key_info(a_identity.certificate_der()).unwrap();
     let (a_application, _commands) = Core::new(
         LocalDeviceSnapshot {
@@ -388,7 +388,7 @@ async fn unpaired_device_cannot_initiate_a_transfer() {
         },
         8,
         a_pubkey,
-        Arc::new(FilesystemTrustStore::new(a_dir.path())),
+        a_store,
         ferry::plugins::builtin(InMemoryClipboard::shared()),
         8,
         32,

@@ -10,8 +10,8 @@ use uuid::Uuid;
 
 use super::{Core, CoreError, CoreState, EventData, OperationErrorCode, unix_millis, unix_seconds};
 use crate::{
-    config::TrustedDevice,
     protocol::{Packet, PairingBody, verification_code},
+    store::TrustedDevice,
     transport::tls::subject_public_key_info,
 };
 
@@ -250,14 +250,14 @@ impl Core {
             (snapshot.device_id, connection)
         };
 
-        self.trust_store
-            .put(&TrustedDevice {
+        self.store
+            .put_device(&TrustedDevice {
                 device_id: device_id.clone(),
                 certificate_der: connection.certificate_der.clone(),
                 last_trusted_protocol_version: connection.protocol_version,
                 last_identity: self.known_identity(&device_id),
             })
-            .map_err(CoreError::Trust)?;
+            .map_err(CoreError::Store)?;
 
         let snapshot = {
             let mut state = self
@@ -417,7 +417,7 @@ impl Core {
             .ok()
             .and_then(|state| state.devices.get(device_id))
             .is_some_and(|device| device.paired);
-        let was_trusted = self.trust_store.remove(device_id).unwrap_or(false);
+        let was_trusted = self.store.remove_device(device_id).unwrap_or(false);
         if !was_paired && !was_trusted {
             return;
         }
@@ -452,8 +452,8 @@ impl Core {
         }
 
         if self
-            .trust_store
-            .put(&TrustedDevice {
+            .store
+            .put_device(&TrustedDevice {
                 device_id: device_id.clone(),
                 last_identity: self.known_identity(&device_id),
                 certificate_der,
@@ -742,13 +742,8 @@ mod tests {
         let (handle, _commands) = handle();
         let device_id = "740bd4b9b4184ee497d6caf1da8151be";
         handle
-            .trust_store
-            .put(&TrustedDevice {
-                device_id: device_id.into(),
-                certificate_der: vec![1, 2, 3],
-                last_trusted_protocol_version: 8,
-                last_identity: None,
-            })
+            .store
+            .put_device(&crate::store::testing::trusted_device(device_id))
             .unwrap();
         handle
             .discover_device(&make_identity(device_id, Vec::new()), true, 1)
@@ -762,7 +757,7 @@ mod tests {
 
         handle.handle_peer_packet(device_id, unpair_packet());
 
-        assert!(handle.trust_store.get(device_id).unwrap().is_none());
+        assert!(handle.store.device(device_id).unwrap().is_none());
         match events.try_recv().unwrap().event {
             super::EventData::DeviceUpdated(device) => {
                 assert!(!device.paired);

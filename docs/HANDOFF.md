@@ -47,6 +47,15 @@ cargo feature.
   lags (Flutter ADR 0003, carried over); the CLI does the same over
   `/events`. A resource with events but no snapshot (or the reverse)
   leaves a client unable to recover after a gap.
+- **The daemon's data is in its store** (`ferry.db`, `src/store/`,
+  [`adr/0002`](adr/0002-store-the-daemons-data-in-sqlite.md)). A small
+  value is a `ConfigKey` declared by its owner and named
+  `<owner>.<name>`: `core`, `ui`, or the plugin's id; a plugin reaches the
+  store through `PluginContext::store()`. Records that are lists get a
+  table, which the core defines in the schema. Nothing writes files of
+  its own in the data directory. A stored resource clients see still
+  needs a snapshot and events (below): `Store::watch` only reaches code
+  in the same process.
 - **A feature is a plugin.** It lives in `src/plugins/<name>/`,
   implements `core::Plugin`, and is one line in `plugins::builtin()`
   (ARCHITECTURE §2). Its UI is `src/ui/features/<name>.rs` plus its
@@ -93,7 +102,7 @@ Against KDE Connect for Android (a Pixel 8a, from the CLI daemon), these
 work: pairing, unpairing, clipboard, file transfer both ways, and browsing
 the phone's files. Nothing has been checked against KDE Connect on a
 desktop yet. Paired devices are listed even while offline (the daemon
-restores them from their trust records). The tray menu lists each connected
+restores them from their records in the store). The tray menu lists each connected
 paired device (send files, ping, ring, send clipboard, browse files,
 show details), with its
 battery; the device list and details
@@ -102,6 +111,13 @@ page show the battery too (`kdeconnect.battery`, read-only). Releases
 Windows installer, Debian packages for amd64 and arm64 holding the app and
 the CLI, and for tagged builds an Arch Linux PKGBUILD. The scripts are in
 `packaging/`.
+
+The daemon keeps its identity, paired devices and settings in one SQLite
+database, `ferry.db`, with typed, watchable configs any plugin can declare
+keys for ([`archive/PLAN_STORE.md`](archive/PLAN_STORE.md)). The JSON files it used to
+write (`identity.json`, `settings.json`, `trusted-devices/`) are ignored,
+not migrated: a data directory from before gets a new identity, and its
+devices are paired again.
 
 ## Open work
 
@@ -220,8 +236,8 @@ installer installed in CI, but neither was used on a real desktop yet.
 
 - Devices added by IP address are forgotten on restart. KDE Connect keeps
   a list of such addresses and announces to them periodically. The
-  equivalent here is a daemon setting (a list of addresses in
-  `settings.json`) that `LanService` announces to on its interval, plus a
+  equivalent here is a daemon setting (a list of addresses, as a config
+  key in the store) that `LanService` announces to on its interval, plus a
   way to remove entries in the UI.
 - `plugins::clipboard::backend::system::tests::clearing_the_clipboard_is_not_reported` failed
   once under a full `cargo test --workspace` run and passed on every rerun

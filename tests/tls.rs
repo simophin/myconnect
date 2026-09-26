@@ -5,14 +5,14 @@ use std::time::Duration;
 
 use ferry::{
     config::LocalIdentity,
+    store::Store,
     transport::tls::{self, PeerPin, TlsMaterial, subject_public_key_info},
 };
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 use tokio::{net::TcpListener, time::timeout};
 
 fn identity() -> LocalIdentity {
-    let directory = tempfile::tempdir().unwrap();
-    LocalIdentity::load_or_create(directory.path()).unwrap()
+    LocalIdentity::load_or_create(&Store::open_in_memory().unwrap()).unwrap()
 }
 
 async fn loopback_pair() -> (tokio::net::TcpStream, tokio::net::TcpStream) {

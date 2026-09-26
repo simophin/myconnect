@@ -66,15 +66,16 @@ and `plugins` never import `ui`.
 | Module | File(s) | Responsibility |
 | --- | --- | --- |
 | `protocol` | `src/protocol/{mod,packet,codec,verification}.rs` | Wire packet envelope, identity/pairing body types, bounded newline-delimited JSON codec, the protocol-v8 verification-code function. No I/O. |
-| `config` | `src/config/{mod,identity,settings,token,trust}.rs` | Local device identity (UUID + self-signed cert), the optional API bearer token (never persisted), filesystem-backed `TrustStore` of pinned peer certificates (one `trusted-devices/<id>.json` each, with the name, type and capabilities the peer last reported over an authenticated connection), and `settings.json` (user settings, written atomically). |
+| `config` | `src/config/{mod,identity,token}.rs` | Local device identity (UUID + self-signed cert, kept in the store under `core.identity` and never replaced once made), the optional API bearer token (never persisted). |
+| `store` | `src/store/{mod,config,devices}.rs` | The daemon's data in one SQLite database, `ferry.db` in the data directory ([`adr/0002`](adr/0002-store-the-daemons-data-in-sqlite.md), [`archive/PLAN_STORE.md`](archive/PLAN_STORE.md)). `config`: typed, watchable values, each named by a `ConfigKey<T, S>` its owner declares, global or per device (`PerDevice`, reached with `.of(id)`); `get` reads a value that no longer decodes as missing, `get_strict` as an error. Write transactions take the database's lock up front, so a CLI daemon and the app on one data directory take turns. `devices`: paired devices' pinned certificates, with the name, type and capabilities each last reported over an authenticated connection; removing one removes its per-device values. Tests use `Store::open_in_memory()`. |
 | `transport` | `src/transport/{lan,tls,payload}.rs` | UDP discovery, TCP control-channel connect/accept, the real rustls TLS handshake and certificate pinning, and the auxiliary TLS payload connection used for file transfer. `LanConfig::loopback` (the daemon's `--discovery-loopback`) binds discovery to `127.255.255.255` and the control listener to `127.0.0.1`, so nothing on the LAN can discover or reach the instance. It takes `LanCommand`s (announce now, announce to one address) from the core. |
 | `core` | `src/core.rs` | `Core`, the cloneable handle to everything below: its state, construction, status, settings, and running the plugins' hooks. One `RwLock` holds what must change together (devices, connections, pairings); transfers, settings and every plugin's state have their own locks. |
-| | `src/core/devices.rs` | The device registry and `DeviceSnapshot` (whose `plugins` map is filled from each plugin's `device_state` when a snapshot leaves the core), discovery, forgetting a device, and keeping a paired device's trust record up to date. The registry starts with every paired device from the `TrustStore`, as `unavailable`, so paired devices are listed while offline. |
+| | `src/core/devices.rs` | The device registry and `DeviceSnapshot` (whose `plugins` map is filled from each plugin's `device_state` when a snapshot leaves the core), discovery, forgetting a device, and keeping a paired device's trust record up to date. The registry starts with every paired device from the store, as `unavailable`, so paired devices are listed while offline. |
 | | `src/core/connections.rs` | Registering and dropping authenticated control channels, routing each incoming packet to the plugin that claims its type (only from paired devices), sending to devices that advertised a packet type, and `LanCommand`, the channel to the LAN transport. |
 | | `src/core/pairing.rs` | The pairing state machine (§4) in both directions, its timeouts, and the trust it writes or removes. |
 | | `src/core/transfers.rs`, `src/core/payload.rs` | The transfers service (`Transfers`, `TransferHandle`: the state machine, progress throttling, cancellation and cleanup, for every feature that moves a file, §5), and payload connections for plugins (`PayloadPeer`: listen or dial with this device's certificate, or sign in to an SSH server on the device with its key, without handing out the key). |
 | | `src/core/{plugin,events,settings,error}.rs` | The plugin API (`Plugin`, `PluginContext`, `PluginRegistry`, `Capabilities`, plugin events and settings sections), the bounded event bus (plugin events travel as `EventData::Plugin` with the same `{type, data}` shape), user settings with a section per plugin that has settings (§7), and `CoreError`. |
-| | `src/core/testing.rs` | A real core for unit tests: in-memory trust store, no plugins or just the one under test, no LAN. |
+| | `src/core/testing.rs` | A real core for unit tests: an in-memory store, no plugins or just the one under test, no LAN. |
 | `plugins` | `src/plugins/mod.rs`, `src/plugins/{ping,findmyphone}/{mod,packet,http}.rs`, `src/plugins/battery/{mod,packet}.rs`, `src/plugins/clipboard/{mod,packet,http,backend}.rs`, `src/plugins/clipboard/backend/system.rs`, `src/plugins/share/{mod,packet,http}.rs`, `src/plugins/browse/{mod,packet,http,session,ssh,files}.rs`, `src/plugins/notifications/{mod,packet,http}.rs` | The features, each a `core::Plugin`; `builtin()` lists them, and `builtin_parts()` builds the same list and also returns the clipboard and browse instances the UI keeps. Nothing here is behind `gui`. Ping owns its packet handling, `ping.received` event and `POST /devices/{id}/ping`. Find my phone only sends, and owns `POST /devices/{id}/ring`. Battery adds `plugins.battery` to device snapshots and clears it through the `disconnected`/`unpaired` hooks. Clipboard owns the synced text and `/clipboard`, the `plugins.clipboard` settings section, and its backends (the `ClipboardService` trait, the desktop clipboard `SystemClipboard` over `arboard`, an in-memory one); it follows the desktop clipboard from its `started` hook and releases it in `shutdown` (§6). Share sends files through its streaming route `POST /devices/{id}/share` and saves files peers send, both as core transfers (§5). Browse owns the per-device SFTP sessions with peers' file servers and the `/devices/{id}/files` routes (the upload as a streaming route), and closes its sessions through the `disconnected`/`unpaired`/`shutdown` hooks (§12). Notifications keeps each paired, connected device's notifications in memory (`/devices/{id}/notifications`, `notification.posted`/`notification.removed`), asks for them from the `connected` and `paired` hooks, fetches their icons over payload connections, and drops them through `disconnected`/`unpaired`. Capabilities advertised in the identity packet are the union over the plugins: ping, clipboard and share in both directions; `kdeconnect.sftp.request` outgoing and `kdeconnect.sftp` incoming only, since this build browses peers but serves no files; `kdeconnect.battery` incoming only, since it reads peers' batteries but reports none; `kdeconnect.findmyphone.request` outgoing only, since this build asks peers to ring but doesn't ring itself; `kdeconnect.notification` incoming and its `.request`, `.reply` and `.action` outgoing, since this build shows peers' notifications but shares none of its own. |
 | `daemon` | `src/daemon.rs` | The composition root: `RunningService` builds the core with `plugins::builtin()`, applies the stored settings, starts the plugins, the LAN transport (advertising the core's capabilities) and the API, and stops them in order. Used by the CLI's `run` and by the desktop app. `start_with` takes the plugin list from the caller (the desktop app, which keeps each plugin's UI half), and `core()` hands the running core to a frontend in the same process. |
 | `api` | `src/api.rs`, `src/api/upload.rs` | The Axum server: the core's routes (`/status`, `/discovery`, `/devices`, `/pairings`, `/transfers`, `/settings`, `/events`), every plugin's routes merged in, `ApiProblem` (the `application/problem+json` error every handler returns, with `From<CoreError>`), optional bearer-token auth, body-size limits, request deadline and SSE. Streaming routes (every plugin's `streaming_routes`) get the transfer-sized body limit and no request deadline; `upload` has the helpers they share (idle timeout, forwarding a multipart file part into a transfer until the part or the transfer ends, and the lingering close that drains an upload a handler answered before reading to its end). |
@@ -136,6 +137,12 @@ core and its plugins. The rules the core keeps:
   snapshot leaves the core) and calls `ctx.device_changed(id)` when its
   answer changes. It owns a typed settings section, stored and exposed
   under `plugins.<id>` (§7), and reads it with `ctx.settings::<T>()`.
+- **Data.** A plugin keeps anything else in the store (`ctx.store()`),
+  under `ConfigKey`s it declares as `<id>.<name>`, per device where the
+  value belongs to one (`PerDevice`, removed when the device is
+  unpaired). It can `watch` a key it cares about, its settings section
+  included (`PLUGIN_SETTINGS.of(id)`). It never writes files of its own in
+  the data directory.
 - **Events and errors.** A plugin publishes its own event types
   (`ctx.publish(&T)` for `T: PluginEventKind`); they look like core events
   on the wire. Its errors map to `ApiProblem` inside the plugin; core errors
@@ -144,7 +151,7 @@ core and its plugins. The rules the core keeps:
 `PluginContext` offers: `device(id)` and `device_changed(id)`;
 `send(device, packet)` (paired, connected, and the peer advertised the
 type), `can_send` and `broadcast(packet, except)`; `publish`;
-`settings::<T>()`; `transfers()`; and `payload_peer(device)` for payload
+`settings::<T>()`; `store()`; `transfers()`; and `payload_peer(device)` for payload
 connections and SSH sign-in without the private key.
 
 A new feature is a module under `plugins/`: `mod.rs` implementing
@@ -186,7 +193,7 @@ what each step taught.
    between the two exchanges; a mismatch or downgrade against a previously
    trusted protocol version fails the connection closed.
 3. **Trust check**: if the peer's device ID has a pinned certificate in the
-   `TrustStore`, the TLS verifier requires an exact match. Unknown peers are
+   store, the TLS verifier requires an exact match. Unknown peers are
    accepted at the TLS layer (so pairing can proceed) but cannot exchange
    any packet type other than pairing packets until paired (see §4).
 4. **Steady state**: a per-connection packet read/write loop
@@ -203,7 +210,7 @@ States: `requested → awaiting_confirmation → accepted | rejected | expired |
   distinguished by `direction`.
 - A pairing session always reaches a terminal state; the associated 30-second
   timeout timer is aborted on every terminal transition so no task leaks.
-- Trust is written to the `TrustStore` only after local user confirmation
+- Trust is written to the store only after local user confirmation
   (`POST /pairings/{id}/accept` for incoming, or automatic on receiving the
   peer's accept for outgoing) — never before.
 - A paired peer's trust record also keeps how it last described itself
@@ -308,10 +315,12 @@ States: `queued → connecting → transferring → completed | cancelled | fail
 
 ## 7. Settings
 
-User preferences live in the daemon, in `settings.json` in the data
-directory, never in a client. Core fields: `deviceName`, `downloadDir`,
+User preferences live in the daemon, in its store (`ferry.db` in the data
+directory), never in a client. Core fields: `deviceName`, `downloadDir`,
 and `closeToTray` (owned by the UI; the daemon stores it without
-interpreting it). A field missing from the file uses its default: the host
+interpreting it), under the config keys `core.deviceName`,
+`core.downloadDir` and `ui.closeToTray` (`core::settings`). A field the
+store doesn't set uses its default: the host
 name (first label, trimmed to a valid KDE Connect name, else "Ferry"),
 the platform download directory, `true`.
 
@@ -331,15 +340,14 @@ the platform download directory, `true`.
   it's on, the app rewrites it at each start, in case the app moved.
 
 - **Plugin sections.** A plugin with settings owns a section under
-  `plugins.<id>`, in the file and in `GET`/`PATCH /settings`; so far only
+  `plugins.<id>` in `GET`/`PATCH /settings`, stored under the key
+  `core.pluginSettings` for the plugin's id (the `PerPlugin` scope); so far only
   `plugins.clipboard.syncEnabled` (default `true`). The plugin defines the
   fields, their defaults and what is valid (`PluginSettings`); the core
   stores only the fields the user set, merges a patch into them (`null`
   resets a field, a `null` section resets the section) and answers `400
   invalid_settings` for an unknown section or a value the plugin can't
   read. `GET /settings` always lists every section, defaults filled in.
-  The old top-level `clipboardSyncEnabled` is not migrated: a file that
-  still has it is read as if it didn't, and it is dropped on the next save.
 - **Precedence.** A start option (`ferry run --device-name` /
   `--download-dir`, or the app's flags of the same names)
   overrides the stored value for that run only and is not saved. Changing
@@ -349,9 +357,10 @@ the platform download directory, `true`.
   stored settings.
 - **Changes** are validated (names follow the identity schema: 1–32
   characters, no reserved punctuation; download directories must be
-  absolute and are created up front), saved atomically, then applied, and
-  publish `settings.changed` if anything changed. An unreadable file is
-  logged and ignored at start, then overwritten on the next change.
+  absolute and are created up front), saved in one transaction, then
+  applied, and publish `settings.changed` if anything changed. A stored
+  value that can't be read is logged and ignored at start, then
+  overwritten on the next change.
 - **Renaming** takes effect at once: the LAN transport watches the name,
   re-encodes its identity for new connections, and announces it
   immediately. Peers update the name from any identity they receive, and
@@ -463,7 +472,7 @@ also runs standalone for trying the app without a phone.
 both ways, unpairing, ping, clipboard, files both ways, browsing, and
 notifications. The
 UI's unit tests sit next to each page and plugin UI half, over a real
-core from `core::testing` with fake desktop services, and snapshot tests
+core from `core::testing` (on `Store::open_in_memory()`) with fake desktop services, and snapshot tests
 render each page to PNG in light and dark when `SNAPSHOT_DIR` is set.
 Most end-to-end tests spin up two in-process peers (real UDP/TCP/TLS on
 loopback, no mocked network layer) and exercise discovery through encrypted

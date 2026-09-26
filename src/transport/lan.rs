@@ -23,9 +23,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::{
-    config::{LocalIdentity, TrustStore},
+    config::LocalIdentity,
     core::{Core, LanCommand},
     protocol::{DeviceType, IdentityBody, Packet, PacketCodec},
+    store::Store,
     transport::tls::{self, PeerPin, TlsMaterial},
 };
 
@@ -174,7 +175,7 @@ impl LanService {
         core: Core,
         commands: mpsc::Receiver<LanCommand>,
         identity: Arc<LocalIdentity>,
-        trust_store: Arc<dyn TrustStore + Send + Sync>,
+        store: Store,
         cancellation: CancellationToken,
     ) -> Result<Self, LanError> {
         validate_local(&local)?;
@@ -205,7 +206,7 @@ impl LanService {
             core,
             commands,
             identity,
-            trust_store,
+            store,
             udp,
             tcp,
             announcement,
@@ -261,7 +262,7 @@ async fn run(
     core: Core,
     mut commands: mpsc::Receiver<LanCommand>,
     identity: Arc<LocalIdentity>,
-    trust_store: Arc<dyn TrustStore + Send + Sync>,
+    store: Store,
     udp: Arc<UdpSocket>,
     tcp: TcpListener,
     mut announcement: Arc<Vec<u8>>,
@@ -324,7 +325,7 @@ async fn run(
                         && let Some(identity_body) = decode_identity(&datagram[..length])
                         && identity_body.device_id != local.device_id
                     {
-                        let paired = is_trusted(&trust_store, &identity_body.device_id);
+                        let paired = is_trusted(&store, &identity_body.device_id);
                         let _ = core.discover_device(&identity_body, paired, unix_millis());
                         if let Some(port) = tcp_port(&identity_body)
                             && let Ok(permit) = connection_limit.clone().try_acquire_owned()
@@ -333,7 +334,7 @@ async fn run(
                             let address = SocketAddr::new(source.ip(), port);
                             spawn_outgoing(
                                 &mut connections, address, identity_body.clone(), reservation,
-                                permit, local.clone(), core.clone(), identity.clone(), trust_store.clone(),
+                                permit, local.clone(), core.clone(), identity.clone(), store.clone(),
                                 announcement.clone(), registry.clone(), cancellation.clone(),
                                 config.connect_timeout, config.identity_timeout,
                             );
@@ -350,7 +351,7 @@ async fn run(
                     if let Ok(permit) = connection_limit.clone().try_acquire_owned() {
                         spawn_incoming(
                             &mut connections, stream, permit, local.clone(), core.clone(),
-                            identity.clone(), trust_store.clone(), announcement.clone(), registry.clone(),
+                            identity.clone(), store.clone(), announcement.clone(), registry.clone(),
                             cancellation.clone(), config.identity_timeout,
                         );
                     }
@@ -368,8 +369,8 @@ async fn run(
     connections.shutdown().await;
 }
 
-fn is_trusted(trust_store: &Arc<dyn TrustStore + Send + Sync>, device_id: &str) -> bool {
-    matches!(trust_store.get(device_id), Ok(Some(_)))
+fn is_trusted(store: &Store, device_id: &str) -> bool {
+    matches!(store.device(device_id), Ok(Some(_)))
 }
 
 async fn announce(socket: &UdpSocket, targets: &[SocketAddr], announcement: &[u8]) {
@@ -390,7 +391,7 @@ fn spawn_outgoing(
     local: LocalDeviceInfo,
     core: Core,
     identity: Arc<LocalIdentity>,
-    trust_store: Arc<dyn TrustStore + Send + Sync>,
+    store: Store,
     announcement: Arc<Vec<u8>>,
     registry: Arc<ConnectionRegistry>,
     shutdown: CancellationToken,
@@ -410,7 +411,7 @@ fn spawn_outgoing(
                 local,
                 core.clone(),
                 identity,
-                trust_store,
+                store,
                 announcement,
                 registry.clone(),
                 shutdown,
@@ -431,7 +432,7 @@ fn spawn_incoming(
     local: LocalDeviceInfo,
     core: Core,
     identity: Arc<LocalIdentity>,
-    trust_store: Arc<dyn TrustStore + Send + Sync>,
+    store: Store,
     announcement: Arc<Vec<u8>>,
     registry: Arc<ConnectionRegistry>,
     shutdown: CancellationToken,
@@ -451,7 +452,7 @@ fn spawn_incoming(
             local,
             core,
             identity,
-            trust_store,
+            store,
             announcement,
             registry,
             shutdown,
@@ -479,7 +480,7 @@ async fn handle_connection(
     local: LocalDeviceInfo,
     core: Core,
     identity: Arc<LocalIdentity>,
-    trust_store: Arc<dyn TrustStore + Send + Sync>,
+    store: Store,
     announcement: Arc<Vec<u8>>,
     registry: Arc<ConnectionRegistry>,
     shutdown: CancellationToken,
@@ -534,7 +535,7 @@ async fn handle_connection(
     };
     let device_id = pre_tls_identity.device_id.clone();
 
-    let trusted = trust_store.get(&device_id).ok().flatten();
+    let trusted = store.device(&device_id).ok().flatten();
     let pin = match &trusted {
         Some(trusted_device) => PeerPin::Pinned(trusted_device.certificate_der.clone()),
         None => PeerPin::Unpinned,
