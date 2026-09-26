@@ -69,6 +69,12 @@ pub struct Store {
     state: Arc<Mutex<State>>,
 }
 
+impl std::fmt::Debug for Store {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("Store").finish_non_exhaustive()
+    }
+}
+
 /// What the store's one lock guards. Watchers are told of a commit before
 /// it is released, so they hear about commits in order; telling them runs
 /// none of their code.

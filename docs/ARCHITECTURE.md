@@ -66,7 +66,7 @@ and `plugins` never import `ui`.
 | Module | File(s) | Responsibility |
 | --- | --- | --- |
 | `protocol` | `src/protocol/{mod,packet,codec,verification}.rs` | Wire packet envelope, identity/pairing body types, bounded newline-delimited JSON codec, the protocol-v8 verification-code function. No I/O. |
-| `config` | `src/config/{mod,identity,settings,token}.rs` | Local device identity (UUID + self-signed cert, kept in the store under `core.identity` and never replaced once made), the optional API bearer token (never persisted), and `settings.json` (user settings, written atomically). |
+| `config` | `src/config/{mod,identity,token}.rs` | Local device identity (UUID + self-signed cert, kept in the store under `core.identity` and never replaced once made), the optional API bearer token (never persisted). |
 | `store` | `src/store/{mod,config,devices}.rs` | The daemon's data in one SQLite database, `ferry.db` in the data directory ([`adr/0002`](adr/0002-store-the-daemons-data-in-sqlite.md), [`PLAN_STORE.md`](PLAN_STORE.md)). `config`: typed, watchable values, each named by a `ConfigKey<T, S>` its owner declares, global or per device (`PerDevice`, reached with `.of(id)`); `get` reads a value that no longer decodes as missing, `get_strict` as an error. Write transactions take the database's lock up front, so a CLI daemon and the app on one data directory take turns. `devices`: paired devices' pinned certificates, with the name, type and capabilities each last reported over an authenticated connection; removing one removes its per-device values. Tests use `Store::open_in_memory()`. |
 | `transport` | `src/transport/{lan,tls,payload}.rs` | UDP discovery, TCP control-channel connect/accept, the real rustls TLS handshake and certificate pinning, and the auxiliary TLS payload connection used for file transfer. `LanConfig::loopback` (the daemon's `--discovery-loopback`) binds discovery to `127.255.255.255` and the control listener to `127.0.0.1`, so nothing on the LAN can discover or reach the instance. It takes `LanCommand`s (announce now, announce to one address) from the core. |
 | `core` | `src/core.rs` | `Core`, the cloneable handle to everything below: its state, construction, status, settings, and running the plugins' hooks. One `RwLock` holds what must change together (devices, connections, pairings); transfers, settings and every plugin's state have their own locks. |
@@ -306,10 +306,12 @@ States: `queued → connecting → transferring → completed | cancelled | fail
 
 ## 7. Settings
 
-User preferences live in the daemon, in `settings.json` in the data
-directory, never in a client. Core fields: `deviceName`, `downloadDir`,
+User preferences live in the daemon, in its store (`ferry.db` in the data
+directory), never in a client. Core fields: `deviceName`, `downloadDir`,
 and `closeToTray` (owned by the UI; the daemon stores it without
-interpreting it). A field missing from the file uses its default: the host
+interpreting it), under the config keys `core.deviceName`,
+`core.downloadDir` and `ui.closeToTray` (`core::settings`). A field the
+store doesn't set uses its default: the host
 name (first label, trimmed to a valid KDE Connect name, else "Ferry"),
 the platform download directory, `true`.
 
@@ -329,15 +331,14 @@ the platform download directory, `true`.
   it's on, the app rewrites it at each start, in case the app moved.
 
 - **Plugin sections.** A plugin with settings owns a section under
-  `plugins.<id>`, in the file and in `GET`/`PATCH /settings`; so far only
+  `plugins.<id>` in `GET`/`PATCH /settings`, stored under the key
+  `core.pluginSettings` for the plugin's id (the `PerPlugin` scope); so far only
   `plugins.clipboard.syncEnabled` (default `true`). The plugin defines the
   fields, their defaults and what is valid (`PluginSettings`); the core
   stores only the fields the user set, merges a patch into them (`null`
   resets a field, a `null` section resets the section) and answers `400
   invalid_settings` for an unknown section or a value the plugin can't
   read. `GET /settings` always lists every section, defaults filled in.
-  The old top-level `clipboardSyncEnabled` is not migrated: a file that
-  still has it is read as if it didn't, and it is dropped on the next save.
 - **Precedence.** A start option (`ferry run --device-name` /
   `--download-dir`, or the app's flags of the same names)
   overrides the stored value for that run only and is not saved. Changing
@@ -347,9 +348,10 @@ the platform download directory, `true`.
   stored settings.
 - **Changes** are validated (names follow the identity schema: 1–32
   characters, no reserved punctuation; download directories must be
-  absolute and are created up front), saved atomically, then applied, and
-  publish `settings.changed` if anything changed. An unreadable file is
-  logged and ignored at start, then overwritten on the next change.
+  absolute and are created up front), saved in one transaction, then
+  applied, and publish `settings.changed` if anything changed. A stored
+  value that can't be read is logged and ignored at start, then
+  overwritten on the next change.
 - **Renaming** takes effect at once: the LAN transport watches the name,
   re-encodes its identity for new connections, and announces it
   immediately. Peers update the name from any identity they receive, and

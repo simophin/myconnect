@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::{EventBusError, PairingTransitionError};
-use crate::{config::SettingsError, store::StoreError};
+use crate::store::StoreError;
 
 /// Public, non-sensitive failure categories safe to return to API clients.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,8 +67,6 @@ pub enum CoreError {
     InvalidDeviceName,
     #[error("download directory must be an absolute path that can be created")]
     InvalidDownloadDir,
-    #[error("settings could not be saved")]
-    Settings(#[source] SettingsError),
     #[error("a plugin's settings section is unknown or its values are invalid")]
     InvalidSettings,
     #[error("transfer is not in a state that allows this operation")]
@@ -107,7 +105,6 @@ impl CoreError {
             | Self::EventBus(_)
             | Self::InvalidPeerCertificate
             | Self::Store(_)
-            | Self::Settings(_)
             | Self::Internal => "internal_error",
         }
     }

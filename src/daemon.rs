@@ -15,8 +15,11 @@ use tracing::{info, warn};
 
 use crate::{
     api::{ApiServer, ApiServerConfig, DEFAULT_API_PORT},
-    config::{ApiToken, LocalIdentity, SettingsFile, StoredSettings, default_config_dir},
-    core::{Core, LocalDeviceSnapshot, Plugin, Settings, SettingsDefaults, TransferConfig},
+    config::{ApiToken, LocalIdentity, default_config_dir},
+    core::{
+        Core, LocalDeviceSnapshot, Plugin, Settings, SettingsDefaults, StoredSettings,
+        TransferConfig,
+    },
     plugins::{
         self,
         clipboard::{ClipboardService, InMemoryClipboard, SystemClipboard},
@@ -112,18 +115,11 @@ impl RunningService {
         let identity = Arc::new(LocalIdentity::load_or_create(&store)?);
         let local_public_key_der = subject_public_key_info(identity.certificate_der())
             .context("local identity certificate could not be parsed")?;
-        let settings_file = SettingsFile::new(&config_dir);
-        let stored = settings_file.load().unwrap_or_else(|error| {
-            // Start with defaults rather than not at all; the file is
-            // rewritten on the next change.
-            warn!(%error, "ignoring unreadable settings file");
-            StoredSettings::default()
-        });
         let settings = Settings::new(SettingsDefaults {
             device_name: default_device_name(),
             download_dir: default_download_dir().unwrap_or_else(|| config_dir.join("downloads")),
         })
-        .with_file(settings_file, stored)
+        .with_store(store.clone())
         .with_overrides(StoredSettings {
             device_name: request.device_name.clone(),
             download_dir: request

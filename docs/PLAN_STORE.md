@@ -119,7 +119,7 @@ store.changes();         // broadcast of ConfigChange { key, scope, id }, untype
 | --- | --- |
 | `identity.json` | The key `core.identity` (the certificate and key as base64); `LocalIdentity::load_or_create(&Store)` |
 | `trusted-devices/*.json`, `FilesystemTrustStore` | The `devices` table: `Store::device`, `devices`, `put_device` and `remove_device`. The `TrustStore` trait goes: the core and the transport take the `Store`, and tests use `Store::open_in_memory()` instead of `MemoryTrustStore` |
-| `settings.json`, `SettingsFile`, `StoredSettings` | `core.deviceName`, `core.downloadDir`, `ui.closeToTray`, and one key per plugin section, `<id>.settings`, holding the fields the user set. `PATCH` merging, `null` resets and `PluginSettings` validation are unchanged; a `PATCH` is one transaction |
+| `settings.json`, `SettingsFile` | `core.deviceName`, `core.downloadDir`, `ui.closeToTray`, and `core.pluginSettings` with a value per plugin (a `PerPlugin` scope, by plugin id) holding the fields the user set: key names are constants, so a key per plugin can't be named from its id. `PATCH` merging, `null` resets and `PluginSettings` validation are unchanged; a `PATCH` is one transaction |
 | No plugin storage | `PluginContext::store()`: plugins declare their own `ConfigKey`s |
 | `window.json` | Unchanged: the UI's one piece of state stays the UI's |
 

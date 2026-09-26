@@ -38,7 +38,7 @@ mod transfers;
 use connections::Connection;
 use devices::paired_devices;
 use pairing::PairingRuntime;
-pub(crate) use settings::Settings;
+pub(crate) use settings::{Settings, StoredSettings};
 
 pub use connections::LanCommand;
 pub use devices::{DeviceReachability, DeviceRegistry, DeviceRegistryError, DeviceSnapshot};
@@ -52,7 +52,10 @@ pub use plugin::{
     Capabilities, Plugin, PluginContext, PluginEvent, PluginEventKind, PluginRegistry,
     PluginSettings, SettingsSection,
 };
-pub use settings::{SettingsDefaults, SettingsPatch, SettingsSnapshot};
+pub use settings::{
+    CLOSE_TO_TRAY, DEVICE_NAME, DOWNLOAD_DIR, PLUGIN_SETTINGS, PerPlugin, SettingsDefaults,
+    SettingsPatch, SettingsSnapshot,
+};
 pub use transfers::{
     DEFAULT_MAX_TRANSFER_BYTES, FileNameError, PROGRESS_EVENT_INTERVAL, Transfer, TransferConfig,
     TransferDirection, TransferHandle, TransferProgressError, TransferSnapshot, TransferStatus,
@@ -157,6 +160,11 @@ impl Core {
 
     pub fn event_bus(&self) -> &EventBus {
         &self.events
+    }
+
+    /// The daemon's data: typed configs and paired devices.
+    pub fn store(&self) -> &Store {
+        &self.store
     }
 
     /// Events from now on, for `/events` and other clients.

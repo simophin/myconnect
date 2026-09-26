@@ -221,8 +221,8 @@ installer installed in CI, but neither was used on a real desktop yet.
 
 - Devices added by IP address are forgotten on restart. KDE Connect keeps
   a list of such addresses and announces to them periodically. The
-  equivalent here is a daemon setting (a list of addresses in
-  `settings.json`) that `LanService` announces to on its interval, plus a
+  equivalent here is a daemon setting (a list of addresses, as a config
+  key in the store) that `LanService` announces to on its interval, plus a
   way to remove entries in the UI.
 - `plugins::clipboard::backend::system::tests::clearing_the_clipboard_is_not_reported` failed
   once under a full `cargo test --workspace` run and passed on every rerun
