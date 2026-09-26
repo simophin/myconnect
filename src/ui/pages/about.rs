@@ -129,8 +129,6 @@ mod tests {
 
     #[test]
     fn snapshot_about() {
-        testing::snapshot("about", (440.0, 620.0), || {
-            view("0.1.0 (v1.1.0-19-geeba428)", actions())
-        });
+        testing::snapshot("about", (440.0, 620.0), || view("v1.2.0", actions()));
     }
 }

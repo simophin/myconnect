@@ -232,13 +232,7 @@ mod tests {
     fn snapshot_settings() {
         let store = store();
         testing::snapshot("settings", (440.0, 620.0), || {
-            view(
-                &store,
-                sections,
-                "0.1.0 (v1.1.0-19-geeba428)",
-                false,
-                actions(),
-            )
+            view(&store, sections, "v1.2.0", false, actions())
         });
     }
 }

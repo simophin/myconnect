@@ -239,8 +239,9 @@ These differ on purpose (owner's decisions). Don't "fix" them back.
 - **No external daemon mode.** Flutter could attach to a daemon through
   the API URL variable (now `FERRY_API_URL`); the app always embeds its daemon.
 - **Configuration is flags and environment variables**, not compile-time
-  defines (see Decision). The version in Settings is
-  `CARGO_PKG_VERSION`, plus `git describe` when available.
+  defines (see Decision). The version in Settings and About is
+  the git tag (`v1.2.0`): a release's from `FERRY_VERSION`, a dev build's
+  from `git describe` (`v1.2.0-2-g9e6caee`), or `dev` without git.
 - **No FFI.** `ffi/` existed only for Flutter and was deleted with it.
 - **Retry restarts only what failed.** The "could not start" screen's
   Retry calls `RunningService::start` again; the tray keeps working.

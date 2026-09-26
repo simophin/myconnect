@@ -834,14 +834,7 @@ mod tests {
         let mut app = background(&fakes);
         assert_eq!(
             tray_labels(&fakes),
-            [
-                "Open Ferry",
-                "-",
-                "Settings",
-                "About Ferry",
-                "-",
-                "Quit"
-            ],
+            ["Open Ferry", "-", "Settings", "About Ferry", "-", "Quit"],
             "devices unknown yet"
         );
         settle(&mut app, Message::Reload).await;
@@ -1023,14 +1016,7 @@ mod tests {
         let _ = app.update(Message::Started(Err("no".into())));
         assert_eq!(
             tray_labels(&fakes),
-            [
-                "Open Ferry",
-                "-",
-                "Settings",
-                "About Ferry",
-                "-",
-                "Quit"
-            ]
+            ["Open Ferry", "-", "Settings", "About Ferry", "-", "Quit"]
         );
         // No settings to ask: closing keeps the tray as the way out.
         close(&mut app).await;
