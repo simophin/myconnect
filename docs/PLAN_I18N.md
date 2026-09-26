@@ -58,7 +58,7 @@ under "Notes" for anything the next phase must know, and commit.
 
 ### 2. Extract every string
 Split into four commits, one per step, each passing the checks.
-- [ ] 2a. `ui::error` (codes to `error-<code>`), the shell, `widgets`,
+- [x] 2a. `ui::error` (codes to `error-<code>`), the shell, `widgets`,
       `actions`, `mod.rs`, `drops`, `launch`, and each feature's
       describe module
 - [ ] 2b. Pages: devices, device, pairing, add device, transfers,
@@ -129,3 +129,19 @@ Anything a later phase must know, one line each, newest last.
 - Phase 1 was checked on macOS (no Xvfb there): `ui_e2e` is Linux-only and
   didn't run, the real-clipboard tests were skipped, and `tests/lan.rs`'s
   loopback test fails on macOS (no `127.255.255.255`, HANDOFF "Traps"; no gui code in it).
+- 2a: keys for error codes use the code verbatim, underscores and all
+  (`error-device_not_found`, `browse-error-file_not_found`), so they grep
+  to the API's code; codes that share a sentence share the first code's
+  key. Other keys are kebab-case by area: `shell-` (mod.rs, actions.rs,
+  shell.rs), `widget-`, `drop-`, `startup-`, `app-window-title`.
+- 2a: `describe_file_failures` takes `error::FileBatch::{Send, Upload}`
+  instead of a verb; `widgets::empty_state` takes owned `Option<String>`
+  for its detail and action label, so pages can pass `fl!` results.
+- 2a also did `pages/startup.rs` (launch's screen). Left for later on
+  purpose: `format_bytes` (phase 3), `overlay::drop::CHOOSE_LABEL`, which
+  `drops::drop_hint` uses (2c), and the 192.168.1.20 hint, which isn't
+  words.
+- 2a was checked on macOS, as phase 1 was; also `tests/transfer_e2e.rs`'s
+  `zero_byte_small_and_larger_than_buffer_files_transfer_without_full_buffering`
+  fails there (a transfer ends `Failed`), without the `gui` feature, so
+  not from this work; look on Linux.

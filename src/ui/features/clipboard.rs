@@ -14,6 +14,7 @@ use crate::{
         self, Origin,
         context::UiContext,
         error::{describe_code, describe_error as describe_core_error},
+        i18n::fl,
         shell, widgets,
     },
 };
@@ -144,8 +145,8 @@ pub fn describe_error(error: &ClipboardSyncError) -> String {
 /// Words this feature's codes and leaves the rest to `ui::error`.
 fn describe(code: &str) -> String {
     match code {
-        "clipboard_empty" => "There is no text on the clipboard to send.".into(),
-        "clipboard_text_too_large" => "The clipboard text is too long to send.".into(),
+        "clipboard_empty" => fl!("clipboard-error-clipboard_empty"),
+        "clipboard_text_too_large" => fl!("clipboard-error-clipboard_text_too_large"),
         code => describe_code(code),
     }
 }

@@ -13,7 +13,8 @@ use crate::{
     ui::{
         self, Origin,
         context::UiContext,
-        error::{describe_code, describe_error, describe_file_failures},
+        error::{FileBatch, describe_code, describe_error, describe_file_failures},
+        i18n::fl,
         shell,
     },
 };
@@ -109,7 +110,7 @@ pub(crate) fn update(ctx: &UiContext, message: Message, origin: Origin) -> Task<
                             failures.push((path, describe(&error)));
                         }
                     }
-                    describe_file_failures("send", &failures)
+                    describe_file_failures(FileBatch::Send, &failures)
                 },
                 move |failures| {
                     ui::Message::Feature(Feature::Share(Message::Sent { name, failures }), origin)
@@ -137,7 +138,7 @@ fn accepts_files(device: &DeviceSnapshot) -> bool {
 fn describe(error: &SendPathError) -> String {
     match error {
         SendPathError::Core(error) => describe_error(error),
-        SendPathError::File(_) => "The file couldn’t be read.".into(),
+        SendPathError::File(_) => fl!("share-error-file-unreadable"),
     }
 }
 

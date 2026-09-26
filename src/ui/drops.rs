@@ -15,8 +15,6 @@ use super::{
     route::Route,
 };
 
-const COULDNT_SEND: &str = "Couldn’t send";
-
 impl App {
     /// Files were dropped on the window: send them where the page says, if
     /// a feature takes them there, or ask where. Folders are refused.
@@ -24,7 +22,7 @@ impl App {
         let files = match self.sendable(&paths) {
             Ok(files) => files,
             Err(None) => return Task::none(),
-            Err(Some(refused)) => return self.toast(refused.into(), None),
+            Err(Some(refused)) => return self.toast(refused, None),
         };
         match self.drop_target_here() {
             Some(target) => Task::done(Message::Feature((target.on_drop)(files), Origin::Window)),
@@ -42,7 +40,7 @@ impl App {
         let files = match self.sendable(&paths) {
             Ok(files) => files,
             Err(None) => return Task::none(),
-            Err(Some(refused)) => return self.notify(COULDNT_SEND, refused),
+            Err(Some(refused)) => return self.notify(&fl!("drop-send-failed"), &refused),
         };
         // The pairing prompt is modal: it is answered first.
         if self.incoming_prompt_shows() {
@@ -64,7 +62,7 @@ impl App {
         let mut menu = vec![TrayItem::item(header, None)];
         let devices = self.recipients();
         if devices.is_empty() {
-            menu.push(TrayItem::item("No paired device can receive files", None));
+            menu.push(TrayItem::item(fl!("drop-no-recipients"), None));
         }
         menu.extend(devices.into_iter().map(|device| {
             TrayItem::item(
@@ -85,14 +83,17 @@ impl App {
         match self.drop_target(&device_id, &route) {
             Some(target) => Task::done(Message::Feature((target.on_drop)(files), Origin::Tray)),
             // It dropped out of the list as it was chosen.
-            None => self.notify(COULDNT_SEND, &error::describe_code("device_not_connected")),
+            None => self.notify(
+                &fl!("drop-send-failed"),
+                &error::describe_code("device_not_connected"),
+            ),
         }
     }
 
     /// The files among dropped `paths`: an error if there are none, with
     /// why if the user should hear it. Folders can't be sent, and some
     /// drops aren't local files.
-    fn sendable(&mut self, paths: &[PathBuf]) -> Result<Vec<PathBuf>, Option<&'static str>> {
+    fn sendable(&mut self, paths: &[PathBuf]) -> Result<Vec<PathBuf>, Option<String>> {
         if self.running().is_none() || paths.is_empty() {
             return Err(None);
         }
@@ -102,7 +103,7 @@ impl App {
             .cloned()
             .collect();
         if files.is_empty() {
-            return Err(Some("Only files can be sent, not folders."));
+            return Err(Some(fl!("drop-folders-refused")));
         }
         Ok(files)
     }

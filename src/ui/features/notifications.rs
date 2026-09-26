@@ -27,6 +27,7 @@ use crate::{
         self, Origin,
         context::UiContext,
         error::describe_code,
+        i18n::fl,
         route::Route,
         shell::{self, Prompt},
         widgets,
@@ -262,7 +263,7 @@ impl NotificationsUi {
             widgets::empty_state(
                 lucide::wifi_off,
                 format!("{} isn’t connected.", device.device_name),
-                Some("Its notifications show here while it is."),
+                Some("Its notifications show here while it is.".into()),
                 None,
             )
         } else if shown.is_empty() {
@@ -271,7 +272,8 @@ impl NotificationsUi {
                 format!("No notifications from {}.", device.device_name),
                 Some(
                     "On the phone, let KDE Connect read notifications, and choose \
-                     which apps share them.",
+                     which apps share them."
+                        .into(),
                 ),
                 None,
             )
@@ -457,11 +459,13 @@ fn shares_notifications(device: &DeviceSnapshot) -> bool {
 /// A sentence about a failed action on a notification.
 fn describe(error: &NotificationError) -> String {
     match error {
-        NotificationError::NotFound => "It’s no longer on the device.".into(),
-        NotificationError::NotRepliable => "It doesn’t take a reply.".into(),
-        NotificationError::NotDismissable => "It can’t be dismissed from here.".into(),
-        NotificationError::UnknownAction => "It no longer has that button.".into(),
-        NotificationError::EmptyReply => "Write a message.".into(),
+        NotificationError::NotFound => fl!("notifications-error-notification_not_found"),
+        NotificationError::NotRepliable => fl!("notifications-error-notification_not_repliable"),
+        NotificationError::NotDismissable => {
+            fl!("notifications-error-notification_not_dismissable")
+        }
+        NotificationError::UnknownAction => fl!("notifications-error-unknown_notification_action"),
+        NotificationError::EmptyReply => fl!("notifications-error-empty_reply"),
         NotificationError::Core(error) => describe_code(error.code()),
     }
 }

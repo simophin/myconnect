@@ -11,6 +11,8 @@ use iced::{
 };
 use iced_fonts::lucide;
 
+use crate::ui::i18n::fl;
+
 /// A Lucide icon, as a function so it can be stored as data (the tray
 /// can't draw an [`Element`]).
 pub type Icon = fn() -> Text<'static>;
@@ -42,7 +44,11 @@ pub fn page_header<'a, M: Clone + 'a>(
 ) -> Element<'a, M> {
     let mut header = row![].spacing(4).align_y(Alignment::Center);
     if let Some(back) = back {
-        header = header.push(icon_button(lucide::arrow_left, "Back", Some(back)));
+        header = header.push(icon_button(
+            lucide::arrow_left,
+            fl!("widget-back"),
+            Some(back),
+        ));
     }
     // The title takes what the buttons leave, and is cut off if longer.
     header = header.push(
@@ -211,8 +217,8 @@ pub fn switch_setting<'a, M: Clone + 'a>(
 pub fn empty_state<'a, M: Clone + 'a>(
     icon: Icon,
     title: impl text::IntoFragment<'a>,
-    detail: Option<&'a str>,
-    action: Option<(&'a str, M)>,
+    detail: Option<String>,
+    action: Option<(String, M)>,
 ) -> Element<'a, M> {
     let mut content = column![
         icon().size(40).style(text::secondary),
@@ -326,7 +332,7 @@ pub fn error_view<'a, M: Clone + 'a>(
     .align_x(Alignment::Center);
     if let Some(on_retry) = on_retry {
         content = content.push(
-            button(text("Retry"))
+            button(text(fl!("widget-retry")))
                 .padding([8, 20])
                 .style(button::secondary)
                 .on_press(on_retry),
@@ -562,8 +568,8 @@ mod tests {
             empty_state(
                 lucide::monitor_smartphone,
                 "No paired devices yet",
-                Some("Devices you pair with appear here."),
-                Some(("Find a device to pair", Message::Refresh)),
+                Some("Devices you pair with appear here.".into()),
+                Some(("Find a device to pair".into(), Message::Refresh)),
             )
         });
     }

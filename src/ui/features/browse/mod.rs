@@ -25,7 +25,13 @@ use crate::{
         BrowsePlugin, DirectoryListing, FileEntry, FileKind, REQUEST_PACKET_TYPE,
         files::{join_remote_path, split_remote_path},
     },
-    ui::{self, Origin, context::UiContext, error::describe_file_failures, route::Route, shell},
+    ui::{
+        self, Origin,
+        context::UiContext,
+        error::{FileBatch, describe_file_failures},
+        route::Route,
+        shell,
+    },
 };
 pub use describe::describe_error;
 use describe::describe_upload_error;
@@ -416,7 +422,7 @@ impl BrowseUi {
                         failures.push((path, describe_upload_error(&error)));
                     }
                 }
-                describe_file_failures("upload", &failures)
+                describe_file_failures(FileBatch::Upload, &failures)
             }
         };
         ctx.spawn(uploaded, move |error| {

@@ -29,7 +29,7 @@ use super::{
         window::{self as windowing, Windows},
     },
     features::Features,
-    i18n,
+    i18n::{self, fl},
     overlay::{dialog::Dialogs, drop::Drag, toast::Toasts},
     route::Route,
     theme,
@@ -132,7 +132,7 @@ pub fn program(
         }
     };
     let program = iced::daemon(boot, App::update, App::view)
-        .title("Ferry")
+        .title(|_: &App, _window| fl!("app-window-title"))
         .subscription(App::subscription)
         .theme(|app: &App, _window| app.theme.clone())
         .font(iced_fonts::LUCIDE_FONT_BYTES);

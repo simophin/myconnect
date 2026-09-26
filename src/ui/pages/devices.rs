@@ -80,7 +80,7 @@ pub fn view<'a, Message: Clone + 'a>(
             lucide::monitor_smartphone,
             "No paired devices yet",
             None,
-            Some(("Find a device to pair", navigate(Route::AddDevice))),
+            Some(("Find a device to pair".into(), navigate(Route::AddDevice))),
         ),
         Load::Loaded(mut paired) => {
             // Connected first; the store sorts by name.

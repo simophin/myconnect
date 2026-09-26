@@ -64,6 +64,7 @@ use desktop::{
     tray::TrayItem,
 };
 use features::{Feature, Features};
+use i18n::fl;
 use overlay::{
     dialog::{self as dialogs, Dialog, DialogEvent, Dialogs, Submit},
     drop::{self as dropping, Drag, Dropped},
@@ -462,12 +463,9 @@ impl App {
             },
             Message::Unpair { device_id, name } => self.dialogs.open(
                 Dialog::confirm(
-                    "Unpair device?",
-                    format!(
-                        "{name} will need to be paired again before it can exchange \
-                         anything with this computer."
-                    ),
-                    "Unpair",
+                    fl!("shell-unpair-title"),
+                    fl!("shell-unpair-body", name = name),
+                    fl!("shell-unpair-confirm"),
                     Submit::Close(Arc::new(move |_| Message::Forget {
                         device_id: device_id.clone(),
                     })),
@@ -581,7 +579,10 @@ impl App {
             Message::RevealFile(path) => self.open(path, true),
             Message::OpenFailed(path, error) => {
                 tracing::warn!(path = %path.display(), %error, "couldn't open a file");
-                self.toast(format!("Couldn’t open {}", path.display()), None)
+                self.toast(
+                    fl!("shell-open-failed", path = path.display().to_string()),
+                    None,
+                )
             }
             Message::OpenLink(url) => self.open_link(url),
             Message::Rename => self.rename(),
@@ -601,7 +602,7 @@ impl App {
                 match error {
                     Some(error) => {
                         tracing::warn!(%error, "couldn't change starting on login");
-                        self.toast("Couldn’t change starting on login.".into(), None)
+                        self.toast(fl!("shell-start-on-login-failed"), None)
                     }
                     None => Task::none(),
                 }
@@ -883,7 +884,7 @@ fn unknown_device_page<'a>() -> Element<'a, Message> {
         widgets::page_header("", Some(Message::Back), vec![]),
         widgets::empty_state(
             lucide::circle_alert,
-            "This device is no longer known.",
+            fl!("shell-unknown-device"),
             None,
             None,
         ),
