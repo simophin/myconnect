@@ -338,9 +338,9 @@ the user's own session, and don't pair with or send to real devices on
 their network without asking.
 
 The README and the website share one set of screenshots,
-`site/img/<page>-<light|dark>.webp`, taken at 2x
-(`WINIT_X11_SCALE_FACTOR=2`) and saved 880 px wide. `ICED_THEME=Light` or
-`Dark` forces the app's theme, for taking both.
+`site/img/<page>.webp`, taken in the light theme at 2x
+(`WINIT_X11_SCALE_FACTOR=2`) and saved 880 px wide. `ICED_THEME=Light`
+forces the light theme whatever the system's.
 
 - Launch the app under `env -u WAYLAND_DISPLAY DISPLAY=:NN
   GDK_BACKEND=x11 ICED_BACKEND=tiny-skia dbus-run-session -- ...`, with
