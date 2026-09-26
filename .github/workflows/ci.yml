@@ -51,23 +51,3 @@ jobs:
             echo "iced is in the CLI's dependency tree"
             exit 1
           fi
-
-  # The app and the CLI on the other desktops, whose platform-specific code
-  # the Rust job never compiles. Their tests aren't run: the end-to-end ones
-  # need Linux's loopback discovery.
-  desktop:
-    name: Rust (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15, windows-2025]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo clippy -p myconnect-gui -p myconnect --all-targets --locked -- -D warnings

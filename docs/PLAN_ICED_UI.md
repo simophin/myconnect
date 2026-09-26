@@ -32,7 +32,7 @@ seven Flutter scenarios) and the fake phone (browsing). Step 15 is done:
 `packaging/` builds the `.deb`s (the app as `myConnect` and the CLI),
 the Arch PKGBUILD, a universal macOS DMG and a Windows installer, the
 Build workflow checks the `.deb` on a clean Debian 12, and CI dropped
-Flutter and checks macOS and Windows compile. Step 16 is done: `ui/`
+Flutter; macOS and Windows are built only by the Build workflow. Step 16 is done: `ui/`
 (the Flutter app) and `ffi/` are deleted, the Flutter records are in
 `docs/archive/flutter-adr/`, and ARCHITECTURE, HANDOFF, README and
 CLAUDE.md describe the iced app only. What's left is 13b, given a Mac and
@@ -1560,8 +1560,10 @@ from the text below:
   now misses its packaging files; it isn't maintained).
 - **CI** (`ci.yml`): the Flutter and Flutter-integration jobs are gone
   (and `.github/actions/setup-flutter`); the Rust job gained
-  `libxcb1-dev` (`display-info` links it), and a new job runs clippy on
-  macOS and Windows, which found an import unused off Linux. `build.yml`
+  `libxcb1-dev` (`display-info` links it). A job running clippy on macOS
+  and Windows (it found an import unused off Linux) was dropped again at
+  the owner's request: pull requests check Linux only, and macOS and
+  Windows are built only for releases (and manual runs). `build.yml`
   builds the Linux packages, the macOS DMG and the Windows installer,
   then installs each `.deb` on a clean Debian 12 (`check_deb.sh`: Depends
   only, so no GPU driver; the window opens with its class and icon; the
