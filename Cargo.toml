@@ -21,6 +21,7 @@ gui = [
     "dep:libc",
     "dep:opener",
     "dep:rfd",
+    "dep:tray-icon",
     "dep:zbus",
 ]
 
@@ -83,6 +84,10 @@ libc = { version = "0.2", optional = true }
 # threads.
 ksni = { version = "0.3", default-features = false, features = ["async-io"], optional = true }
 zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }
+
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+# The tray (`gui`), with `muda` menus (re-exported as `tray_icon::menu`).
+tray-icon = { version = "0.25", default-features = false, optional = true }
 
 [[test]]
 name = "ui_e2e"

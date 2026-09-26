@@ -116,7 +116,7 @@ first needs one adds it to the `gui` feature.
 | Single instance | `interprocess` (step 13), and `libc` on Unix for the uid | Cross-platform local sockets, named from the data dir, so isolated instances never collide. |
 | Tray (Linux) | `ksni` 0.3 (step 13) | A StatusNotifierItem over D-Bus in pure Rust, with no libappindicator or GTK. Spawned with `assume_sni_available(true)`, so a tray host that starts, stops or restarts later is followed. Its `async-io` feature, not the default `tokio`, for the same reason as `zbus`. |
 | Monitor list | `display-info` (step 13) | iced exposes only the size of the window's current monitor; the `window.json` fits-on-screen check needs every monitor's bounds. |
-| Tray (macOS, Windows) | `tray-icon` (step 13b) | The Tauri team's tray crate, with `muda` menus. |
+| Tray (macOS, Windows) | `tray-icon` 0.25 (step 13b) | The Tauri team's tray crate, with `muda` menus (used through its `tray_icon::menu` re-export, so the versions match). Default features off: they are Linux's (GTK, libappindicator). |
 | Windows exe resources | `winresource` (step 15, build dependency of `gui` on Windows only) | Embeds the icon Explorer and the taskbar show, and the name Task Manager lists, in `myConnect.exe`. |
 | Packaging | Shell scripts in `packaging/`, NSIS on Windows (step 15) | See "Packaging" below. |
 

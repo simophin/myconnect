@@ -105,22 +105,46 @@ the CLI, and for tagged builds an Arch Linux PKGBUILD. The scripts are in
 ## Open work
 
 **The tray and notifications on macOS and Windows** (the plan's step
-13b). They work on Linux only; macOS and Windows get no tray, so the app
-quits when its window closes there, and no notifications. It needs a Mac
-and a Windows machine:
+13b). The tray is written but not yet run on either: `tray-icon` + `muda`
+in `src/ui/desktop/tray.rs` (`native`), created from `Tray::start`, which
+`update` calls on the main thread once the event loop runs
+(`Message::StartTray`, sent from boot). Its menu and click events are
+forwarded into the `DesktopEvent` channel. macOS shows
+`assets/tray_icon_template.png` as a template image and opens the menu on
+any click; Windows opens the window on a left click and the menu on a
+right one. It type-checks for both (below). Still to do, on a Mac and a
+Windows machine:
 
-- `tray-icon` + `muda` (ADR 0001), created in the first `update` on the
-  main thread, with its menu and icon events forwarded into the
-  `DesktopEvent` channel; a `Tray` over it, fed the same `TrayItem`s.
-  macOS uses `assets/tray_icon_template.png` as a template image.
+- Run it: the icon shows, the menu's items (and submenus) work, it
+  updates as devices come and go, and closing the window keeps the app in
+  the tray. If `build()` fails, the app falls back to having no tray.
+- On macOS, clicking the Dock icon with the window closed does nothing
+  yet; it should show the window (`applicationShouldHandleReopen`).
 - `notify-rust` for `Notifier`: clicks work on Windows and are best effort
   on macOS; nothing is withdrawn (ADR 0001, "Desktop integration").
-- macOS's menu-bar Quit and logout take the quit path.
+- macOS's menu-bar Quit and logout take the quit path. They go through
+  `terminate:`, which exits after winit's `exiting`, so the daemon's
+  shutdown after `program.run()` likely doesn't run.
 - Confirm single instance (the `/tmp` socket file on macOS, a named pipe
   on Windows) and placement with several monitors.
 - Also check what packaging couldn't: the DMG's app launches from Finder
   with its tray icon, and the installed Windows app's notifications carry
   its name and icon.
+
+To type-check macOS or Windows code on Linux, stub out the C that `ring`
+builds (it needs the platform's SDK) with a compiler and archiver that
+emit empty files; nothing is linked, so clippy runs fine:
+
+```sh
+rustup target add aarch64-apple-darwin x86_64-pc-windows-msvc
+# fakecc: find `-o <out>` and `--target=...`, then
+#   exec clang $target -c -x c /dev/null -o "$out"
+# fakear: find the archive (`$2`, or `-out:<path>`), write "!<arch>\n" to it
+CC_aarch64_apple_darwin=fakecc AR_aarch64_apple_darwin=fakear \
+  cargo clippy --target aarch64-apple-darwin -p myconnect-gui -p myconnect \
+  --all-targets -- -D warnings
+# Windows: the same with CC_/AR_x86_64_pc_windows_msvc and that target.
+```
 
 **The rest of the UI's open work:**
 
