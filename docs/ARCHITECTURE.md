@@ -245,6 +245,11 @@ States: `queued → connecting → transferring → completed | cancelled | fail
   TLS material and pinning logic as the control channel. Plugins open these
   through `PluginContext::payload_peer`, which never hands out the private
   key. `kdeconnect.share.request.update` isn't handled: one file per request.
+  A payload listener waits, up to the connect timeout, for a connection
+  that completes the handshake with the device's pinned certificate, and
+  drops any other: a dial meant for a cancelled or timed-out transfer that
+  had the port before can still arrive, and taking it would fail this
+  transfer.
 - Uploads are streamed from the HTTP multipart body straight to the network;
   downloads are streamed from the network straight to a temporary
   `.{transfer_id}.part` file. Neither hop buffers a whole file in memory.
