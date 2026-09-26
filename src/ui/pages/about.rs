@@ -10,10 +10,10 @@ use iced::{
 };
 use iced_fonts::lucide;
 
-use crate::ui::widgets;
+use crate::ui::{i18n::fl, widgets};
 
+/// The app's name, which isn't translated.
 pub const NAME: &str = "Ferry";
-pub const DESCRIPTION: &str = "A KDE Connect client for macOS, Linux and Windows.";
 pub const AUTHOR_URL: &str = "https://fanchao.dev";
 pub const SOURCE_URL: &str = "https://github.com/simophin/ferryapp";
 pub const SPONSOR_URL: &str = "https://github.com/sponsors/simophin";
@@ -36,15 +36,15 @@ pub struct Actions<M> {
 
 /// The page, showing the app's `version`.
 pub fn view<'a, M: Clone + 'a>(version: &'a str, actions: Actions<M>) -> Element<'a, M> {
-    let header = widgets::page_header("About", Some(actions.back), vec![]);
+    let header = widgets::page_header(fl!("about-title"), Some(actions.back), vec![]);
     let app = column![
         image(ICON.clone()).width(96).height(96),
         text(NAME).size(28).font(widgets::bold()),
-        text(format!("Version {version}"))
+        text(fl!("about-version", version = version))
             .size(13)
             .style(text::secondary),
         widgets::gap(4),
-        text(DESCRIPTION).size(15).center(),
+        text(fl!("about-description")).size(15).center(),
     ]
     .spacing(6)
     .align_x(Alignment::Center);
@@ -59,17 +59,22 @@ pub fn view<'a, M: Clone + 'a>(version: &'a str, actions: Actions<M>) -> Element
         )
     };
     let links = column![
-        link(lucide::user, "Made by Fanchao", "fanchao.dev", AUTHOR_URL),
+        link(
+            lucide::user,
+            fl!("about-author"),
+            "fanchao.dev".to_owned(),
+            AUTHOR_URL
+        ),
         link(
             lucide::code,
-            "Source code",
-            "github.com/simophin/ferryapp",
+            fl!("about-source"),
+            "github.com/simophin/ferryapp".to_owned(),
             SOURCE_URL,
         ),
         link(
             lucide::heart,
-            "Support development",
-            "Sponsor on GitHub",
+            fl!("about-support"),
+            fl!("about-support-detail"),
             SPONSOR_URL,
         ),
     ]
@@ -114,7 +119,11 @@ mod tests {
     #[test]
     fn the_app_and_its_version_are_shown() {
         let mut ui = Simulator::new(view("1.2.3 (dev)", actions()));
-        for shown in [NAME, "Version 1.2.3 (dev)", DESCRIPTION] {
+        for shown in [
+            NAME,
+            "Version 1.2.3 (dev)",
+            "A KDE Connect client for macOS, Linux and Windows.",
+        ] {
             assert!(ui.find(shown).is_ok(), "{shown}");
         }
     }

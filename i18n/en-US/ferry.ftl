@@ -100,6 +100,126 @@ shell-download-dir-title = Save received files in
 widget-back = Back
 widget-retry = Retry
 
+## The device list, the home page (src/ui/pages/devices.rs)
+
+devices-title = Devices
+# Tooltips of the header's icon buttons.
+devices-settings = Settings
+devices-transfers = Transfers
+# `name` is this computer's device name.
+devices-this-computer = This computer: { $name }
+devices-add = Add device
+devices-loading = Loading devices…
+devices-empty = No paired devices yet
+devices-find = Find a device to pair
+# How reachable a device is, next to a coloured dot (also on Add device).
+device-reachability-connected = Connected
+device-reachability-nearby = Nearby
+device-reachability-unavailable = Not reachable
+
+## One device's page (src/ui/pages/device.rs)
+
+# The title when the device is no longer known.
+device-title = Device
+device-unknown = This device is no longer known.
+device-recent-transfers = Recent transfers
+# A link to the Transfers page.
+device-see-all = See all
+# Labels above the device's facts.
+device-id = Device ID
+device-type = Type
+device-protocol-version = Protocol version
+# The kind of device, shown under "Type"; lower case in English.
+device-type-desktop = desktop
+device-type-laptop = laptop
+device-type-phone = phone
+device-type-tablet = tablet
+device-type-tv = tv
+device-unpair = Unpair
+
+## Adding a device (src/ui/pages/add_device.rs)
+
+add-device-title = Add device
+# Tooltip of the header's button that searches the network again.
+add-device-scan = Scan again
+add-device-instructions = Open Ferry or KDE Connect on the other device and make sure both are on the same network.
+add-device-none-found = No devices found
+# Why a device can't be paired now, under its name.
+add-device-pairing = Pairing in progress
+add-device-not-connected = Not connected
+add-device-pair = Pair
+add-device-by-address = Add by IP address
+add-device-by-address-detail = For networks where the device doesn’t show up on its own
+
+## Pairing with a device (src/ui/pages/pairing.rs)
+
+pairing-title = Pairing
+pairing-unknown = This pairing request no longer exists.
+# `name` is the other device's name.
+pairing-waiting = Waiting for { $name }
+pairing-waiting-detail = Check that { $name } shows the same code, then accept the request there.
+pairing-accepted = Paired with { $name }
+pairing-rejected = Pairing declined
+pairing-rejected-detail = The request was declined or cancelled.
+pairing-expired = Request timed out
+pairing-expired-detail = { $name } did not answer in time.
+pairing-failed = Pairing failed
+pairing-failed-detail = The connection to { $name } was lost.
+pairing-cancel = Cancel
+pairing-done = Done
+pairing-close = Close
+pairing-try-again = Try again
+
+## File transfers (src/ui/pages/transfers.rs)
+
+transfers-title = Transfers
+transfers-loading = Loading transfers…
+transfers-empty = No transfers yet
+# A transfer's device and state, in a list that mixes devices. `name` is
+# the other device's name, `status` one of the states below (or a size).
+transfers-from = From { $name } · { $status }
+transfers-to = To { $name } · { $status }
+# Tooltips of a transfer's buttons.
+transfers-cancel = Cancel
+transfers-open-file = Open file
+transfers-open-folder = Open folder
+# A transfer's state. `done` and `total` are sizes, like "3.0 MB".
+transfers-queued = Waiting
+transfers-connecting = Connecting
+transfers-progress = { $done } of { $total }
+transfers-cancelled = Cancelled
+transfers-failed = Failed
+# Failed, keyed by the core's error code.
+transfers-failed-connection_failed = Failed: connection lost
+transfers-failed-timed_out = Failed: timed out
+transfers-failed-unavailable = Failed: refused by the receiver
+transfers-failed-protocol_error = Failed: the device sent something unexpected
+
+## Settings (src/ui/pages/settings.rs)
+
+settings-title = Settings
+settings-loading = Loading settings…
+settings-device-name = Device name
+settings-download-dir = Save received files in
+settings-close-to-tray = Keep running when the window is closed
+settings-close-to-tray-detail = Stay in the tray so devices can still reach this computer
+settings-start-on-login = Start when you log in
+settings-start-on-login-detail = Open in the tray, ready for your devices
+settings-about = About Ferry
+# `version` is the app's, like "1.2.0".
+settings-version = Version { $version }
+
+## About (src/ui/pages/about.rs); the app's name, Ferry, isn't translated
+
+about-title = About
+# `version` is the app's, like "1.2.0".
+about-version = Version { $version }
+about-description = A KDE Connect client for macOS, Linux and Windows.
+about-author = Made by Fanchao
+about-source = Source code
+about-support = Support development
+about-support-detail = Sponsor on GitHub
+
 ## Browsing a device's files: errors (src/ui/features/browse/describe.rs)
 
 browse-error-file-unreadable = The file couldn’t be read.

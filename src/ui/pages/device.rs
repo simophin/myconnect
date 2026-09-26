@@ -16,6 +16,7 @@ use crate::{
     protocol::DeviceType,
     ui::{
         features::{DeviceAction, DeviceStatus, Feature},
+        i18n::fl,
         route::Route,
         store::Store,
         widgets,
@@ -62,13 +63,8 @@ pub fn view<'a, Message: Clone + 'a>(
     let back = Some(navigate(Route::Devices));
     let Some(device) = store.device(device_id) else {
         return widgets::page(
-            widgets::page_header("Device", back, vec![]),
-            widgets::empty_state(
-                lucide::circle_alert,
-                "This device is no longer known.",
-                None,
-                None,
-            ),
+            widgets::page_header(fl!("device-title"), back, vec![]),
+            widgets::empty_state(lucide::circle_alert, fl!("device-unknown"), None, None),
         );
     };
 
@@ -88,9 +84,9 @@ pub fn view<'a, Message: Clone + 'a>(
         content = content.push(
             column![
                 row![
-                    text("Recent transfers").font(widgets::bold()),
+                    text(fl!("device-recent-transfers")).font(widgets::bold()),
                     space::horizontal(),
-                    widgets::link_button("See all", navigate(Route::Transfers)),
+                    widgets::link_button(fl!("device-see-all"), navigate(Route::Transfers)),
                 ]
                 .align_y(Alignment::Center),
                 widgets::card(column(rows).spacing(14)),
@@ -148,7 +144,7 @@ fn summary<'a, Message: 'a>(
 /// The device's id, type and protocol version, selectable so they can be
 /// copied.
 fn facts<'a, Message: Clone + 'a>(device: &'a DeviceSnapshot) -> Element<'a, Message> {
-    let fact = |label: &'static str, value: &str| {
+    let fact = |label: String, value: &str| {
         column![
             text(label).size(12).style(text::secondary),
             widgets::selectable_text(value)
@@ -157,23 +153,26 @@ fn facts<'a, Message: Clone + 'a>(device: &'a DeviceSnapshot) -> Element<'a, Mes
     };
     widgets::card(
         column![
-            fact("Device ID", &device.device_id),
-            fact("Type", type_name(device.device_type)),
-            fact("Protocol version", &device.protocol_version.to_string()),
+            fact(fl!("device-id"), &device.device_id),
+            fact(fl!("device-type"), &type_name(device.device_type)),
+            fact(
+                fl!("device-protocol-version"),
+                &device.protocol_version.to_string()
+            ),
         ]
         .spacing(10),
     )
     .into()
 }
 
-/// A device type as the protocol names it, as the Flutter app showed it.
-fn type_name(device_type: DeviceType) -> &'static str {
+/// A kind of device, in lower case as the Flutter app showed it.
+fn type_name(device_type: DeviceType) -> String {
     match device_type {
-        DeviceType::Desktop => "desktop",
-        DeviceType::Laptop => "laptop",
-        DeviceType::Phone => "phone",
-        DeviceType::Tablet => "tablet",
-        DeviceType::Tv => "tv",
+        DeviceType::Desktop => fl!("device-type-desktop"),
+        DeviceType::Laptop => fl!("device-type-laptop"),
+        DeviceType::Phone => fl!("device-type-phone"),
+        DeviceType::Tablet => fl!("device-type-tablet"),
+        DeviceType::Tv => fl!("device-type-tv"),
     }
 }
 
@@ -199,7 +198,7 @@ fn action_buttons<'a, Message: Clone + 'a>(
 /// Unpair, drawn as a destructive outlined button; disabled without a
 /// message.
 fn unpair_button<'a, Message: Clone + 'a>(on_press: Option<Message>) -> Element<'a, Message> {
-    let content = row![lucide::link_two_off().size(16), text("Unpair")]
+    let content = row![lucide::link_two_off().size(16), text(fl!("device-unpair"))]
         .spacing(8)
         .align_y(Alignment::Center);
     let button = button(content)

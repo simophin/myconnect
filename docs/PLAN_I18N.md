@@ -61,7 +61,7 @@ Split into four commits, one per step, each passing the checks.
 - [x] 2a. `ui::error` (codes to `error-<code>`), the shell, `widgets`,
       `actions`, `mod.rs`, `drops`, `launch`, and each feature's
       describe module
-- [ ] 2b. Pages: devices, device, pairing, add device, transfers,
+- [x] 2b. Pages: devices, device, pairing, add device, transfers,
       settings, about
 - [ ] 2c. Overlays (dialog, drop, incoming, toast) and features: share,
       clipboard, ping, findmyphone, battery, notifications, browse
@@ -145,3 +145,22 @@ Anything a later phase must know, one line each, newest last.
   `zero_byte_small_and_larger_than_buffer_files_transfer_without_full_buffering`
   fails there (a transfer ends `Failed`), without the `gui` feature, so
   not from this work; look on Linux.
+- 2b: page keys are prefixed by page (`devices-`, `device-`, `add-device-`,
+  `pairing-`, `transfers-`, `settings-`, `about-`); `device-reachability-*`
+  is shared by the device list and Add device. `reachability_label`,
+  `add_device::blocker`, `device::type_name` and `pairing::describe` now
+  return `String`. Transfer failures are `transfers-failed-<code>` (the
+  core's `OperationErrorCode`, snake case).
+- 2b: a transfer row names its device with `transfers-from`/`transfers-to`
+  (`From { $name } · { $status }`), a whole string, not a preposition
+  glued on. Sizes in `transfers-progress` still come from `format_bytes`
+  (phase 3). The app's name (`about::NAME`, "Ferry"), the About page's
+  URLs and the protocol version stay untranslated.
+- 2b left for 2c: the device page's action buttons and status chips and
+  the Settings page's feature sections take their labels from the
+  features (`DeviceAction::label`, `DeviceStatus::label`,
+  `settings_sections`), so they are extracted with each feature.
+- 2b was checked on macOS, as 2a was: same `tests/lan.rs` loopback failure
+  and skipped real-clipboard tests; `transfer_e2e` passed this time. The
+  pages' snapshots (`SNAPSHOT_DIR`, `-p ferry --features gui`) read as
+  before.

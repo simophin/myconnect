@@ -12,6 +12,7 @@ use crate::{
     core::{PairingSnapshot, PairingStatus},
     ui::{
         activity::activity_bar,
+        i18n::fl,
         route::Route,
         store::Store,
         widgets::{self, Icon},
@@ -36,12 +37,12 @@ pub fn view<'a, M: Clone + 'a>(
     actions: Actions<M>,
 ) -> Element<'a, M> {
     let header = widgets::page_header(
-        "Pairing",
+        fl!("pairing-title"),
         Some((actions.navigate)(Route::AddDevice)),
         vec![],
     );
     let body: Element<'a, M> = match store.pairing(pairing_id) {
-        None => text("This pairing request no longer exists.").into(),
+        None => text(fl!("pairing-unknown")).into(),
         Some(pairing) => content(pairing, busy, &actions),
     };
     widgets::page(
@@ -56,30 +57,28 @@ pub fn describe(status: PairingStatus, name: &str) -> (Option<Icon>, String, Opt
     match status {
         PairingStatus::Requested | PairingStatus::AwaitingConfirmation => (
             None,
-            format!("Waiting for {name}"),
-            Some(format!(
-                "Check that {name} shows the same code, then accept the request there."
-            )),
+            fl!("pairing-waiting", name = name),
+            Some(fl!("pairing-waiting-detail", name = name)),
         ),
         PairingStatus::Accepted => (
             Some(lucide::circle_check),
-            format!("Paired with {name}"),
+            fl!("pairing-accepted", name = name),
             None,
         ),
         PairingStatus::Rejected => (
             Some(lucide::ban),
-            "Pairing declined".into(),
-            Some("The request was declined or cancelled.".into()),
+            fl!("pairing-rejected"),
+            Some(fl!("pairing-rejected-detail")),
         ),
         PairingStatus::Expired => (
             Some(lucide::timer_off),
-            "Request timed out".into(),
-            Some(format!("{name} did not answer in time.")),
+            fl!("pairing-expired"),
+            Some(fl!("pairing-expired-detail", name = name)),
         ),
         PairingStatus::Failed => (
             Some(lucide::circle_alert),
-            "Pairing failed".into(),
-            Some(format!("The connection to {name} was lost.")),
+            fl!("pairing-failed"),
+            Some(fl!("pairing-failed-detail", name = name)),
         ),
     }
 }
@@ -111,21 +110,22 @@ fn content<'a, M: Clone + 'a>(
         content = content.push(widgets::verification_code(code));
     }
 
-    let labelled = |label: &'a str, style: fn(&Theme, button::Status) -> button::Style| {
+    let labelled = |label: String, style: fn(&Theme, button::Status) -> button::Style| {
         button(text(label)).padding([8, 18]).style(style)
     };
     let buttons = match pairing.status {
         _ if pending => row![
-            labelled("Cancel", widgets::outlined)
+            labelled(fl!("pairing-cancel"), widgets::outlined)
                 .on_press_maybe((!busy).then(|| (actions.cancel)(pairing.id)))
         ],
         PairingStatus::Accepted => row![
-            labelled("Done", widgets::filled)
+            labelled(fl!("pairing-done"), widgets::filled)
                 .on_press((actions.navigate)(Route::Device(pairing.device_id.clone())))
         ],
         _ => row![
-            labelled("Close", widgets::outlined).on_press((actions.navigate)(Route::AddDevice)),
-            labelled("Try again", widgets::filled)
+            labelled(fl!("pairing-close"), widgets::outlined)
+                .on_press((actions.navigate)(Route::AddDevice)),
+            labelled(fl!("pairing-try-again"), widgets::filled)
                 .on_press_maybe((!busy).then(|| (actions.retry)(pairing.device_id.clone()))),
         ],
     };

@@ -12,6 +12,7 @@ use iced_fonts::lucide;
 use crate::{
     core::SettingsSnapshot,
     ui::{
+        i18n::fl,
         store::{Load, Store},
         widgets,
     },
@@ -42,9 +43,9 @@ pub fn view<'a, M: Clone + 'a>(
     start_on_login: bool,
     actions: Actions<M>,
 ) -> Element<'a, M> {
-    let header = widgets::page_header("Settings", Some(actions.back.clone()), vec![]);
+    let header = widgets::page_header(fl!("settings-title"), Some(actions.back.clone()), vec![]);
     let body = match store.settings() {
-        Load::Loading => widgets::loading("Loading settings…"),
+        Load::Loading => widgets::loading(fl!("settings-loading")),
         Load::Failed(error) => widgets::error_view(error.as_str(), Some(actions.retry)),
         Load::Loaded(settings) => list(
             settings,
@@ -68,14 +69,14 @@ fn list<'a, M: Clone + 'a>(
     let mut items = column![
         widgets::setting(
             lucide::monitor,
-            "Device name",
+            fl!("settings-device-name"),
             settings.device_name.as_str(),
             edit(),
             Some(actions.rename),
         ),
         widgets::setting(
             lucide::folder,
-            "Save received files in",
+            fl!("settings-download-dir"),
             settings.download_dir.display().to_string(),
             edit(),
             Some(actions.choose_download_dir),
@@ -88,22 +89,22 @@ fn list<'a, M: Clone + 'a>(
     items = items
         .push(widgets::switch_setting(
             lucide::minimize_two,
-            "Keep running when the window is closed",
-            "Stay in the tray so devices can still reach this computer",
+            fl!("settings-close-to-tray"),
+            fl!("settings-close-to-tray-detail"),
             settings.close_to_tray,
             actions.set_close_to_tray,
         ))
         .push(widgets::switch_setting(
             lucide::power,
-            "Start when you log in",
-            "Open in the tray, ready for your devices",
+            fl!("settings-start-on-login"),
+            fl!("settings-start-on-login-detail"),
             start_on_login,
             actions.set_start_on_login,
         ))
         .push(widgets::setting(
             lucide::info,
-            "About Ferry",
-            format!("Version {version}"),
+            fl!("settings-about"),
+            fl!("settings-version", version = version),
             Some(
                 lucide::chevron_right()
                     .size(16)

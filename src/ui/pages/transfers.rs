@@ -14,6 +14,7 @@ use crate::{
     core::{OperationErrorCode, TransferDirection, TransferSnapshot, TransferStatus},
     ui::{
         activity::activity_bar,
+        i18n::fl,
         store::{Load, Store},
         widgets::{self, format_bytes},
     },
@@ -38,10 +39,10 @@ pub fn view<'a, M: Clone + 'a>(
     retry: M,
 ) -> Element<'a, M> {
     let body: Element<'a, M> = match store.transfers(None) {
-        Load::Loading => widgets::loading("Loading transfers…"),
+        Load::Loading => widgets::loading(fl!("transfers-loading")),
         Load::Failed(error) => widgets::error_view(error, Some(retry)),
         Load::Loaded(transfers) if transfers.is_empty() => {
-            widgets::empty_state(lucide::arrow_up_down, "No transfers yet", None, None)
+            widgets::empty_state(lucide::arrow_up_down, fl!("transfers-empty"), None, None)
         }
         Load::Loaded(transfers) => {
             let rows = transfers
@@ -53,7 +54,10 @@ pub fn view<'a, M: Clone + 'a>(
                 .into()
         }
     };
-    widgets::page(widgets::page_header("Transfers", Some(back), vec![]), body)
+    widgets::page(
+        widgets::page_header(fl!("transfers-title"), Some(back), vec![]),
+        body,
+    )
 }
 
 /// One transfer: its direction, file, and progress or outcome, with Cancel
@@ -66,11 +70,19 @@ pub fn transfer_row<'a, M: Clone + 'a>(
     actions: &Actions<M>,
 ) -> Element<'a, M> {
     let incoming = transfer.direction == TransferDirection::Incoming;
-    let peer = if show_device {
-        let preposition = if incoming { "From" } else { "To" };
-        format!("{preposition} {} · ", transfer.device_name)
-    } else {
-        String::new()
+    let status = status_label(transfer);
+    let summary = match (show_device, incoming) {
+        (false, _) => status,
+        (true, true) => fl!(
+            "transfers-from",
+            name = transfer.device_name.as_str(),
+            status = status
+        ),
+        (true, false) => fl!(
+            "transfers-to",
+            name = transfer.device_name.as_str(),
+            status = status
+        ),
     };
     let icon = if incoming {
         lucide::download()
@@ -79,9 +91,7 @@ pub fn transfer_row<'a, M: Clone + 'a>(
     };
     let mut details = column![
         text(&transfer.file_name).wrapping(text::Wrapping::None),
-        text(format!("{peer}{}", status_label(transfer)))
-            .size(13)
-            .style(text::secondary),
+        text(summary).size(13).style(text::secondary),
     ]
     .spacing(2);
     if !transfer.status.is_terminal() {
@@ -96,7 +106,7 @@ pub fn transfer_row<'a, M: Clone + 'a>(
     if !transfer.status.is_terminal() {
         line = line.push(widgets::icon_button(
             lucide::x,
-            "Cancel",
+            fl!("transfers-cancel"),
             Some((actions.cancel)(transfer.id)),
         ));
     } else if transfer.status == TransferStatus::Completed
@@ -105,12 +115,12 @@ pub fn transfer_row<'a, M: Clone + 'a>(
         line = line
             .push(widgets::icon_button(
                 lucide::external_link,
-                "Open file",
+                fl!("transfers-open-file"),
                 Some((actions.open)(path.clone())),
             ))
             .push(widgets::icon_button(
                 lucide::folder_open,
-                "Open folder",
+                fl!("transfers-open-folder"),
                 Some((actions.reveal)(path.clone())),
             ));
     }
@@ -144,25 +154,22 @@ fn progress(transfer: &TransferSnapshot) -> f32 {
 /// (`transfer_tile.dart`).
 pub fn status_label(transfer: &TransferSnapshot) -> String {
     match transfer.status {
-        TransferStatus::Queued => "Waiting".into(),
-        TransferStatus::Connecting => "Connecting".into(),
-        TransferStatus::Transferring => format!(
-            "{} of {}",
-            format_bytes(transfer.transferred_bytes),
-            format_bytes(transfer.total_bytes)
+        TransferStatus::Queued => fl!("transfers-queued"),
+        TransferStatus::Connecting => fl!("transfers-connecting"),
+        TransferStatus::Transferring => fl!(
+            "transfers-progress",
+            done = format_bytes(transfer.transferred_bytes),
+            total = format_bytes(transfer.total_bytes)
         ),
         TransferStatus::Completed => format_bytes(transfer.total_bytes),
-        TransferStatus::Cancelled => "Cancelled".into(),
+        TransferStatus::Cancelled => fl!("transfers-cancelled"),
         TransferStatus::Failed => match transfer.error_code {
-            Some(OperationErrorCode::ConnectionFailed) => "Failed: connection lost",
-            Some(OperationErrorCode::TimedOut) => "Failed: timed out",
-            Some(OperationErrorCode::Unavailable) => "Failed: refused by the receiver",
-            Some(OperationErrorCode::ProtocolError) => {
-                "Failed: the device sent something unexpected"
-            }
-            Some(OperationErrorCode::Internal) | None => "Failed",
-        }
-        .into(),
+            Some(OperationErrorCode::ConnectionFailed) => fl!("transfers-failed-connection_failed"),
+            Some(OperationErrorCode::TimedOut) => fl!("transfers-failed-timed_out"),
+            Some(OperationErrorCode::Unavailable) => fl!("transfers-failed-unavailable"),
+            Some(OperationErrorCode::ProtocolError) => fl!("transfers-failed-protocol_error"),
+            Some(OperationErrorCode::Internal) | None => fl!("transfers-failed"),
+        },
     }
 }
 
